@@ -1,36 +1,59 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Omni — Medical Affairs toolkit for MSLs
 
-## Getting Started
+An all-in-one workspace for Medical Science Liaisons. Phase 1 ships the app
+shell, username/password auth, and the first feature — **Interview Prep**:
+upload a recording → transcribe the whole thing → get a nested-bullet summary.
 
-First, run the development server:
+Planned modules: Insights, Meeting Prep, Conference Planning & Execution,
+Territory Planning (stubbed for now).
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+## Stack
+- Next.js 16 (App Router) · React 19 · TypeScript · Tailwind 4
+- Supabase — Postgres, Auth, Storage (`@supabase/ssr` + `@supabase/supabase-js`)
+- OpenAI — Whisper (transcription) + GPT (summarization)
+- `ffmpeg-static` — server-side audio chunking (no system ffmpeg needed)
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Setup
+1. Install deps:
+   ```bash
+   npm install
+   ```
+2. Fill in `.env.local` (copy from `.env.example`):
+   - `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` — already set.
+   - `SUPABASE_SERVICE_ROLE_KEY` — Supabase dashboard → Settings → API.
+   - `OPENAI_API_KEY` — required for transcription + summary.
+3. Apply the database schema: open `supabase/migrations/0001_init.sql` and run it
+   in the Supabase SQL editor (creates tables, RLS, and the private `recordings`
+   storage bucket). No DB password needed for that path.
+4. Run it:
+   ```bash
+   npm run dev
+   ```
+   Open http://localhost:3000 → register a username + password → start in
+   Interview Prep.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## How Interview Prep works (3 decoupled stages)
+A single `recordings` row tracks the whole job via its `status`, so work is
+pollable and resumable.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. **Upload** — `POST /api/recordings/sign-upload` creates the row and returns a
+   Supabase signed upload URL; the client PUTs the file straight to storage via
+   `XMLHttpRequest` (live progress). `status: uploading`.
+2. **Chunk + transcribe** — `POST /api/recordings/[id]/uploaded` downloads the
+   audio and uses `ffmpeg-static` to cut 3-min mono/16 kHz wav chunks. A Web
+   Worker (`src/workers/transcribe.worker.ts`) then loops
+   `POST /api/recordings/[id]/transcribe-chunk` one chunk at a time — each call
+   re-reads the transcript, appends Whisper's output, increments `chunks_done`,
+   and deletes the chunk. Progress (`chunks_done/total_chunks`) survives reloads;
+   the detail page resumes the loop on mount. `status: transcribing`.
+3. **Nested summary** — `POST /api/recordings/[id]/summarize` sends the full
+   transcript to GPT (low temperature, "only what was said") and parses the
+   indented bullet output into a parent/child tree in `summary_nodes`. The
+   original audio is deleted. `status: summarizing → complete`.
 
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Notes / future work
+- The chunking route runs ffmpeg and can be long-running — fine under
+  `next dev`/`next start` (Node server). A serverless/Vercel deploy would need a
+  dedicated long-running worker for that stage.
+- Stage 4 (rolling several recordings + typed notes into one session-level
+  summary) is planned, not yet built.

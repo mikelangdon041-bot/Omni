@@ -1,26 +1,45 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/*
+  Omni theme — professional clinical base with warm accents.
+  Base: cool slate canvas. Primary: deep teal-blue. Accent: warm amber.
+*/
+@theme {
+  --color-canvas: #f4f7f9;
+  --color-surface: #ffffff;
+  --color-ink: #0f1b2a;
+  --color-muted: #5c6b7a;
+  --color-border: #e3e9ef;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-primary: #0e6e7d;
+  --color-primary-hover: #0b5a66;
+  --color-primary-fg: #ffffff;
+  --color-primary-soft: #e2f1f3;
+
+  --color-accent: #f59e0b;
+  --color-accent-hover: #d98708;
+  --color-accent-soft: #fdf0d5;
+
+  /* status chips */
+  --color-status-uploading: #6366f1;
+  --color-status-transcribing: #0e6e7d;
+  --color-status-summarizing: #f59e0b;
+  --color-status-complete: #16a34a;
+  --color-status-error: #dc2626;
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html,
+body {
+  height: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans), system-ui, -apple-system, Segoe UI, Roboto,
+    Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
