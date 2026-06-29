@@ -1,26 +1,57 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState } from "react";
-import { type AuthState } from "./actions";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 
-type Action = (prev: AuthState, formData: FormData) => Promise<AuthState>;
-
-export function AuthForm({
-  mode,
-  action,
-}: {
-  mode: "login" | "register";
-  action: Action;
-}) {
-  const [state, formAction, pending] = useActionState<AuthState, FormData>(
-    action,
-    {},
-  );
+export function AuthForm({ mode }: { mode: "login" | "register" }) {
+  const router = useRouter();
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
   const isRegister = mode === "register";
 
+  async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setError(null);
+    setPending(true);
+
+    const form = new FormData(e.currentTarget);
+    const payload = {
+      username: String(form.get("username") || ""),
+      password: String(form.get("password") || ""),
+      displayName: String(form.get("displayName") || ""),
+    };
+
+    try {
+      const res = await fetch(`/api/auth/${mode}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        setError(data.error || "Something went wrong. Please try again.");
+        setPending(false);
+        return;
+      }
+
+      if (data.signedIn === false) {
+        router.push("/login");
+        return;
+      }
+
+      router.push("/");
+      router.refresh();
+    } catch {
+      setError("Network error. Please try again.");
+      setPending(false);
+    }
+  }
+
   return (
-    <form action={formAction} className="flex flex-col gap-4">
+    <form onSubmit={onSubmit} className="flex flex-col gap-4">
       <div>
         <h1 className="text-xl font-semibold tracking-tight">
           {isRegister ? "Create your account" : "Welcome back"}
@@ -60,9 +91,9 @@ export function AuthForm({
         required
       />
 
-      {state.error && (
+      {error && (
         <p className="rounded-lg bg-status-error/10 px-3 py-2 text-sm text-status-error">
-          {state.error}
+          {error}
         </p>
       )}
 

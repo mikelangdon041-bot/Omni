@@ -1,13 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Logo } from "@/components/Logo";
-import { logout } from "@/app/(auth)/actions";
 import { NAV_ITEMS } from "@/lib/nav";
 
 export function Sidebar({ username }: { username: string }) {
   const pathname = usePathname();
+  const router = useRouter();
+
+  async function handleLogout() {
+    await fetch("/api/auth/logout", {
+      method: "POST",
+      credentials: "same-origin",
+    });
+    router.push("/login");
+    router.refresh();
+  }
 
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-surface">
@@ -54,14 +63,13 @@ export function Sidebar({ username }: { username: string }) {
           </span>
           <span className="flex-1 truncate text-sm font-medium">{username}</span>
         </div>
-        <form action={logout}>
-          <button
-            type="submit"
-            className="mt-1 w-full rounded-lg px-3 py-2 text-left text-sm text-muted transition hover:bg-canvas hover:text-status-error"
-          >
-            Sign out
-          </button>
-        </form>
+        <button
+          type="button"
+          onClick={handleLogout}
+          className="mt-1 w-full rounded-lg px-3 py-2 text-left text-sm text-muted transition hover:bg-canvas hover:text-status-error"
+        >
+          Sign out
+        </button>
       </div>
     </aside>
   );
