@@ -12,6 +12,7 @@ export function NewRecording() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [consented, setConsented] = useState(false);
 
   async function handleUpload(file: File) {
     setError(null);
@@ -75,6 +76,33 @@ export function NewRecording() {
         Upload audio — we&apos;ll transcribe it and build a nested summary.
       </p>
 
+      {/* Consent / permission disclaimer — required before uploading. */}
+      <div className="mt-4 rounded-lg border border-accent/40 bg-accent-soft/60 p-4">
+        <p className="text-sm font-medium text-ink">
+          ⚠️ Consent required
+        </p>
+        <p className="mt-1 text-sm text-muted">
+          Only upload recordings you have permission to use. You are responsible
+          for obtaining the necessary consent from all participants (e.g. the
+          HCP/KOL) to record the conversation and to process it for transcription
+          and summarization, in line with your organization&apos;s policies and
+          applicable privacy laws.
+        </p>
+        <label className="mt-3 flex items-start gap-2.5 text-sm">
+          <input
+            type="checkbox"
+            checked={consented}
+            onChange={(e) => setConsented(e.target.checked)}
+            disabled={busy}
+            className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
+          />
+          <span className="text-ink">
+            I confirm I have permission and the necessary consent from all
+            participants to upload and use this recording.
+          </span>
+        </label>
+      </div>
+
       <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
         <label className="flex-1">
           <span className="mb-1.5 block text-sm font-medium">Title (optional)</span>
@@ -98,8 +126,9 @@ export function NewRecording() {
         <button
           type="button"
           onClick={() => fileRef.current?.click()}
-          disabled={busy}
-          className="inline-flex shrink-0 items-center justify-center rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-fg shadow-sm transition hover:bg-primary-hover disabled:opacity-60"
+          disabled={busy || !consented}
+          title={!consented ? "Confirm consent above to enable upload" : undefined}
+          className="inline-flex shrink-0 items-center justify-center rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-fg shadow-sm transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
         >
           {phase === "uploading"
             ? `Uploading… ${progress}%`
