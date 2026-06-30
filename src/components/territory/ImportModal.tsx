@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Upload, Sparkles, ArrowLeft, Check } from "lucide-react";
+import { Upload, Sparkles, ArrowLeft, ArrowRight, Check } from "lucide-react";
 import * as XLSX from "xlsx";
 import type { KOL } from "@/lib/territory/types";
 import {
@@ -55,8 +55,10 @@ export function ImportModal({
   const [summary, setSummary] = useState("");
   const [guidance, setGuidance] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
+  const [analyzeProgress, setAnalyzeProgress] = useState(0);
   const [profiles, setProfiles] = useState<Partial<KOL>[]>([]);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [importProgress, setImportProgress] = useState(0);
   const [count, setCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
@@ -97,6 +99,11 @@ export function ImportModal({
   async function analyze(r: string[][], g: string) {
     setAnalyzing(true);
     setError(null);
+    setAnalyzeProgress(8);
+    const timer = setInterval(
+      () => setAnalyzeProgress((p) => Math.min(p + Math.random() * 11, 93)),
+      280,
+    );
     try {
       const sheetText = r.map((row) => row.join("\t")).join("\n");
       const res = await fetch("/api/territory/import-map", {
@@ -138,6 +145,8 @@ export function ImportModal({
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong");
     } finally {
+      clearInterval(timer);
+      setAnalyzeProgress(100);
       setAnalyzing(false);
     }
   }
@@ -192,10 +201,17 @@ export function ImportModal({
 
   async function doImport() {
     setError(null);
+    setImportProgress(0);
     setStep("importing");
     const chosen = profiles.filter((_, i) => selected.has(i));
+    const batch = 25;
+    let done = 0;
     try {
-      await onImport(chosen);
+      for (let i = 0; i < chosen.length; i += batch) {
+        await onImport(chosen.slice(i, i + batch));
+        done += Math.min(batch, chosen.length - i);
+        setImportProgress(Math.round((done / chosen.length) * 100));
+      }
       setCount(chosen.length);
       setStep("done");
     } catch (e) {
@@ -242,9 +258,21 @@ export function ImportModal({
       {step === "mapping" && (
         <div className="space-y-4">
           {analyzing ? (
-            <p className="py-8 text-center text-sm text-muted">
-              <Sparkles size={16} className="mr-1 inline" /> AI is reading your sheet…
-            </p>
+            <div className="py-12">
+              <p className="mb-3 flex items-center justify-center gap-2 text-sm text-muted">
+                <Sparkles size={16} className="text-[var(--accent)]" /> Reading your
+                sheet and matching columns…
+              </p>
+              <div className="mx-auto h-2 w-64 overflow-hidden rounded-full bg-canvas">
+                <div
+                  className="h-full rounded-full bg-[var(--accent)] transition-all"
+                  style={{ width: `${analyzeProgress}%` }}
+                />
+              </div>
+              <p className="mt-2 text-center text-xs text-muted">
+                {Math.round(analyzeProgress)}%
+              </p>
+            </div>
           ) : (
             <>
               {summary && (
@@ -252,53 +280,67 @@ export function ImportModal({
                   {summary}
                 </p>
               )}
-              <div className="max-h-64 overflow-auto rounded-lg border border-border">
-                <table className="w-full text-xs">
-                  <tbody>
-                    {rows.slice(0, 50).map((row, ri) => (
-                      <tr
-                        key={ri}
-                        className={ri === headerRow ? "bg-canvas font-medium" : ""}
-                      >
-                        {row.map((cell, ci) => (
-                          <td key={ci} className="max-w-40 truncate border border-border px-2 py-1">
-                            {cell}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
 
-              <div className="space-y-2">
-                {columns.map((c) => (
-                  <div key={c.index} className="flex flex-wrap items-center gap-2">
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">{c.header}</p>
-                      <p className="truncate text-xs text-muted">
-                        {c.samples.join(" · ") || "(no data)"}
-                      </p>
-                    </div>
-                    <select
-                      value={c.field}
-                      onChange={(e) =>
-                        setColumns((prev) =>
-                          prev.map((x) =>
-                            x.index === c.index ? { ...x, field: e.target.value } : x,
-                          ),
-                        )
-                      }
-                      className="rounded-lg border border-border bg-surface px-2 py-1.5 text-xs outline-none focus:border-[var(--accent)]"
-                    >
-                      {PROFILE_FIELDS.map((f) => (
-                        <option key={f.key} value={f.key}>
-                          {f.label}
-                        </option>
+              <details className="rounded-lg border border-border">
+                <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-muted">
+                  Show raw data
+                </summary>
+                <div className="max-h-40 overflow-auto border-t border-border">
+                  <table className="w-full text-xs">
+                    <tbody>
+                      {rows.slice(0, 8).map((row, ri) => (
+                        <tr key={ri} className={ri === headerRow ? "bg-canvas font-medium" : ""}>
+                          {row.map((cell, ci) => (
+                            <td key={ci} className="max-w-40 truncate border border-border px-2 py-1">
+                              {cell}
+                            </td>
+                          ))}
+                        </tr>
                       ))}
-                    </select>
-                  </div>
-                ))}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+
+              <div>
+                <div className="mb-2 grid grid-cols-[1fr_1.25rem_11rem] items-center gap-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                  <span>From your file</span>
+                  <span />
+                  <span>Maps to in Omni</span>
+                </div>
+                <div className="space-y-1.5">
+                  {columns.map((c) => (
+                    <div
+                      key={c.index}
+                      className="grid grid-cols-[1fr_1.25rem_11rem] items-center gap-2 rounded-lg border border-border px-3 py-2"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{c.header}</p>
+                        <p className="truncate text-xs text-muted">
+                          {c.samples.join(" · ") || "(no data)"}
+                        </p>
+                      </div>
+                      <ArrowRight size={14} className="text-muted" />
+                      <select
+                        value={c.field}
+                        onChange={(e) =>
+                          setColumns((prev) =>
+                            prev.map((x) =>
+                              x.index === c.index ? { ...x, field: e.target.value } : x,
+                            ),
+                          )
+                        }
+                        className="w-full rounded-lg border border-border bg-surface px-2 py-1.5 text-xs outline-none focus:border-[var(--accent)]"
+                      >
+                        {PROFILE_FIELDS.map((f) => (
+                          <option key={f.key} value={f.key}>
+                            {f.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
               </div>
 
               <div className="flex flex-col gap-2 sm:flex-row">
@@ -382,7 +424,16 @@ export function ImportModal({
       )}
 
       {step === "importing" && (
-        <p className="py-12 text-center text-sm text-muted">Importing…</p>
+        <div className="py-12">
+          <p className="mb-3 text-center text-sm text-muted">Importing…</p>
+          <div className="mx-auto h-2 w-64 overflow-hidden rounded-full bg-canvas">
+            <div
+              className="h-full rounded-full bg-[var(--accent)] transition-all"
+              style={{ width: `${importProgress}%` }}
+            />
+          </div>
+          <p className="mt-2 text-center text-xs text-muted">{importProgress}%</p>
+        </div>
       )}
 
       {step === "done" && (
