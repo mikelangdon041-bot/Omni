@@ -18,6 +18,8 @@ import { Button } from "@/components/territory/ui/Button";
 import { EngagementRing } from "@/components/territory/ui/EngagementRing";
 import { ProfileSection } from "@/components/territory/ProfileSection";
 import { ActivityTimeline } from "@/components/territory/ActivityTimeline";
+import { MeetingsSection } from "@/components/territory/MeetingsSection";
+import { StrategySection } from "@/components/territory/StrategySection";
 
 const TABS = ["Profile", "Activity", "Meetings", "Strategy"] as const;
 type Tab = (typeof TABS)[number];
@@ -80,11 +82,8 @@ export default function KOLDetailPage() {
           onEngagement={(score) => update({ engagement_score: score })}
         />
       )}
-      {(tab === "Meetings" || tab === "Strategy") && (
-        <div className="rounded-xl border border-dashed border-border bg-surface px-6 py-16 text-center text-sm text-muted">
-          The {tab} tab is coming next.
-        </div>
-      )}
+      {tab === "Meetings" && <MeetingsSection kolId={kol.id} />}
+      {tab === "Strategy" && <StrategySection kol={kol} update={update} />}
     </>
   );
 }
