@@ -56,6 +56,9 @@ export interface Candidate {
   resume_url: string;
   resume_text: string;
   summary: string;
+  overall_impressions: string;
+  strengths: string;
+  opportunities: string;
   created_at: string;
   updated_at: string;
 }

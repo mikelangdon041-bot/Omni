@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Mail, Phone, MapPin, Pencil } from "lucide-react";
@@ -24,6 +24,7 @@ import { Avatar } from "@/components/ui/Avatar";
 import { Button } from "@/components/ui/Button";
 import { Tabs } from "@/components/ui/Tabs";
 import { Input } from "@/components/ui/Input";
+import { AutoRichField } from "@/components/ui/AutoRichField";
 import { CandidateRecordings } from "@/components/interview/CandidateRecordings";
 import { QuestionsTab } from "@/components/interview/QuestionsTab";
 import { ActivityTab } from "@/components/interview/ActivityTab";
@@ -266,50 +267,29 @@ function NotesCard({
   update: (p: Partial<Candidate>) => Promise<void>;
   canEdit: boolean;
 }) {
-  const [text, setText] = useState(candidate.summary || "");
-  const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle");
-  const saved = useRef(candidate.summary || "");
-
-  useEffect(() => {
-    if (text === saved.current) return;
-    setStatus("saving");
-    const t = setTimeout(async () => {
-      await update({ summary: text });
-      saved.current = text;
-      setStatus("saved");
-    }, 800);
-    return () => clearTimeout(t);
-  }, [text, update]);
-
-  if (!canEdit) {
-    return candidate.summary ? (
-      <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
-        <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">
-          Notes
-        </h3>
-        <p className="whitespace-pre-wrap text-sm text-ink/90">{candidate.summary}</p>
-      </div>
-    ) : null;
-  }
+  const fields: { key: keyof Candidate; label: string; placeholder: string }[] = [
+    { key: "overall_impressions", label: "Overall impressions", placeholder: "Your overall read on the candidate…" },
+    { key: "strengths", label: "Strengths", placeholder: "What stood out positively…" },
+    { key: "opportunities", label: "Opportunities", placeholder: "Gaps, risks, areas to probe…" },
+  ];
+  const hasAny = fields.some((f) => (candidate[f.key] as string)?.trim());
+  if (!canEdit && !hasAny) return null;
 
   return (
-    <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-muted">
-          Notes
-        </h3>
-        {status !== "idle" && (
-          <span className="text-xs text-muted">
-            {status === "saving" ? "Saving…" : "Saved"}
-          </span>
-        )}
-      </div>
-      <textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder="Overall impressions, strengths, concerns… (saves automatically)"
-        className="min-h-32 w-full resize-y rounded-lg border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20"
-      />
+    <div className="space-y-5 rounded-xl border border-border bg-surface p-5 shadow-sm">
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-muted">
+        Notes
+      </h3>
+      {fields.map((f) => (
+        <AutoRichField
+          key={f.key}
+          label={f.label}
+          canEdit={canEdit}
+          placeholder={f.placeholder}
+          initialHtml={(candidate[f.key] as string) || ""}
+          onSave={(html) => update({ [f.key]: html } as Partial<Candidate>)}
+        />
+      ))}
     </div>
   );
 }
