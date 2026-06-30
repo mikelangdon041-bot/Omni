@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Mail, Phone, MapPin, Pencil } from "lucide-react";
@@ -23,7 +23,7 @@ import { cn } from "@/lib/ui";
 import { Avatar } from "@/components/ui/Avatar";
 import { Button } from "@/components/ui/Button";
 import { Tabs } from "@/components/ui/Tabs";
-import { Input, Textarea } from "@/components/ui/Input";
+import { Input } from "@/components/ui/Input";
 import { CandidateRecordings } from "@/components/interview/CandidateRecordings";
 import { QuestionsTab } from "@/components/interview/QuestionsTab";
 import { ActivityTab } from "@/components/interview/ActivityTab";
@@ -126,69 +126,101 @@ function Header({
   update: (p: Partial<Candidate>) => Promise<void>;
   canEdit: boolean;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<Partial<Candidate>>({});
+  const [saving, setSaving] = useState(false);
+  const v = (k: keyof Candidate) => (draft[k] ?? candidate[k] ?? "") as string;
+  const set = (k: keyof Candidate, val: string) =>
+    setDraft((d) => ({ ...d, [k]: val }));
+
+  async function save() {
+    setSaving(true);
+    await update(draft);
+    setSaving(false);
+    setEditing(false);
+    setDraft({});
+  }
+
   return (
     <div className="mb-6 flex items-start gap-4 rounded-xl border border-border bg-surface p-5 shadow-sm">
       <Avatar initials={candidateInitials(candidate)} size={60} />
       <div className="min-w-0 flex-1">
-        <h1 className="text-xl font-semibold tracking-tight">
-          {candidateName(candidate)}
-        </h1>
-        {candidate.role_title && (
-          <p className="text-sm text-muted">{candidate.role_title}</p>
+        {editing ? (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Input label="First name" value={v("first_name")} onChange={(e) => set("first_name", e.target.value)} />
+            <Input label="Last name" value={v("last_name")} onChange={(e) => set("last_name", e.target.value)} />
+            <Input label="Role / position" value={v("role_title")} onChange={(e) => set("role_title", e.target.value)} />
+            <Input label="Email" value={v("email")} onChange={(e) => set("email", e.target.value)} />
+            <Input label="Phone" value={v("phone")} onChange={(e) => set("phone", e.target.value)} />
+            <Input label="Location" value={v("location")} onChange={(e) => set("location", e.target.value)} />
+          </div>
+        ) : (
+          <>
+            <h1 className="text-xl font-semibold tracking-tight">
+              {candidateName(candidate)}
+            </h1>
+            {candidate.role_title && (
+              <p className="text-sm text-muted">{candidate.role_title}</p>
+            )}
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {canEdit ? (
+                <select
+                  value={candidate.status}
+                  onChange={(e) => update({ status: e.target.value as CandidateStatus })}
+                  className={cn(
+                    "rounded-full border-0 px-2.5 py-1 text-xs font-medium outline-none",
+                    STATUS_COLORS[candidate.status],
+                  )}
+                >
+                  {CANDIDATE_STATUSES.map((s) => (
+                    <option key={s} value={s}>{STATUS_LABELS[s]}</option>
+                  ))}
+                </select>
+              ) : (
+                <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", STATUS_COLORS[candidate.status])}>
+                  {STATUS_LABELS[candidate.status]}
+                </span>
+              )}
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {candidate.email && (
+                <a href={`mailto:${candidate.email}`}>
+                  <Button variant="secondary" size="sm"><Mail size={14} /> Email</Button>
+                </a>
+              )}
+              {candidate.phone && (
+                <a href={`tel:${candidate.phone}`}>
+                  <Button variant="secondary" size="sm"><Phone size={14} /> Call</Button>
+                </a>
+              )}
+              {candidate.location && (
+                <span className="inline-flex items-center gap-1.5 text-sm text-muted">
+                  <MapPin size={14} /> {candidate.location}
+                </span>
+              )}
+            </div>
+          </>
         )}
-
-        <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          {canEdit ? (
-            <select
-              value={candidate.status}
-              onChange={(e) =>
-                update({ status: e.target.value as CandidateStatus })
-              }
-              className={cn(
-                "rounded-full border-0 px-2.5 py-1 text-xs font-medium outline-none",
-                STATUS_COLORS[candidate.status],
-              )}
-            >
-              {CANDIDATE_STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {STATUS_LABELS[s]}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <span
-              className={cn(
-                "rounded-full px-2.5 py-1 text-xs font-medium",
-                STATUS_COLORS[candidate.status],
-              )}
-            >
-              {STATUS_LABELS[candidate.status]}
-            </span>
-          )}
-        </div>
-
-        <div className="mt-3 flex flex-wrap gap-2">
-          {candidate.email && (
-            <a href={`mailto:${candidate.email}`}>
-              <Button variant="secondary" size="sm">
-                <Mail size={14} /> Email
-              </Button>
-            </a>
-          )}
-          {candidate.phone && (
-            <a href={`tel:${candidate.phone}`}>
-              <Button variant="secondary" size="sm">
-                <Phone size={14} /> Call
-              </Button>
-            </a>
-          )}
-          {candidate.location && (
-            <span className="inline-flex items-center gap-1.5 text-sm text-muted">
-              <MapPin size={14} /> {candidate.location}
-            </span>
-          )}
-        </div>
       </div>
+
+      {canEdit && (
+        <div className="shrink-0">
+          {editing ? (
+            <div className="flex gap-2">
+              <Button variant="secondary" size="sm" onClick={() => { setEditing(false); setDraft({}); }}>
+                Cancel
+              </Button>
+              <Button size="sm" onClick={save} disabled={saving}>
+                {saving ? "Saving…" : "Save"}
+              </Button>
+            </div>
+          ) : (
+            <Button variant="secondary" size="sm" onClick={() => setEditing(true)}>
+              <Pencil size={14} /> Edit
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -204,48 +236,8 @@ function Overview({
   canEdit: boolean;
   userId: string | null;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<Partial<Candidate>>({});
-  const [saving, setSaving] = useState(false);
-
-  const val = (k: keyof Candidate) => (draft[k] ?? candidate[k] ?? "") as string;
-
-  async function save() {
-    setSaving(true);
-    await update(draft);
-    setSaving(false);
-    setEditing(false);
-    setDraft({});
-  }
-
   return (
     <div className="space-y-5">
-      {canEdit && (
-        <div className="flex justify-end">
-          {editing ? (
-            <div className="flex gap-2">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => {
-                  setEditing(false);
-                  setDraft({});
-                }}
-              >
-                Cancel
-              </Button>
-              <Button size="sm" onClick={save} disabled={saving}>
-                {saving ? "Saving…" : "Save"}
-              </Button>
-            </div>
-          ) : (
-            <Button variant="secondary" size="sm" onClick={() => setEditing(true)}>
-              <Pencil size={14} /> Edit
-            </Button>
-          )}
-        </div>
-      )}
-
       {canEdit ? (
         <ResumeCard candidate={candidate} userId={userId} updateCandidate={update} />
       ) : (
@@ -260,55 +252,64 @@ function Overview({
           </div>
         )
       )}
-
-      <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
-        <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-muted">
-          Details
-        </h3>
-        {editing ? (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Input label="Role / position" value={val("role_title")} onChange={(e) => setDraft((d) => ({ ...d, role_title: e.target.value }))} />
-            <Input label="Email" value={val("email")} onChange={(e) => setDraft((d) => ({ ...d, email: e.target.value }))} />
-            <Input label="Phone" value={val("phone")} onChange={(e) => setDraft((d) => ({ ...d, phone: e.target.value }))} />
-            <Input label="Location" value={val("location")} onChange={(e) => setDraft((d) => ({ ...d, location: e.target.value }))} />
-          </div>
-        ) : (
-          <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Field label="Role" value={candidate.role_title} />
-            <Field label="Email" value={candidate.email} />
-            <Field label="Phone" value={candidate.phone} />
-            <Field label="Location" value={candidate.location} />
-          </dl>
-        )}
-      </div>
-
-      <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
-        <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-muted">
-          Notes & summary
-        </h3>
-        {editing ? (
-          <Textarea
-            value={val("summary")}
-            onChange={(e) => setDraft((d) => ({ ...d, summary: e.target.value }))}
-            placeholder="Overall impressions, strengths, concerns…"
-            className="min-h-32"
-          />
-        ) : candidate.summary ? (
-          <p className="whitespace-pre-wrap text-sm text-ink">{candidate.summary}</p>
-        ) : (
-          <p className="text-sm text-muted">No notes yet.</p>
-        )}
-      </div>
+      <NotesCard candidate={candidate} update={update} canEdit={canEdit} />
     </div>
   );
 }
 
-function Field({ label, value }: { label: string; value: string }) {
-  if (!value) return null;
+function NotesCard({
+  candidate,
+  update,
+  canEdit,
+}: {
+  candidate: Candidate;
+  update: (p: Partial<Candidate>) => Promise<void>;
+  canEdit: boolean;
+}) {
+  const [text, setText] = useState(candidate.summary || "");
+  const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const saved = useRef(candidate.summary || "");
+
+  useEffect(() => {
+    if (text === saved.current) return;
+    setStatus("saving");
+    const t = setTimeout(async () => {
+      await update({ summary: text });
+      saved.current = text;
+      setStatus("saved");
+    }, 800);
+    return () => clearTimeout(t);
+  }, [text, update]);
+
+  if (!canEdit) {
+    return candidate.summary ? (
+      <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
+        <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">
+          Notes
+        </h3>
+        <p className="whitespace-pre-wrap text-sm text-ink/90">{candidate.summary}</p>
+      </div>
+    ) : null;
+  }
+
   return (
-    <div>
-      <dt className="text-xs text-muted">{label}</dt>
-      <dd className="text-sm text-ink">{value}</dd>
+    <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-muted">
+          Notes
+        </h3>
+        {status !== "idle" && (
+          <span className="text-xs text-muted">
+            {status === "saving" ? "Saving…" : "Saved"}
+          </span>
+        )}
+      </div>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="Overall impressions, strengths, concerns… (saves automatically)"
+        className="min-h-32 w-full resize-y rounded-lg border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20"
+      />
     </div>
   );
 }

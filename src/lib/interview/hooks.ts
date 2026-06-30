@@ -288,7 +288,22 @@ export function useUnassignedRecordings() {
     void refresh();
   }, [refresh]);
 
-  return { recordings, loading, refresh };
+  const rename = useCallback(async (id: string, title: string) => {
+    setRecordings((prev) => prev.map((r) => (r.id === id ? { ...r, title } : r)));
+    await supabase.from("recordings").update({ title }).eq("id", id);
+  }, []);
+
+  const assign = useCallback(async (id: string, candidateId: string) => {
+    setRecordings((prev) => prev.filter((r) => r.id !== id));
+    await supabase.from("recordings").update({ candidate_id: candidateId }).eq("id", id);
+  }, []);
+
+  const remove = useCallback(async (id: string) => {
+    setRecordings((prev) => prev.filter((r) => r.id !== id));
+    await supabase.from("recordings").delete().eq("id", id);
+  }, []);
+
+  return { recordings, loading, refresh, rename, assign, remove };
 }
 
 // Interview scorecards / structured feedback for a candidate.
