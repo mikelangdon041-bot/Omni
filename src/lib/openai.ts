@@ -71,3 +71,52 @@ export async function summarizeTranscript(transcript: string): Promise<string> {
   });
   return res.choices[0]?.message?.content?.trim() || "";
 }
+
+const QUESTION_SYSTEM_PROMPT = `You are an expert interviewer who writes sharp, specific interview questions.
+
+- Return ONLY JSON of the form {"questions": ["...", "..."]}. No prose outside the JSON.
+- Each item is a single, clear, standalone question.
+- Tailor questions to the role and to specifics in the candidate's background (companies, projects, technologies, gaps, achievements). Reference concrete details where possible.
+- Mix question types: role/competency, behavioral (past experience), and resume-specific probes.
+- Do not repeat or lightly reword any question the user already has.
+- Keep each question concise and conversational — something you'd actually say out loud.`;
+
+// Suggest interview questions tailored to a candidate's resume + role.
+export async function suggestInterviewQuestions(opts: {
+  resumeText?: string;
+  role?: string;
+  existing?: string[];
+  count?: number;
+}): Promise<string[]> {
+  const { resumeText = "", role = "", existing = [], count = 10 } = opts;
+  const user = `Role / position: ${role || "(unspecified)"}
+
+Candidate background / resume:
+${resumeText.trim() || "(no resume text provided — base questions on the role and general best practice)"}
+
+Questions already planned (do NOT duplicate these):
+${existing.length ? existing.map((q) => `- ${q}`).join("\n") : "(none)"}
+
+Generate ${count} strong interview questions.`;
+
+  const res = await openai().chat.completions.create({
+    model: SUMMARY_MODEL,
+    temperature: 0.6,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: QUESTION_SYSTEM_PROMPT },
+      { role: "user", content: user },
+    ],
+  });
+
+  try {
+    const parsed = JSON.parse(res.choices[0]?.message?.content || "{}");
+    const arr = Array.isArray(parsed.questions) ? parsed.questions : [];
+    return arr
+      .map((q: unknown) => String(q).trim())
+      .filter((q: string) => q.length > 0)
+      .slice(0, count);
+  } catch {
+    return [];
+  }
+}

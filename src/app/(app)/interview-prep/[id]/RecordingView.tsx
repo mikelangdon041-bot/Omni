@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { RefreshCw } from "lucide-react";
 import { StatusChip } from "@/components/StatusChip";
 import { SummaryTree } from "@/components/SummaryTree";
 import type { SummaryNodeRow } from "@/lib/summaryTree";
@@ -137,6 +138,19 @@ export function RecordingView({
       ? `${pct}%`
       : undefined;
 
+  // Regenerate the summary from the stored transcript — no re-upload needed.
+  async function reanalyze() {
+    setNodes([]);
+    setRecording((r) => ({ ...r, status: "summarizing", error: null }));
+    await fetch(`/api/recordings/${id}/summarize`, {
+      method: "POST",
+      credentials: "same-origin",
+    });
+    refetch();
+  }
+
+  const canReanalyze = !inProgress && !!recording.transcript;
+
   return (
     <>
       <div className="mb-6">
@@ -150,7 +164,18 @@ export function RecordingView({
           <h1 className="text-2xl font-semibold tracking-tight">
             {recording.title}
           </h1>
-          <StatusChip status={recording.status} detail={detail} />
+          <div className="flex items-center gap-2">
+            {canReanalyze && (
+              <button
+                onClick={reanalyze}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-ink transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                title="Regenerate the summary from the transcript"
+              >
+                <RefreshCw size={14} /> Re-analyze
+              </button>
+            )}
+            <StatusChip status={recording.status} detail={detail} />
+          </div>
         </div>
       </div>
 

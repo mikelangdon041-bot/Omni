@@ -2,7 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import type { Candidate } from "./types";
+import type {
+  Candidate,
+  CandidateQuestion,
+  QuestionBankItem,
+} from "./types";
 
 const supabase = createClient();
 
@@ -94,6 +98,123 @@ export interface CandidateRecording {
   total_chunks: number;
   chunks_done: number;
   created_at: string;
+}
+
+// Per-candidate planned/asked questions.
+export function useCandidateQuestions(candidateId: string) {
+  const [questions, setQuestions] = useState<CandidateQuestion[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    const { data } = await supabase
+      .from("candidate_questions")
+      .select("*")
+      .eq("candidate_id", candidateId)
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: true });
+    setQuestions((data as CandidateQuestion[]) || []);
+    setLoading(false);
+  }, [candidateId]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const add = useCallback(
+    async (partial: Partial<CandidateQuestion>) => {
+      const { data } = await supabase
+        .from("candidate_questions")
+        .insert({ ...partial, candidate_id: candidateId })
+        .select("*")
+        .single();
+      if (data) setQuestions((prev) => [...prev, data as CandidateQuestion]);
+      return (data as CandidateQuestion) || null;
+    },
+    [candidateId],
+  );
+
+  const addMany = useCallback(
+    async (items: Partial<CandidateQuestion>[]) => {
+      if (items.length === 0) return;
+      const rows = items.map((p) => ({ ...p, candidate_id: candidateId }));
+      const { data } = await supabase
+        .from("candidate_questions")
+        .insert(rows)
+        .select("*");
+      if (data) setQuestions((prev) => [...prev, ...(data as CandidateQuestion[])]);
+    },
+    [candidateId],
+  );
+
+  const update = useCallback(
+    async (id: string, partial: Partial<CandidateQuestion>) => {
+      setQuestions((prev) =>
+        prev.map((q) => (q.id === id ? { ...q, ...partial } : q)),
+      );
+      await supabase.from("candidate_questions").update(partial).eq("id", id);
+    },
+    [],
+  );
+
+  const remove = useCallback(async (id: string) => {
+    setQuestions((prev) => prev.filter((q) => q.id !== id));
+    await supabase.from("candidate_questions").delete().eq("id", id);
+  }, []);
+
+  return { questions, loading, refresh, add, addMany, update, remove };
+}
+
+// Reusable question bank (per owner).
+export function useQuestionBank(userId: string | null) {
+  const [items, setItems] = useState<QuestionBankItem[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    if (!userId) return;
+    const { data } = await supabase
+      .from("question_bank")
+      .select("*")
+      .eq("user_id", userId)
+      .order("favorite", { ascending: false })
+      .order("created_at", { ascending: false });
+    setItems((data as QuestionBankItem[]) || []);
+    setLoading(false);
+  }, [userId]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const add = useCallback(
+    async (partial: Partial<QuestionBankItem>) => {
+      if (!userId) return null;
+      const { data } = await supabase
+        .from("question_bank")
+        .insert({ ...partial, user_id: userId })
+        .select("*")
+        .single();
+      if (data) setItems((prev) => [data as QuestionBankItem, ...prev]);
+      return (data as QuestionBankItem) || null;
+    },
+    [userId],
+  );
+
+  const toggleFavorite = useCallback(
+    async (id: string, favorite: boolean) => {
+      setItems((prev) =>
+        prev.map((i) => (i.id === id ? { ...i, favorite } : i)),
+      );
+      await supabase.from("question_bank").update({ favorite }).eq("id", id);
+    },
+    [],
+  );
+
+  const remove = useCallback(async (id: string) => {
+    setItems((prev) => prev.filter((i) => i.id !== id));
+    await supabase.from("question_bank").delete().eq("id", id);
+  }, []);
+
+  return { items, loading, refresh, add, toggleFavorite, remove };
 }
 
 export function useCandidateRecordings(candidateId: string) {

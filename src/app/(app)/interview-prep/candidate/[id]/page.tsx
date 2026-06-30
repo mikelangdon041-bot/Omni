@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Mail, Phone, MapPin, Pencil } from "lucide-react";
-import { useCandidate } from "@/lib/interview/hooks";
+import { useCandidate, useUserId } from "@/lib/interview/hooks";
 import {
   CANDIDATE_STATUSES,
   STATUS_COLORS,
@@ -20,12 +20,14 @@ import { Button } from "@/components/ui/Button";
 import { Tabs } from "@/components/ui/Tabs";
 import { Input, Textarea } from "@/components/ui/Input";
 import { CandidateRecordings } from "@/components/interview/CandidateRecordings";
+import { QuestionsTab } from "@/components/interview/QuestionsTab";
 
 const TABS = ["Overview", "Recordings", "Questions", "Activity", "Sharing"] as const;
 type Tab = (typeof TABS)[number];
 
 export default function CandidateDetailPage() {
   const params = useParams<{ id: string }>();
+  const { userId } = useUserId();
   const { candidate, loading, update } = useCandidate(params.id);
   const [tab, setTab] = useState<Tab>("Overview");
 
@@ -58,10 +60,11 @@ export default function CandidateDetailPage() {
 
       {tab === "Overview" && <Overview candidate={candidate} update={update} />}
       {tab === "Recordings" && <CandidateRecordings candidateId={candidate.id} />}
-      {(tab === "Questions" || tab === "Activity" || tab === "Sharing") && (
+      {tab === "Questions" && (
+        <QuestionsTab candidate={candidate} userId={userId} updateCandidate={update} />
+      )}
+      {(tab === "Activity" || tab === "Sharing") && (
         <div className="rounded-xl border border-dashed border-border bg-surface px-6 py-16 text-center text-sm text-muted">
-          {tab === "Questions" &&
-            "Question bank + AI-suggested questions from the resume are coming next."}
           {tab === "Activity" &&
             "The long-term candidate activity timeline is coming next."}
           {tab === "Sharing" &&
