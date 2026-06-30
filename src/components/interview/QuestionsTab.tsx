@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Sparkles, Plus, Trash2, BookmarkPlus, Library, Check } from "lucide-react";
+import { Sparkles, Trash2, BookmarkPlus, Library, Check } from "lucide-react";
 import { useCandidateQuestions, useQuestionBank } from "@/lib/interview/hooks";
 import type { Candidate } from "@/lib/interview/types";
 import { Button } from "@/components/ui/Button";
@@ -15,7 +15,7 @@ export function QuestionsTab({
   candidate: Candidate;
   userId: string | null;
 }) {
-  const { questions, add, addMany, update, remove } = useCandidateQuestions(
+  const { questions, addMany, update, remove } = useCandidateQuestions(
     candidate.id,
   );
   const bank = useQuestionBank(userId);
@@ -24,22 +24,18 @@ export function QuestionsTab({
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-muted">Plan the questions for this interview.</p>
-        <div className="flex gap-2">
-          <Link href="/interview-prep/question-bank">
-            <Button variant="secondary">
-              <Library size={15} /> Question bank
-            </Button>
-          </Link>
-          <Button onClick={() => setSuggestOpen(true)}>
-            <Sparkles size={15} /> Add questions
+        <Link href="/interview-prep/question-bank">
+          <Button variant="secondary">
+            <Library size={15} /> Question bank
           </Button>
-        </div>
+        </Link>
+        <Button onClick={() => setSuggestOpen(true)}>
+          <Sparkles size={15} /> Add questions
+        </Button>
       </div>
 
       <PlannedQuestions
         questions={questions}
-        add={add}
         update={update}
         remove={remove}
         onSaveToBank={(t) => bank.add({ text: t, source: "manual" })}
@@ -66,49 +62,25 @@ type CQ = ReturnType<typeof useCandidateQuestions>["questions"][number];
 
 function PlannedQuestions({
   questions,
-  add,
   update,
   remove,
   onSaveToBank,
 }: {
   questions: CQ[];
-  add: (p: Partial<CQ>) => Promise<unknown>;
   update: (id: string, p: Partial<CQ>) => Promise<unknown>;
   remove: (id: string) => Promise<unknown>;
   onSaveToBank: (text: string) => Promise<unknown>;
 }) {
-  const [draft, setDraft] = useState("");
-
-  async function addManual() {
-    const t = draft.trim();
-    if (!t) return;
-    await add({ text: t, source: "manual" });
-    setDraft("");
-  }
-
   return (
     <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
       <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">
         Questions for this interview
       </h3>
 
-      <div className="mb-4 flex gap-2">
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && addManual()}
-          placeholder="Type a question and press Enter…"
-          className="flex-1 rounded-lg border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20"
-        />
-        <Button size="sm" onClick={addManual}>
-          <Plus size={14} /> Add
-        </Button>
-      </div>
-
       {questions.length === 0 ? (
         <p className="text-sm text-muted">
-          No questions yet. Type one above, or use “Add questions” to pull from
-          your bank, standard sets, or AI.
+          No questions yet. Use “Add questions” to write your own, pull from your
+          bank, or generate with AI.
         </p>
       ) : (
         <ul className="space-y-2">

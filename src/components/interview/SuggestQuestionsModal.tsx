@@ -1,12 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { Sparkles, Check, FileText, ListChecks, Library } from "lucide-react";
+import { Sparkles, Check, FileText, ListChecks, Library, Pencil } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/ui";
 
-type Mode = "bank" | "standard" | "resume" | "generate";
+type Mode = "bank" | "write" | "standard" | "resume" | "generate";
 
 const STANDARD: string[] = [
   "Walk me through your background and what brought you here.",
@@ -40,9 +40,10 @@ export function SuggestQuestionsModal({
   onAddToInterview: (texts: string[]) => Promise<unknown>;
   onAddToBank: (texts: string[]) => Promise<unknown>;
 }) {
-  const [mode, setMode] = useState<Mode>("bank");
-  const [list, setList] = useState<string[]>(bankItems.map((b) => b.text));
+  const [mode, setMode] = useState<Mode>("write");
+  const [list, setList] = useState<string[]>([]);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [writeText, setWriteText] = useState("");
   const [alsoBank, setAlsoBank] = useState(true);
   const [guidance, setGuidance] = useState("");
   const [loading, setLoading] = useState(false);
@@ -89,22 +90,34 @@ export function SuggestQuestionsModal({
   }
   const allSelected = list.length > 0 && selected.size === list.length;
 
+  function selectedTexts(): string[] {
+    if (mode === "write") {
+      return writeText
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean);
+    }
+    return [...selected].map((i) => list[i]).filter(Boolean);
+  }
+
   async function add(toInterview: boolean) {
-    const texts = [...selected].map((i) => list[i]).filter(Boolean);
+    const texts = selectedTexts();
     if (texts.length === 0) return;
     if (toInterview) await onAddToInterview(texts);
-    // Bank-mode items are already saved; don't re-save them.
     if (mode !== "bank" && (!toInterview || alsoBank)) await onAddToBank(texts);
     onClose();
   }
 
+  const nothing =
+    mode === "write" ? !writeText.trim() : selected.size === 0;
+
   return (
     <Modal open={open} onClose={onClose} title="Add questions" size="lg">
       <div className="space-y-4">
-        {/* mode switch */}
         <div className="flex flex-wrap gap-1.5">
           {(
             [
+              { m: "write", icon: Pencil, label: "Write your own" },
               { m: "bank", icon: Library, label: "Your bank" },
               { m: "standard", icon: ListChecks, label: "Standard" },
               { m: "resume", icon: FileText, label: "From resume" },
@@ -126,6 +139,16 @@ export function SuggestQuestionsModal({
           ))}
         </div>
 
+        {mode === "write" && (
+          <textarea
+            autoFocus
+            value={writeText}
+            onChange={(e) => setWriteText(e.target.value)}
+            placeholder="Type questions, one per line…"
+            className="min-h-40 w-full resize-y rounded-lg border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20"
+          />
+        )}
+
         {mode === "resume" && (
           <div className="flex items-center gap-2">
             <Button
@@ -146,13 +169,13 @@ export function SuggestQuestionsModal({
             <input
               value={guidance}
               onChange={(e) => setGuidance(e.target.value)}
-              placeholder="Guidance — e.g. 'senior MSL, focus on stakeholder management'"
+              placeholder="Optional guidance — e.g. 'senior MSL, stakeholder management'"
               className="flex-1 rounded-lg border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
             />
             <Button
               size="sm"
               onClick={() => fetchAi("/api/interview/generate-questions", { topic: guidance })}
-              disabled={loading || !guidance.trim()}
+              disabled={loading}
             >
               <Sparkles size={14} /> {loading ? "Thinking…" : list.length ? "Re-ask" : "Generate"}
             </Button>
@@ -167,8 +190,7 @@ export function SuggestQuestionsModal({
         )}
         {error && <p className="text-sm text-status-error">{error}</p>}
 
-        {/* list */}
-        {list.length > 0 && (
+        {mode !== "write" && list.length > 0 && (
           <>
             <div className="flex items-center justify-between">
               <button
@@ -208,7 +230,6 @@ export function SuggestQuestionsModal({
           </>
         )}
 
-        {/* footer actions */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
           {mode === "bank" ? (
             <span />
@@ -225,16 +246,12 @@ export function SuggestQuestionsModal({
           )}
           <div className="flex gap-2">
             {mode !== "bank" && (
-              <Button
-                variant="secondary"
-                onClick={() => add(false)}
-                disabled={selected.size === 0}
-              >
+              <Button variant="secondary" onClick={() => add(false)} disabled={nothing}>
                 Save to bank
               </Button>
             )}
-            <Button onClick={() => add(true)} disabled={selected.size === 0}>
-              Add {selected.size || ""} to interview
+            <Button onClick={() => add(true)} disabled={nothing}>
+              Add to interview
             </Button>
           </div>
         </div>

@@ -103,6 +103,8 @@ export function ResumeCard({
           if (res.ok && data.text) {
             setText(data.text);
             savedText.current = data.text;
+            // Push extracted text to the parent so AI features (scan) light up.
+            await updateCandidate({ resume_text: data.text });
           }
         } catch {
           // keep the file; user can paste text if extraction fails
@@ -225,9 +227,11 @@ export function ResumeCard({
           {!extracting && text && (
             <div>
               <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted">
-                Extracted text (used for AI)
+                {isPdf || isImage ? "Extracted text (used for AI)" : "Preview"}
               </p>
-              <p className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg border border-border bg-canvas px-3 py-2 text-sm text-ink/90">
+              <p
+                className={`${isPdf || isImage ? "max-h-40" : "max-h-[28rem]"} overflow-y-auto whitespace-pre-wrap rounded-lg border border-border bg-canvas px-3 py-2 text-sm text-ink/90`}
+              >
                 {text}
               </p>
             </div>

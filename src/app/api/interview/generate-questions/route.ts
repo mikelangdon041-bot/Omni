@@ -18,9 +18,6 @@ export async function POST(req: Request) {
   const seeds: string[] = Array.isArray(body.seeds)
     ? body.seeds.map((s: unknown) => String(s))
     : [];
-  if (!topic && seeds.length === 0) {
-    return NextResponse.json({ error: "Add a topic or role" }, { status: 400 });
-  }
 
   try {
     const questions = await suggestInterviewQuestions({
