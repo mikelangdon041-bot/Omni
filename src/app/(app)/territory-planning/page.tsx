@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Search, ArrowUpDown, MapPin, List } from "lucide-react";
+import { Plus, Search, ArrowUpDown, MapPin, List, CalendarDays } from "lucide-react";
 import { ModuleHero } from "@/components/ui/ModuleHero";
 import { Button } from "@/components/territory/ui/Button";
 import { KOLCard } from "@/components/territory/KOLCard";
@@ -9,6 +9,7 @@ import { AddKOLModal } from "@/components/territory/AddKOLModal";
 import { TerritoryTasks } from "@/components/territory/TerritoryTasks";
 import { ImportExport } from "@/components/territory/ImportExport";
 import { KolMap } from "@/components/territory/KolMap";
+import { TerritoryCalendar } from "@/components/territory/TerritoryCalendar";
 import { useKOLs, useReminders, useUserId } from "@/lib/territory/hooks";
 import {
   RELATIONSHIP_LABELS,
@@ -34,7 +35,7 @@ export default function TerritoryDashboard() {
   const [stateFilter, setStateFilter] = useState("all");
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
-  const [view, setView] = useState<"list" | "map">("list");
+  const [view, setView] = useState<"list" | "map" | "calendar">("list");
   const [activeList, setActiveList] = useState<string>("all");
   const [customLists, setCustomLists] = useState<string[]>([]);
 
@@ -246,13 +247,22 @@ export default function TerritoryDashboard() {
             >
               <MapPin size={16} />
             </button>
+            <button
+              onClick={() => setView("calendar")}
+              className={`px-3 py-2.5 ${view === "calendar" ? "bg-[var(--accent)] text-white" : "bg-surface text-muted hover:text-ink"}`}
+              title="Calendar"
+            >
+              <CalendarDays size={16} />
+            </button>
           </div>
         </div>
       </div>
 
-      {/* Grid / Map */}
+      {/* Grid / Map / Calendar */}
       {view === "map" ? (
         <KolMap kols={filtered} update={update} />
+      ) : view === "calendar" ? (
+        <TerritoryCalendar kols={kols} />
       ) : loading ? (
         <p className="py-12 text-center text-sm text-muted">Loading…</p>
       ) : filtered.length === 0 ? (

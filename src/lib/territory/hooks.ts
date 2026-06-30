@@ -61,8 +61,29 @@ export function useKOLs(userId: string | null) {
         .select("*")
         .single();
       if (error || !data) return null;
-      setKols((prev) => [data as KOL, ...prev]);
-      return data as KOL;
+      const kol = data as KOL;
+      setKols((prev) => [kol, ...prev]);
+
+      // Auto-geocode the address in the background so it appears on the map.
+      if (kol.address && (kol.latitude == null || kol.longitude == null)) {
+        fetch("/api/territory/geocode", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ address: kol.address }),
+        })
+          .then((r) => r.json())
+          .then(({ lat, lng }) => {
+            if (lat != null && lng != null) {
+              supabase.from("kols").update({ latitude: lat, longitude: lng }).eq("id", kol.id);
+              setKols((prev) =>
+                prev.map((k) => (k.id === kol.id ? { ...k, latitude: lat, longitude: lng } : k)),
+              );
+            }
+          })
+          .catch(() => {});
+      }
+      return kol;
     },
     [userId],
   );
