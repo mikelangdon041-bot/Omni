@@ -13,7 +13,7 @@ export function CandidateRecordings({ candidateId }: { candidateId: string }) {
       <NewRecording candidateId={candidateId} />
 
       <div>
-        <h3 className="mb-3 text-sm font-semibold text-muted">Recordings</h3>
+        <h3 className="mb-3 text-sm font-semibold text-muted">Interviews</h3>
         {loading ? (
           <p className="py-8 text-center text-sm text-muted">Loading…</p>
         ) : recordings.length === 0 ? (

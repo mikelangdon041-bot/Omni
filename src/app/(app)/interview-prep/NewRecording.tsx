@@ -11,7 +11,6 @@ type Phase = "idle" | "uploading" | "preparing" | "error";
 export function NewRecording({ candidateId }: { candidateId?: string }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
-  const [title, setTitle] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -20,11 +19,12 @@ export function NewRecording({ candidateId }: { candidateId?: string }) {
   async function handleUpload(file: File) {
     setError(null);
     const ext = file.name.split(".").pop()?.toLowerCase() || "bin";
+    const title = file.name.replace(/\.[^.]+$/, "");
 
     const signRes = await fetch("/api/recordings/sign-upload", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: title || file.name, ext, candidateId }),
+      body: JSON.stringify({ title, ext, candidateId }),
     });
     const signed = await signRes.json();
     if (!signRes.ok) throw new Error(signed.error || "Could not start upload");
@@ -75,22 +75,13 @@ export function NewRecording({ candidateId }: { candidateId?: string }) {
 
   return (
     <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
-      <h2 className="font-semibold">New interview recording</h2>
-      <p className="mt-1 text-sm text-muted">
-        Upload audio — we&apos;ll transcribe it and build a detailed nested summary.
-      </p>
-
-      <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
-        <label className="flex-1">
-          <span className="mb-1.5 block text-sm font-medium">Title (optional)</span>
-          <input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="e.g. Jane Smith — Senior MSL screen"
-            disabled={busy}
-            className="w-full rounded-lg border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20 disabled:opacity-60"
-          />
-        </label>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="font-semibold">New interview recording</h2>
+          <p className="mt-1 text-sm text-muted">
+            Upload audio — we&apos;ll transcribe it and build a detailed summary.
+          </p>
+        </div>
 
         <input
           ref={fileRef}
@@ -110,7 +101,7 @@ export function NewRecording({ candidateId }: { candidateId?: string }) {
           {phase === "uploading"
             ? `Uploading… ${progress}%`
             : phase === "preparing"
-              ? "Preparing audio…"
+              ? "Processing…"
               : "Upload audio"}
         </Button>
       </div>
@@ -130,7 +121,6 @@ export function NewRecording({ candidateId }: { candidateId?: string }) {
         </p>
       )}
 
-      {/* Consent gate — shown only when the user initiates an upload. */}
       <Modal
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}

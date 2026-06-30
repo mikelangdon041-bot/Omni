@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Mail, Phone, MapPin, Pencil } from "lucide-react";
@@ -26,9 +26,18 @@ import { Input, Textarea } from "@/components/ui/Input";
 import { CandidateRecordings } from "@/components/interview/CandidateRecordings";
 import { QuestionsTab } from "@/components/interview/QuestionsTab";
 import { ActivityTab } from "@/components/interview/ActivityTab";
+import { SharingTab } from "@/components/interview/SharingTab";
+import { createClient } from "@/lib/supabase/client";
 
-const TABS = ["Overview", "Recordings", "Questions", "Activity", "Sharing"] as const;
+const TABS = ["Overview", "Interviews", "Questions", "Activity", "Sharing"] as const;
 type Tab = (typeof TABS)[number];
+
+const SECTION_TO_TAB: Record<string, Tab> = {
+  overview: "Overview",
+  interviews: "Interviews",
+  questions: "Questions",
+  activity: "Activity",
+};
 
 export default function CandidateDetailPage() {
   const params = useParams<{ id: string }>();
@@ -36,8 +45,39 @@ export default function CandidateDetailPage() {
   const { candidate, loading, update } = useCandidate(params.id);
   const activity = useCandidateActivity(params.id);
   const [tab, setTab] = useState<Tab>("Overview");
+  // For a non-owner viewer: which sections they're allowed to see (null = all).
+  const [allowedSections, setAllowedSections] = useState<string[] | null>(null);
 
   const canEdit = !!candidate && candidate.user_id === userId;
+
+  // Resolve a shared viewer's scope.
+  useEffect(() => {
+    if (!candidate || !userId) return;
+    if (candidate.user_id === userId) {
+      setAllowedSections(null);
+      return;
+    }
+    const supabase = createClient();
+    supabase
+      .from("candidate_shares")
+      .select("scope")
+      .eq("candidate_id", candidate.id)
+      .eq("shared_with", userId)
+      .single()
+      .then(({ data }) => {
+        const scope = data?.scope as { all?: boolean; sections?: string[] } | undefined;
+        setAllowedSections(
+          !scope || scope.all
+            ? ["overview", "interviews", "questions", "activity"]
+            : scope.sections || [],
+        );
+      });
+  }, [candidate, userId]);
+
+  const visibleTabs: Tab[] = canEdit
+    ? [...TABS]
+    : (allowedSections || []).map((s) => SECTION_TO_TAB[s]).filter(Boolean);
+  const activeTab = visibleTabs.includes(tab) ? tab : visibleTabs[0];
 
   // Update a field, and log status changes to the activity timeline.
   async function updateAndLog(partial: Partial<Candidate>) {
@@ -75,16 +115,22 @@ export default function CandidateDetailPage() {
         <ArrowLeft size={15} /> Interview Prep
       </Link>
 
-      <Header candidate={candidate} update={updateAndLog} />
+      <Header candidate={candidate} update={updateAndLog} canEdit={canEdit} />
 
-      <Tabs tabs={TABS} active={tab} onChange={setTab} />
+      {visibleTabs.length > 0 && (
+        <Tabs tabs={visibleTabs} active={activeTab} onChange={setTab} />
+      )}
 
-      {tab === "Overview" && <Overview candidate={candidate} update={update} />}
-      {tab === "Recordings" && <CandidateRecordings candidateId={candidate.id} />}
-      {tab === "Questions" && (
+      {activeTab === "Overview" && (
+        <Overview candidate={candidate} update={update} canEdit={canEdit} />
+      )}
+      {activeTab === "Interviews" && (
+        <CandidateRecordings candidateId={candidate.id} />
+      )}
+      {activeTab === "Questions" && (
         <QuestionsTab candidate={candidate} userId={userId} updateCandidate={update} />
       )}
-      {tab === "Activity" && (
+      {activeTab === "Activity" && (
         <ActivityTab
           activity={activity.activity}
           loading={activity.loading}
@@ -94,10 +140,8 @@ export default function CandidateDetailPage() {
           remove={activity.remove}
         />
       )}
-      {tab === "Sharing" && (
-        <div className="rounded-xl border border-dashed border-border bg-surface px-6 py-16 text-center text-sm text-muted">
-          Sharing this candidate with other Omni users is coming next.
-        </div>
+      {activeTab === "Sharing" && canEdit && (
+        <SharingTab candidateId={candidate.id} />
       )}
     </>
   );
@@ -106,9 +150,11 @@ export default function CandidateDetailPage() {
 function Header({
   candidate,
   update,
+  canEdit,
 }: {
   candidate: Candidate;
   update: (p: Partial<Candidate>) => Promise<void>;
+  canEdit: boolean;
 }) {
   return (
     <div className="mb-6 flex items-start gap-4 rounded-xl border border-border bg-surface p-5 shadow-sm">
@@ -122,22 +168,33 @@ function Header({
         )}
 
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          <select
-            value={candidate.status}
-            onChange={(e) =>
-              update({ status: e.target.value as CandidateStatus })
-            }
-            className={cn(
-              "rounded-full border-0 px-2.5 py-1 text-xs font-medium outline-none",
-              STATUS_COLORS[candidate.status],
-            )}
-          >
-            {CANDIDATE_STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {STATUS_LABELS[s]}
-              </option>
-            ))}
-          </select>
+          {canEdit ? (
+            <select
+              value={candidate.status}
+              onChange={(e) =>
+                update({ status: e.target.value as CandidateStatus })
+              }
+              className={cn(
+                "rounded-full border-0 px-2.5 py-1 text-xs font-medium outline-none",
+                STATUS_COLORS[candidate.status],
+              )}
+            >
+              {CANDIDATE_STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {STATUS_LABELS[s]}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <span
+              className={cn(
+                "rounded-full px-2.5 py-1 text-xs font-medium",
+                STATUS_COLORS[candidate.status],
+              )}
+            >
+              {STATUS_LABELS[candidate.status]}
+            </span>
+          )}
         </div>
 
         <div className="mt-3 flex flex-wrap gap-2">
@@ -169,9 +226,11 @@ function Header({
 function Overview({
   candidate,
   update,
+  canEdit,
 }: {
   candidate: Candidate;
   update: (p: Partial<Candidate>) => Promise<void>;
+  canEdit: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Partial<Candidate>>({});
@@ -189,29 +248,31 @@ function Overview({
 
   return (
     <div className="space-y-5">
-      <div className="flex justify-end">
-        {editing ? (
-          <div className="flex gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                setEditing(false);
-                setDraft({});
-              }}
-            >
-              Cancel
+      {canEdit && (
+        <div className="flex justify-end">
+          {editing ? (
+            <div className="flex gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  setEditing(false);
+                  setDraft({});
+                }}
+              >
+                Cancel
+              </Button>
+              <Button size="sm" onClick={save} disabled={saving}>
+                {saving ? "Saving…" : "Save"}
+              </Button>
+            </div>
+          ) : (
+            <Button variant="secondary" size="sm" onClick={() => setEditing(true)}>
+              <Pencil size={14} /> Edit
             </Button>
-            <Button size="sm" onClick={save} disabled={saving}>
-              {saving ? "Saving…" : "Save"}
-            </Button>
-          </div>
-        ) : (
-          <Button variant="secondary" size="sm" onClick={() => setEditing(true)}>
-            <Pencil size={14} /> Edit
-          </Button>
-        )}
-      </div>
+          )}
+        </div>
+      )}
 
       <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
         <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-muted">

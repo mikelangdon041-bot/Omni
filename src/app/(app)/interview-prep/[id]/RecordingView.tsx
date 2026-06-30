@@ -2,10 +2,21 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, Pencil } from "lucide-react";
 import { StatusChip } from "@/components/StatusChip";
 import { SummaryTree } from "@/components/SummaryTree";
-import type { SummaryNodeRow } from "@/lib/summaryTree";
+import { parseOutline, type SummaryNodeRow } from "@/lib/summaryTree";
+import { createClient } from "@/lib/supabase/client";
+
+const supabase = createClient();
+
+// Reconstruct an indented outline (for editing) from stored summary nodes.
+function outlineFromNodes(nodes: SummaryNodeRow[]): string {
+  return [...nodes]
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map((n) => `${"  ".repeat(n.depth)}- ${n.content}`)
+    .join("\n");
+}
 
 export interface Recording {
   id: string;
@@ -28,6 +39,11 @@ export function RecordingView({
   const [nodes, setNodes] = useState(initialNodes);
   const [liveProgress, setLiveProgress] = useState<number | null>(null);
   const [showTranscript, setShowTranscript] = useState(false);
+  const [editTranscript, setEditTranscript] = useState(false);
+  const [transcriptDraft, setTranscriptDraft] = useState("");
+  const [editSummary, setEditSummary] = useState(false);
+  const [summaryDraft, setSummaryDraft] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const workerRef = useRef<Worker | null>(null);
   const startedRef = useRef(false);
@@ -138,6 +154,19 @@ export function RecordingView({
       ? `${pct}%`
       : undefined;
 
+  // One seamless 0–100% across the whole pipeline (no backend stages exposed).
+  const overallPct =
+    recording.status === "summarizing"
+      ? 95
+      : recording.status === "transcribing"
+        ? Math.min(
+            92,
+            5 + Math.round((chunksDone / Math.max(1, recording.total_chunks)) * 85),
+          )
+        : recording.status === "uploading"
+          ? 3
+          : 0;
+
   // Regenerate the summary from the stored transcript — no re-upload needed.
   async function reanalyze() {
     setNodes([]);
@@ -150,6 +179,42 @@ export function RecordingView({
   }
 
   const canReanalyze = !inProgress && !!recording.transcript;
+
+  async function saveTranscript() {
+    setSavingEdit(true);
+    await supabase
+      .from("recordings")
+      .update({ transcript: transcriptDraft })
+      .eq("id", id);
+    setRecording((r) => ({ ...r, transcript: transcriptDraft }));
+    setSavingEdit(false);
+    setEditTranscript(false);
+  }
+
+  async function saveSummary() {
+    setSavingEdit(true);
+    const bullets = parseOutline(summaryDraft);
+    const parentByDepth: string[] = [];
+    const rows = bullets.map((b, i) => {
+      const nodeId = crypto.randomUUID();
+      const parentId = b.depth > 0 ? parentByDepth[b.depth - 1] || null : null;
+      parentByDepth[b.depth] = nodeId;
+      parentByDepth.length = b.depth + 1;
+      return {
+        id: nodeId,
+        recording_id: id,
+        parent_id: parentId,
+        content: b.content,
+        depth: b.depth,
+        sort_order: i,
+      };
+    });
+    await supabase.from("summary_nodes").delete().eq("recording_id", id);
+    if (rows.length) await supabase.from("summary_nodes").insert(rows);
+    await refetch();
+    setSavingEdit(false);
+    setEditSummary(false);
+  }
 
   return (
     <>
@@ -181,26 +246,17 @@ export function RecordingView({
 
       {inProgress && (
         <div className="mb-6 rounded-xl border border-border bg-surface p-5 shadow-sm">
-          <p className="text-sm font-medium">
-            {recording.status === "uploading" && "Preparing your audio…"}
-            {recording.status === "transcribing" && "Transcribing your recording…"}
-            {recording.status === "summarizing" &&
-              "Organizing the transcript into a nested summary…"}
-          </p>
-          {recording.status === "transcribing" && recording.total_chunks > 0 && (
-            <div className="mt-3">
-              <div className="h-2 w-full overflow-hidden rounded-full bg-canvas">
-                <div
-                  className="h-full rounded-full bg-[var(--accent)] transition-all"
-                  style={{ width: `${pct}%` }}
-                />
-              </div>
-              <p className="mt-1.5 text-xs text-muted">{pct}% transcribed</p>
-            </div>
-          )}
+          <p className="text-sm font-medium">Processing your interview…</p>
+          <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-canvas">
+            <div
+              className="h-full rounded-full bg-[var(--accent)] transition-all"
+              style={{ width: `${overallPct}%` }}
+            />
+          </div>
+          <p className="mt-1.5 text-xs text-muted">{overallPct}%</p>
           <p className="mt-3 text-xs text-muted">
-            You can leave this page — progress is saved and resumes when you
-            return.
+            This can take a few minutes for long recordings. Please keep this page
+            open until it&apos;s finished.
           </p>
         </div>
       )}
@@ -214,28 +270,108 @@ export function RecordingView({
         </div>
       )}
 
-      {nodes.length > 0 && (
+      {(nodes.length > 0 || (recording.status === "complete" && recording.transcript)) && (
         <section className="rounded-xl border border-border bg-surface p-6 shadow-sm">
-          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-muted">
-            Summary
-          </h2>
-          <SummaryTree nodes={nodes} />
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
+              Summary
+            </h2>
+            {!editSummary ? (
+              <button
+                onClick={() => {
+                  setSummaryDraft(outlineFromNodes(nodes));
+                  setEditSummary(true);
+                }}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-muted transition hover:text-[var(--accent)]"
+              >
+                <Pencil size={13} /> Edit
+              </button>
+            ) : (
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setEditSummary(false)}
+                  className="text-xs font-medium text-muted hover:text-ink"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={saveSummary}
+                  disabled={savingEdit}
+                  className="text-xs font-medium text-[var(--accent)] hover:underline disabled:opacity-60"
+                >
+                  {savingEdit ? "Saving…" : "Save"}
+                </button>
+              </div>
+            )}
+          </div>
+          {editSummary ? (
+            <>
+              <textarea
+                value={summaryDraft}
+                onChange={(e) => setSummaryDraft(e.target.value)}
+                className="min-h-80 w-full resize-y rounded-lg border border-border bg-surface p-4 font-mono text-sm outline-none focus:border-[var(--accent)]"
+              />
+              <p className="mt-2 text-xs text-muted">
+                One bullet per line, start with &quot;- &quot;. Indent sub-points
+                with 2 spaces per level.
+              </p>
+            </>
+          ) : (
+            <SummaryTree nodes={nodes} />
+          )}
         </section>
       )}
 
       {recording.transcript && (
         <section className="mt-6">
-          <button
-            onClick={() => setShowTranscript((v) => !v)}
-            className="text-sm font-medium text-primary hover:underline"
-          >
-            {showTranscript ? "Hide" : "Show"} full transcript
-          </button>
-          {showTranscript && (
-            <pre className="mt-3 whitespace-pre-wrap rounded-xl border border-border bg-surface p-5 text-sm leading-relaxed text-ink/90">
-              {recording.transcript}
-            </pre>
-          )}
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => setShowTranscript((v) => !v)}
+              className="text-sm font-medium text-[var(--accent)] hover:underline"
+            >
+              {showTranscript ? "Hide" : "Show"} full transcript
+            </button>
+            {showTranscript && !editTranscript && (
+              <button
+                onClick={() => {
+                  setTranscriptDraft(recording.transcript);
+                  setEditTranscript(true);
+                }}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-muted transition hover:text-[var(--accent)]"
+              >
+                <Pencil size={13} /> Edit
+              </button>
+            )}
+          </div>
+          {showTranscript &&
+            (editTranscript ? (
+              <div className="mt-3">
+                <textarea
+                  value={transcriptDraft}
+                  onChange={(e) => setTranscriptDraft(e.target.value)}
+                  className="min-h-80 w-full resize-y rounded-xl border border-border bg-surface p-5 text-sm leading-relaxed outline-none focus:border-[var(--accent)]"
+                />
+                <div className="mt-2 flex justify-end gap-2">
+                  <button
+                    onClick={() => setEditTranscript(false)}
+                    className="text-sm font-medium text-muted hover:text-ink"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={saveTranscript}
+                    disabled={savingEdit}
+                    className="text-sm font-medium text-[var(--accent)] hover:underline disabled:opacity-60"
+                  >
+                    {savingEdit ? "Saving…" : "Save transcript"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <pre className="mt-3 whitespace-pre-wrap rounded-xl border border-border bg-surface p-5 text-sm leading-relaxed text-ink/90">
+                {recording.transcript}
+              </pre>
+            ))}
         </section>
       )}
     </>
