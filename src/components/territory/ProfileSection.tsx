@@ -4,7 +4,8 @@ import { useState } from "react";
 import { Pencil } from "lucide-react";
 import type { KOL } from "@/lib/territory/types";
 import { Button } from "@/components/territory/ui/Button";
-import { Input, Textarea } from "@/components/territory/ui/Input";
+import { Input } from "@/components/territory/ui/Input";
+import { RichText, RichTextView } from "@/components/ui/RichText";
 
 // Editable text fields grouped into sections.
 const SECTIONS: { title: string; fields: { key: keyof KOL; label: string; long?: boolean }[] }[] = [
@@ -36,17 +37,9 @@ const SECTIONS: { title: string; fields: { key: keyof KOL; label: string; long?:
       { key: "publications", label: "Publications", long: true },
     ],
   },
-  {
-    title: "Engagement strategy",
-    fields: [
-      { key: "areas_of_interest", label: "Areas of interest", long: true },
-      { key: "potential_collaborations", label: "Potential collaborations", long: true },
-      { key: "primary_objective", label: "Primary objective", long: true },
-      { key: "backup_questions", label: "Backup questions", long: true },
-      { key: "other_info", label: "Other info", long: true },
-    ],
-  },
 ];
+// Note: engagement-strategy fields live on the Strategy tab (StrategySection),
+// not here — the Profile tab is for who the KOL is, the Strategy tab is the plan.
 
 export function ProfileSection({
   kol,
@@ -114,18 +107,21 @@ export function ProfileSection({
                 return (
                   <div key={field.key} className={span}>
                     <p className="text-xs text-muted">{field.label}</p>
-                    <p className="text-sm text-ink whitespace-pre-wrap">{value}</p>
+                    {field.long ? (
+                      <RichTextView html={value} />
+                    ) : (
+                      <p className="text-sm text-ink whitespace-pre-wrap">{value}</p>
+                    )}
                   </div>
                 );
               }
               return (
                 <div key={field.key} className={span}>
                   {field.long ? (
-                    <Textarea
-                      label={field.label}
-                      value={value}
-                      onChange={(e) => set(field.key, e.target.value)}
-                    />
+                    <>
+                      <p className="mb-1 text-xs font-medium text-muted">{field.label}</p>
+                      <RichText value={value} onChange={(html) => set(field.key, html)} />
+                    </>
                   ) : (
                     <Input
                       label={field.label}

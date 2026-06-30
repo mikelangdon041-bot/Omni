@@ -16,7 +16,7 @@ import {
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 
-type Step = "upload" | "sheet" | "mapping" | "preview" | "importing" | "done";
+type Step = "upload" | "reading" | "sheet" | "mapping" | "preview" | "importing" | "done";
 interface ColumnInfo {
   index: number;
   header: string;
@@ -74,15 +74,27 @@ export function ImportModal({
     setError(null);
   }
 
+  const [fileName, setFileName] = useState("");
+
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     setError(null);
-    const buf = await file.arrayBuffer();
-    const book = XLSX.read(new Uint8Array(buf), { type: "array" });
-    setWb(book);
-    if (book.SheetNames.length === 1) loadSheet(book, book.SheetNames[0]);
-    else setStep("sheet");
+    setFileName(file.name);
+    // Show the reading state immediately, then let the UI paint before the
+    // (synchronous, potentially slow) XLSX parse so the user sees feedback.
+    setStep("reading");
+    await new Promise((r) => setTimeout(r, 30));
+    try {
+      const buf = await file.arrayBuffer();
+      const book = XLSX.read(new Uint8Array(buf), { type: "array" });
+      setWb(book);
+      if (book.SheetNames.length === 1) loadSheet(book, book.SheetNames[0]);
+      else setStep("sheet");
+    } catch {
+      setError("Could not read that file. Make sure it's a valid .xlsx, .xls, or .csv.");
+      setStep("upload");
+    }
   }
 
   function loadSheet(book: XLSX.WorkBook, name: string) {
@@ -238,6 +250,18 @@ export function ImportModal({
           </span>
           <input type="file" accept=".xlsx,.xls,.csv" onChange={onFile} className="hidden" />
         </label>
+      )}
+
+      {step === "reading" && (
+        <div className="py-12">
+          <p className="mb-3 flex items-center justify-center gap-2 text-sm text-muted">
+            <Upload size={16} className="text-[var(--accent)]" /> Reading{" "}
+            <span className="font-medium text-ink">{fileName}</span>…
+          </p>
+          <div className="mx-auto h-2 w-64 overflow-hidden rounded-full bg-canvas">
+            <div className="h-full w-1/2 animate-pulse rounded-full bg-[var(--accent)]" />
+          </div>
+        </div>
       )}
 
       {step === "sheet" && wb && (

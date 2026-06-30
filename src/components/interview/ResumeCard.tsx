@@ -32,6 +32,8 @@ export function ResumeCard({
   );
   const savedText = useRef(candidate.resume_text || "");
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [extractError, setExtractError] = useState<string | null>(null);
+  const autoTried = useRef<string | null>(null);
 
   // Sign the uploaded file for an inline preview.
   useEffect(() => {
@@ -66,10 +68,56 @@ export function ResumeCard({
     return () => clearTimeout(t);
   }, [text, updateCandidate]);
 
+  // Extract text from an uploaded file (PDF/DOCX) so AI features can read it.
+  // Surfaces failures and populates resume_text so "Scan resume" enables.
+  async function runExtract(path: string) {
+    setExtracting(true);
+    setExtractError(null);
+    autoTried.current = path;
+    try {
+      const res = await fetch("/api/interview/parse-resume", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ candidateId: candidate.id, path }),
+      });
+      const data = await res.json();
+      if (res.ok && data.text) {
+        setText(data.text);
+        savedText.current = data.text;
+        // Push extracted text to the parent so AI features (scan) light up.
+        await updateCandidate({ resume_text: data.text });
+      } else if (res.ok) {
+        setExtractError(
+          "No text found in this file. If it's a scanned PDF or image, paste the text in the “Paste” tab so AI can use it.",
+        );
+      } else {
+        setExtractError(data.error || "Could not read this file.");
+      }
+    } catch {
+      setExtractError("Could not read this file. Try again, or paste the text manually.");
+    }
+    setExtracting(false);
+  }
+
+  // If a file is already attached but has no extracted text (e.g. an earlier
+  // extraction failed), try once automatically so AI features work.
+  useEffect(() => {
+    const url = candidate.resume_url;
+    if (!url) return;
+    const isImg = /\.(png|jpe?g|gif|webp)$/i.test(url);
+    if (isImg) return;
+    if ((candidate.resume_text || "").trim()) return;
+    if (autoTried.current === url || extracting) return;
+    void runExtract(url);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [candidate.resume_url, candidate.resume_text]);
+
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file || !userId) return;
     setUploading(true);
+    setExtractError(null);
     let extracted = "";
     if (/\.(txt|md|csv)$/i.test(file.name) || file.type.startsWith("text/")) {
       extracted = await file.text();
@@ -78,41 +126,22 @@ export function ResumeCard({
     const { error } = await supabase.storage
       .from("resumes")
       .upload(path, file, { upsert: true });
-    if (!error) {
-      setFileName(file.name);
-      const patch: Partial<Candidate> = { resume_url: path };
-      if (extracted) {
-        setText(extracted);
-        savedText.current = extracted;
-        patch.resume_text = extracted;
-      }
-      await updateCandidate(patch);
-      setStatus("saved");
-
-      // PDF / DOCX: extract text server-side so AI can read it accurately.
-      if (!extracted) {
-        setExtracting(true);
-        try {
-          const res = await fetch("/api/interview/parse-resume", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            credentials: "same-origin",
-            body: JSON.stringify({ candidateId: candidate.id, path }),
-          });
-          const data = await res.json();
-          if (res.ok && data.text) {
-            setText(data.text);
-            savedText.current = data.text;
-            // Push extracted text to the parent so AI features (scan) light up.
-            await updateCandidate({ resume_text: data.text });
-          }
-        } catch {
-          // keep the file; user can paste text if extraction fails
-        }
-        setExtracting(false);
-      }
+    if (error) {
+      setExtractError("Upload failed. Check your connection and try again.");
+      setUploading(false);
+      return;
     }
+    setFileName(file.name);
+    const patch: Partial<Candidate> = { resume_url: path };
+    if (extracted) {
+      setText(extracted);
+      savedText.current = extracted;
+      patch.resume_text = extracted;
+    }
+    await updateCandidate(patch);
+    setStatus("saved");
     setUploading(false);
+    if (!extracted) await runExtract(path);
   }
 
   return (
@@ -195,11 +224,25 @@ export function ResumeCard({
                 </div>
               </div>
               {previewUrl && isPdf && (
-                <iframe
-                  src={previewUrl}
-                  title="Resume preview"
-                  className="h-[28rem] w-full rounded-lg border border-border"
-                />
+                <object
+                  data={`${previewUrl}#view=FitH`}
+                  type="application/pdf"
+                  className="h-[34rem] w-full rounded-lg border border-border"
+                >
+                  {/* Fallback for browsers that won't render PDFs inline */}
+                  <iframe
+                    src={previewUrl}
+                    title="Resume preview"
+                    className="h-[34rem] w-full rounded-lg border border-border"
+                  />
+                  <p className="px-3 py-2 text-xs text-muted">
+                    Can&apos;t show the PDF here —{" "}
+                    <a href={previewUrl} target="_blank" rel="noreferrer" className="text-[var(--accent)] underline">
+                      open it in a new tab
+                    </a>
+                    .
+                  </p>
+                </object>
               )}
               {previewUrl && isImage && (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -223,6 +266,17 @@ export function ResumeCard({
           )}
           {extracting && (
             <p className="text-xs text-muted">Extracting text from your file…</p>
+          )}
+          {!extracting && extractError && candidate.resume_url && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-status-error/30 bg-status-error/5 px-3 py-2">
+              <p className="text-xs text-status-error">{extractError}</p>
+              <button
+                onClick={() => candidate.resume_url && runExtract(candidate.resume_url)}
+                className="shrink-0 rounded-md border border-border bg-surface px-2.5 py-1 text-xs font-medium text-ink transition hover:border-[var(--accent)]"
+              >
+                Retry extraction
+              </button>
+            </div>
           )}
           {!extracting && text && (
             <div>

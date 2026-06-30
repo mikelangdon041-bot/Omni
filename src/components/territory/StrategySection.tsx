@@ -6,13 +6,14 @@ import { useQuarterlyGoals } from "@/lib/territory/hooks";
 import type { KOL } from "@/lib/territory/types";
 import { cn } from "@/lib/territory/utils";
 import { Button } from "@/components/ui/Button";
-import { Textarea } from "@/components/ui/Input";
+import { RichText, RichTextView } from "@/components/ui/RichText";
 
 const FIELDS: { key: keyof KOL; label: string }[] = [
   { key: "areas_of_interest", label: "Areas of interest" },
   { key: "potential_collaborations", label: "Potential collaborations" },
   { key: "primary_objective", label: "Primary objective" },
   { key: "backup_questions", label: "Backup questions" },
+  { key: "other_info", label: "Other info" },
 ];
 
 const NOW = new Date();
@@ -76,19 +77,20 @@ export function StrategySection({
             const value = (draft[f.key] ?? kol[f.key] ?? "") as string;
             if (editing) {
               return (
-                <Textarea
-                  key={f.key}
-                  label={f.label}
-                  value={value}
-                  onChange={(e) => setDraft((d) => ({ ...d, [f.key]: e.target.value }))}
-                />
+                <div key={f.key}>
+                  <p className="mb-1 text-xs font-medium text-muted">{f.label}</p>
+                  <RichText
+                    value={value}
+                    onChange={(html) => setDraft((d) => ({ ...d, [f.key]: html }))}
+                  />
+                </div>
               );
             }
             if (!value) return null;
             return (
               <div key={f.key}>
                 <p className="text-xs text-muted">{f.label}</p>
-                <p className="whitespace-pre-wrap text-sm text-ink">{value}</p>
+                <RichTextView html={value} />
               </div>
             );
           })}

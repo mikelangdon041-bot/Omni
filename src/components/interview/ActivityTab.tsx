@@ -23,6 +23,11 @@ import type { CandidateActivity } from "@/lib/interview/types";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { useConfirm } from "@/components/ui/Feedback";
+import { RichText, RichTextView } from "@/components/ui/RichText";
+
+// Strip HTML to a plain-text preview for the collapsed timeline rows.
+const stripHtml = (html: string) =>
+  html.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
 
 interface InterviewItem {
   id: string;
@@ -67,12 +72,28 @@ const isInterviewType = (t: string) =>
   t === "interview" || t === "phone_screen";
 
 const CHANNELS = ["In person", "Video", "Phone", "Email", "Other"];
+const OUTCOMES = [
+  "Positive",
+  "Neutral",
+  "Needs follow-up",
+  "Negative",
+  "No-show",
+  "Rescheduled",
+];
+const DIRECTIONS = [
+  { value: "outbound", label: "Outbound — we reached out" },
+  { value: "inbound", label: "Inbound — they reached out" },
+];
 
 interface Meta {
   occurred_at?: string;
   duration_min?: number;
   channel?: string;
   participants?: string[];
+  outcome?: string;
+  direction?: string;
+  next_step?: string;
+  follow_up_at?: string;
 }
 const metaOf = (a: CandidateActivity): Meta => (a.meta as Meta) || {};
 const whenOf = (a: CandidateActivity) => metaOf(a).occurred_at || a.created_at;
@@ -117,6 +138,10 @@ export function ActivityTab({
   const [channel, setChannel] = useState("");
   const [participants, setParticipants] = useState<Set<string>>(new Set());
   const [notes, setNotes] = useState("");
+  const [outcome, setOutcome] = useState("");
+  const [direction, setDirection] = useState("outbound");
+  const [nextStep, setNextStep] = useState("");
+  const [followUp, setFollowUp] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -138,6 +163,10 @@ export function ActivityTab({
     setChannel(type === "email" ? "Email" : "");
     setParticipants(new Set());
     setNotes("");
+    setOutcome("");
+    setDirection(type === "email" || type === "call" ? "outbound" : "outbound");
+    setNextStep("");
+    setFollowUp("");
   }
 
   async function save() {
@@ -148,6 +177,10 @@ export function ActivityTab({
       ...(duration ? { duration_min: Number(duration) } : {}),
       ...(channel ? { channel } : {}),
       ...(participants.size ? { participants: [...participants] } : {}),
+      ...(outcome ? { outcome } : {}),
+      ...(direction ? { direction } : {}),
+      ...(nextStep.trim() ? { next_step: nextStep.trim() } : {}),
+      ...(followUp ? { follow_up_at: new Date(followUp).toISOString() } : {}),
     };
     await log(chosen, notes.trim(), userId, meta as Record<string, unknown>);
     setSaving(false);
@@ -203,6 +236,21 @@ export function ActivityTab({
                   ))}
                 </select>
               </Field>
+              <Field label="Direction">
+                <select value={direction} onChange={(e) => setDirection(e.target.value)} className={inputCls}>
+                  {DIRECTIONS.map((d) => (
+                    <option key={d.value} value={d.value}>{d.label}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Outcome">
+                <select value={outcome} onChange={(e) => setOutcome(e.target.value)} className={inputCls}>
+                  <option value="">—</option>
+                  {OUTCOMES.map((o) => (
+                    <option key={o} value={o}>{o}</option>
+                  ))}
+                </select>
+              </Field>
               <Field label="Who was involved">
                 <ParticipantPicker
                   members={members}
@@ -219,13 +267,30 @@ export function ActivityTab({
               </Field>
             </div>
             <Field label="Notes">
-              <textarea
+              <RichText
                 value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="What happened? Outcome, next steps…"
-                className={`${inputCls} min-h-24 resize-y`}
+                onChange={setNotes}
+                placeholder="What happened? Key points, context…"
               />
             </Field>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_12rem]">
+              <Field label="Next step">
+                <input
+                  value={nextStep}
+                  onChange={(e) => setNextStep(e.target.value)}
+                  placeholder="e.g. Send follow-up email, schedule onsite…"
+                  className={inputCls}
+                />
+              </Field>
+              <Field label="Follow-up by">
+                <input
+                  type="date"
+                  value={followUp}
+                  onChange={(e) => setFollowUp(e.target.value)}
+                  className={inputCls}
+                />
+              </Field>
+            </div>
             {isInterviewType(chosen) && (
               <p className="rounded-lg bg-[var(--accent-soft)] px-3 py-2 text-xs text-muted">
                 Logging the basics here. To write up the interview or attach a
@@ -267,19 +332,37 @@ export function ActivityTab({
         {detail && (
           <div className="space-y-3 text-sm">
             <DetailRow label="When" value={new Date(whenOf(detail)).toLocaleString()} />
+            {metaOf(detail).direction && (
+              <DetailRow
+                label="Direction"
+                value={metaOf(detail).direction === "inbound" ? "Inbound" : "Outbound"}
+              />
+            )}
             {metaOf(detail).duration_min != null && (
               <DetailRow label="Duration" value={`${metaOf(detail).duration_min} min`} />
             )}
             {metaOf(detail).channel && (
               <DetailRow label="Channel" value={metaOf(detail).channel!} />
             )}
+            {metaOf(detail).outcome && (
+              <DetailRow label="Outcome" value={metaOf(detail).outcome!} />
+            )}
             {(metaOf(detail).participants?.length ?? 0) > 0 && (
               <DetailRow label="Involved" value={metaOf(detail).participants!.map((p) => `@${p}`).join(", ")} />
             )}
-            {detail.body && (
+            {metaOf(detail).next_step && (
+              <DetailRow label="Next step" value={metaOf(detail).next_step!} />
+            )}
+            {metaOf(detail).follow_up_at && (
+              <DetailRow
+                label="Follow-up by"
+                value={new Date(metaOf(detail).follow_up_at!).toLocaleDateString()}
+              />
+            )}
+            {detail.body && stripHtml(detail.body) && (
               <div>
                 <p className="text-xs font-medium uppercase tracking-wide text-muted">Notes</p>
-                <p className="whitespace-pre-wrap text-ink">{detail.body}</p>
+                <RichTextView html={detail.body} />
               </div>
             )}
             <div className="flex items-center justify-between border-t border-border pt-3">
@@ -355,10 +438,10 @@ export function ActivityTab({
                       {new Date(whenOf(a)).toLocaleDateString()}
                     </span>
                   </div>
-                  {a.body && (
-                    <p className="mt-1 line-clamp-2 text-sm text-ink/90">{a.body}</p>
+                  {a.body && stripHtml(a.body) && (
+                    <p className="mt-1 line-clamp-2 text-sm text-ink/90">{stripHtml(a.body)}</p>
                   )}
-                  <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted">
+                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
                     {m.duration_min != null && (
                       <span className="inline-flex items-center gap-1">
                         <Clock size={11} /> {m.duration_min}m
@@ -367,6 +450,16 @@ export function ActivityTab({
                     {m.channel && <span>{m.channel}</span>}
                     {(m.participants?.length ?? 0) > 0 && (
                       <span>{m.participants!.length} involved</span>
+                    )}
+                    {m.outcome && (
+                      <span className="rounded-full bg-canvas px-1.5 py-0.5 font-medium text-ink/70">
+                        {m.outcome}
+                      </span>
+                    )}
+                    {m.follow_up_at && (
+                      <span className="text-[var(--accent)]">
+                        Follow up {new Date(m.follow_up_at).toLocaleDateString()}
+                      </span>
                     )}
                   </div>
                 </button>
