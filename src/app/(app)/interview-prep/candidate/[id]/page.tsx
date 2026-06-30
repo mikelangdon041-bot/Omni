@@ -145,85 +145,87 @@ function Header({
     setDraft({});
   }
 
+  if (editing) {
+    return (
+      <div className="mb-6 rounded-xl border border-border bg-surface p-5 shadow-sm">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
+            Edit candidate
+          </h2>
+          <div className="flex gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => { setEditing(false); setDraft({}); }}
+            >
+              Cancel
+            </Button>
+            <Button size="sm" onClick={save} disabled={saving}>
+              {saving ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Input label="First name" value={v("first_name")} onChange={(e) => set("first_name", e.target.value)} />
+          <Input label="Last name" value={v("last_name")} onChange={(e) => set("last_name", e.target.value)} />
+          <Input label="Role / position" value={v("role_title")} onChange={(e) => set("role_title", e.target.value)} />
+          <Input label="Email" value={v("email")} onChange={(e) => set("email", e.target.value)} />
+          <Input label="Phone" value={v("phone")} onChange={(e) => set("phone", e.target.value)} />
+          <Input label="Location" value={v("location")} onChange={(e) => set("location", e.target.value)} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="mb-6 flex items-start gap-4 rounded-xl border border-border bg-surface p-5 shadow-sm">
-      <Avatar initials={candidateInitials(candidate)} size={60} />
+      <Avatar initials={candidateInitials(candidate)} size={56} />
       <div className="min-w-0 flex-1">
-        {editing ? (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Input label="First name" value={v("first_name")} onChange={(e) => set("first_name", e.target.value)} />
-            <Input label="Last name" value={v("last_name")} onChange={(e) => set("last_name", e.target.value)} />
-            <Input label="Role / position" value={v("role_title")} onChange={(e) => set("role_title", e.target.value)} />
-            <Input label="Email" value={v("email")} onChange={(e) => set("email", e.target.value)} />
-            <Input label="Phone" value={v("phone")} onChange={(e) => set("phone", e.target.value)} />
-            <Input label="Location" value={v("location")} onChange={(e) => set("location", e.target.value)} />
-          </div>
-        ) : (
-          <>
-            <h1 className="text-xl font-semibold tracking-tight">
-              {candidateName(candidate)}
-            </h1>
-            {candidate.role_title && (
-              <p className="text-sm text-muted">{candidate.role_title}</p>
-            )}
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              {canEdit ? (
-                <select
-                  value={candidate.status}
-                  onChange={(e) => update({ status: e.target.value as CandidateStatus })}
-                  className={cn(
-                    "rounded-full border-0 px-2.5 py-1 text-xs font-medium outline-none",
-                    STATUS_COLORS[candidate.status],
-                  )}
-                >
-                  {CANDIDATE_STATUSES.map((s) => (
-                    <option key={s} value={s}>{STATUS_LABELS[s]}</option>
-                  ))}
-                </select>
-              ) : (
-                <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", STATUS_COLORS[candidate.status])}>
-                  {STATUS_LABELS[candidate.status]}
-                </span>
-              )}
-            </div>
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              {candidate.email && (
-                <a href={`mailto:${candidate.email}`}>
-                  <Button variant="secondary" size="sm"><Mail size={14} /> Email</Button>
-                </a>
-              )}
-              {candidate.phone && (
-                <a href={`tel:${candidate.phone}`}>
-                  <Button variant="secondary" size="sm"><Phone size={14} /> Call</Button>
-                </a>
-              )}
-              {candidate.location && (
-                <span className="inline-flex items-center gap-1.5 text-sm text-muted">
-                  <MapPin size={14} /> {candidate.location}
-                </span>
-              )}
-            </div>
-          </>
+        <h1 className="text-xl font-semibold tracking-tight">{candidateName(candidate)}</h1>
+        {candidate.role_title && (
+          <p className="text-sm text-muted">{candidate.role_title}</p>
         )}
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {canEdit ? (
+            <select
+              value={candidate.status}
+              onChange={(e) => update({ status: e.target.value as CandidateStatus })}
+              className={cn(
+                "rounded-full border-0 px-2.5 py-1 text-xs font-medium outline-none",
+                STATUS_COLORS[candidate.status],
+              )}
+            >
+              {CANDIDATE_STATUSES.map((s) => (
+                <option key={s} value={s}>{STATUS_LABELS[s]}</option>
+              ))}
+            </select>
+          ) : (
+            <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", STATUS_COLORS[candidate.status])}>
+              {STATUS_LABELS[candidate.status]}
+            </span>
+          )}
+          {candidate.location && (
+            <span className="inline-flex items-center gap-1.5 text-sm text-muted">
+              <MapPin size={14} /> {candidate.location}
+            </span>
+          )}
+          {candidate.email && (
+            <a href={`mailto:${candidate.email}`} className="text-muted transition hover:text-[var(--accent)]" title={candidate.email}>
+              <Mail size={15} />
+            </a>
+          )}
+          {candidate.phone && (
+            <a href={`tel:${candidate.phone}`} className="text-muted transition hover:text-[var(--accent)]" title={candidate.phone}>
+              <Phone size={15} />
+            </a>
+          )}
+        </div>
       </div>
 
       {canEdit && (
-        <div className="shrink-0">
-          {editing ? (
-            <div className="flex gap-2">
-              <Button variant="secondary" size="sm" onClick={() => { setEditing(false); setDraft({}); }}>
-                Cancel
-              </Button>
-              <Button size="sm" onClick={save} disabled={saving}>
-                {saving ? "Saving…" : "Save"}
-              </Button>
-            </div>
-          ) : (
-            <Button variant="secondary" size="sm" onClick={() => setEditing(true)}>
-              <Pencil size={14} /> Edit
-            </Button>
-          )}
-        </div>
+        <Button variant="secondary" size="sm" onClick={() => setEditing(true)} className="shrink-0">
+          <Pencil size={14} /> Edit
+        </Button>
       )}
     </div>
   );
