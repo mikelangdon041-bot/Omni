@@ -3,7 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft, Mail, Phone, MapPin, Pencil } from "lucide-react";
+import { Mail, Phone, MapPin, Pencil } from "lucide-react";
+import { BackButton } from "@/components/BackButton";
 import {
   useCandidate,
   useCandidateActivity,
@@ -73,12 +74,7 @@ export default function CandidateDetailPage() {
 
   return (
     <>
-      <Link
-        href="/interview-prep"
-        className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted hover:text-ink"
-      >
-        <ArrowLeft size={15} /> Interview Prep
-      </Link>
+      <BackButton />
 
       <Header candidate={candidate} update={updateAndLog} canEdit={canEdit} />
 

@@ -1,9 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import {
-  ArrowLeft,
   Sparkles,
   Plus,
   Star,
@@ -12,6 +10,7 @@ import {
   X,
   Pencil,
 } from "lucide-react";
+import { BackButton } from "@/components/BackButton";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useQuestionBank, useUserId } from "@/lib/interview/hooks";
@@ -63,12 +62,7 @@ export default function QuestionBankPage() {
 
   return (
     <>
-      <Link
-        href="/interview-prep"
-        className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted hover:text-ink"
-      >
-        <ArrowLeft size={15} /> Interview Prep
-      </Link>
+      <BackButton />
       <h1 className="text-2xl font-semibold tracking-tight">Question bank</h1>
       <p className="mt-1 text-sm text-muted">
         Save good questions to reuse. Generate new ones with AI, tweak them, and

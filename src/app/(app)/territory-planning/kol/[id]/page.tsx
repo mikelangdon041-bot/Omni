@@ -3,7 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft, Mail, Phone } from "lucide-react";
+import { Mail, Phone } from "lucide-react";
+import { BackButton } from "@/components/BackButton";
 import { useKOL, useUserId } from "@/lib/territory/hooks";
 import {
   RELATIONSHIP_COLORS,
@@ -47,12 +48,7 @@ export default function KOLDetailPage() {
 
   return (
     <>
-      <Link
-        href="/territory-planning"
-        className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted hover:text-ink"
-      >
-        <ArrowLeft size={15} /> Territory Planning
-      </Link>
+      <BackButton />
 
       <Header kol={kol} update={update} />
 
