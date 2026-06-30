@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/Button";
 
 type Phase = "idle" | "uploading" | "preparing" | "error";
 
-export function NewRecording() {
+export function NewRecording({ candidateId }: { candidateId?: string }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState("");
@@ -24,7 +24,7 @@ export function NewRecording() {
     const signRes = await fetch("/api/recordings/sign-upload", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: title || file.name, ext }),
+      body: JSON.stringify({ title: title || file.name, ext, candidateId }),
     });
     const signed = await signRes.json();
     if (!signRes.ok) throw new Error(signed.error || "Could not start upload");
