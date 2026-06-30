@@ -47,7 +47,7 @@ export const NAV_ITEMS: NavItem[] = [
     href: "/territory-planning",
     label: "Territory Planning",
     icon: "◈",
-    ready: false,
-    blurb: "Map and prioritize your territory.",
+    ready: true,
+    blurb: "Manage your KOLs, outreach cycles, and engagement.",
   },
 ];
