@@ -4,7 +4,11 @@ import { useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Mail, Phone, MapPin, Pencil } from "lucide-react";
-import { useCandidate, useUserId } from "@/lib/interview/hooks";
+import {
+  useCandidate,
+  useCandidateActivity,
+  useUserId,
+} from "@/lib/interview/hooks";
 import {
   CANDIDATE_STATUSES,
   STATUS_COLORS,
@@ -21,6 +25,7 @@ import { Tabs } from "@/components/ui/Tabs";
 import { Input, Textarea } from "@/components/ui/Input";
 import { CandidateRecordings } from "@/components/interview/CandidateRecordings";
 import { QuestionsTab } from "@/components/interview/QuestionsTab";
+import { ActivityTab } from "@/components/interview/ActivityTab";
 
 const TABS = ["Overview", "Recordings", "Questions", "Activity", "Sharing"] as const;
 type Tab = (typeof TABS)[number];
@@ -29,7 +34,23 @@ export default function CandidateDetailPage() {
   const params = useParams<{ id: string }>();
   const { userId } = useUserId();
   const { candidate, loading, update } = useCandidate(params.id);
+  const activity = useCandidateActivity(params.id);
   const [tab, setTab] = useState<Tab>("Overview");
+
+  const canEdit = !!candidate && candidate.user_id === userId;
+
+  // Update a field, and log status changes to the activity timeline.
+  async function updateAndLog(partial: Partial<Candidate>) {
+    if (partial.status && candidate && partial.status !== candidate.status) {
+      await activity.log(
+        "status_change",
+        `Status changed to "${STATUS_LABELS[partial.status]}".`,
+        userId,
+        { status: partial.status },
+      );
+    }
+    await update(partial);
+  }
 
   if (loading) {
     return <p className="py-12 text-center text-sm text-muted">Loading…</p>;
@@ -54,7 +75,7 @@ export default function CandidateDetailPage() {
         <ArrowLeft size={15} /> Interview Prep
       </Link>
 
-      <Header candidate={candidate} update={update} />
+      <Header candidate={candidate} update={updateAndLog} />
 
       <Tabs tabs={TABS} active={tab} onChange={setTab} />
 
@@ -63,12 +84,19 @@ export default function CandidateDetailPage() {
       {tab === "Questions" && (
         <QuestionsTab candidate={candidate} userId={userId} updateCandidate={update} />
       )}
-      {(tab === "Activity" || tab === "Sharing") && (
+      {tab === "Activity" && (
+        <ActivityTab
+          activity={activity.activity}
+          loading={activity.loading}
+          userId={userId}
+          canEdit={canEdit}
+          log={activity.log}
+          remove={activity.remove}
+        />
+      )}
+      {tab === "Sharing" && (
         <div className="rounded-xl border border-dashed border-border bg-surface px-6 py-16 text-center text-sm text-muted">
-          {tab === "Activity" &&
-            "The long-term candidate activity timeline is coming next."}
-          {tab === "Sharing" &&
-            "Sharing this candidate with other Omni users is coming next."}
+          Sharing this candidate with other Omni users is coming next.
         </div>
       )}
     </>

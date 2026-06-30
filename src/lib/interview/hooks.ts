@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type {
   Candidate,
+  CandidateActivity,
   CandidateQuestion,
   QuestionBankItem,
 } from "./types";
@@ -215,6 +216,73 @@ export function useQuestionBank(userId: string | null) {
   }, []);
 
   return { items, loading, refresh, add, toggleFavorite, remove };
+}
+
+// Long-term candidate activity timeline.
+export function useCandidateActivity(candidateId: string) {
+  const [activity, setActivity] = useState<CandidateActivity[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    const { data } = await supabase
+      .from("candidate_activity")
+      .select("*")
+      .eq("candidate_id", candidateId)
+      .order("created_at", { ascending: false });
+    setActivity((data as CandidateActivity[]) || []);
+    setLoading(false);
+  }, [candidateId]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const log = useCallback(
+    async (
+      type: string,
+      body: string,
+      userId: string | null,
+      meta: Record<string, unknown> = {},
+    ) => {
+      const { data } = await supabase
+        .from("candidate_activity")
+        .insert({ candidate_id: candidateId, user_id: userId, type, body, meta })
+        .select("*")
+        .single();
+      if (data) setActivity((prev) => [data as CandidateActivity, ...prev]);
+      return (data as CandidateActivity) || null;
+    },
+    [candidateId],
+  );
+
+  const remove = useCallback(async (id: string) => {
+    setActivity((prev) => prev.filter((a) => a.id !== id));
+    await supabase.from("candidate_activity").delete().eq("id", id);
+  }, []);
+
+  return { activity, loading, refresh, log, remove };
+}
+
+// Recordings not yet attached to any candidate (e.g. created before candidates).
+export function useUnassignedRecordings() {
+  const [recordings, setRecordings] = useState<CandidateRecording[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    const { data } = await supabase
+      .from("recordings")
+      .select("id, title, status, total_chunks, chunks_done, created_at")
+      .is("candidate_id", null)
+      .order("created_at", { ascending: false });
+    setRecordings((data as CandidateRecording[]) || []);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  return { recordings, loading, refresh };
 }
 
 export function useCandidateRecordings(candidateId: string) {

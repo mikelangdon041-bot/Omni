@@ -1,13 +1,19 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import { Plus, Search, Mic } from "lucide-react";
 import { ModuleHero } from "@/components/ui/ModuleHero";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { StatusChip } from "@/components/ui/StatusChip";
 import { CandidateCard } from "@/components/interview/CandidateCard";
 import { AddCandidateModal } from "@/components/interview/AddCandidateModal";
-import { useCandidates, useUserId } from "@/lib/interview/hooks";
+import {
+  useCandidates,
+  useUnassignedRecordings,
+  useUserId,
+} from "@/lib/interview/hooks";
 import {
   CANDIDATE_STATUSES,
   STATUS_LABELS,
@@ -18,6 +24,7 @@ import {
 export default function InterviewPrepPage() {
   const { userId } = useUserId();
   const { candidates, loading, add } = useCandidates();
+  const { recordings: unassigned } = useUnassignedRecordings();
   const [showAdd, setShowAdd] = useState(false);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | CandidateStatus>("all");
@@ -122,6 +129,42 @@ export default function InterviewPrepPage() {
               shared={c.user_id !== userId}
             />
           ))}
+        </div>
+      )}
+
+      {unassigned.length > 0 && (
+        <div className="mt-10">
+          <h2 className="mb-1 text-sm font-semibold text-muted">
+            Unassigned recordings
+          </h2>
+          <p className="mb-3 text-xs text-muted">
+            Recordings not yet linked to a candidate. Open one to view its
+            transcript &amp; summary.
+          </p>
+          <ul className="space-y-2">
+            {unassigned.map((r) => {
+              const detail =
+                r.status === "transcribing" && r.total_chunks
+                  ? `${Math.round((r.chunks_done / r.total_chunks) * 100)}%`
+                  : undefined;
+              return (
+                <li key={r.id}>
+                  <Link
+                    href={`/interview-prep/${r.id}`}
+                    className="flex items-center justify-between gap-4 rounded-xl border border-border bg-surface px-4 py-3 shadow-sm transition hover:border-[var(--accent)]/40"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">{r.title}</p>
+                      <p className="text-xs text-muted">
+                        {new Date(r.created_at).toLocaleString()}
+                      </p>
+                    </div>
+                    <StatusChip status={r.status} detail={detail} />
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
         </div>
       )}
 
