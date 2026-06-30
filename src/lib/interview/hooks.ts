@@ -7,6 +7,7 @@ import type {
   CandidateActivity,
   CandidateQuestion,
   InterviewFeedback,
+  InterviewNote,
   QuestionBankItem,
 } from "./types";
 
@@ -349,6 +350,49 @@ export function useInterviewFeedback(candidateId: string, userId: string | null)
   );
 
   return { all, mine, others, loading, refresh, save, submit };
+}
+
+// Written interviews (no recording) for a candidate.
+export function useInterviewNotes(candidateId: string, userId: string | null) {
+  const [notes, setNotes] = useState<InterviewNote[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    const { data } = await supabase
+      .from("interview_notes")
+      .select("*")
+      .eq("candidate_id", candidateId)
+      .order("created_at", { ascending: false });
+    setNotes((data as InterviewNote[]) || []);
+    setLoading(false);
+  }, [candidateId]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const add = useCallback(async () => {
+    if (!userId) return null;
+    const { data } = await supabase
+      .from("interview_notes")
+      .insert({ candidate_id: candidateId, user_id: userId, title: "Interview notes" })
+      .select("*")
+      .single();
+    if (data) setNotes((prev) => [data as InterviewNote, ...prev]);
+    return (data as InterviewNote) || null;
+  }, [candidateId, userId]);
+
+  const update = useCallback(async (id: string, partial: Partial<InterviewNote>) => {
+    setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, ...partial } : n)));
+    await supabase.from("interview_notes").update(partial).eq("id", id);
+  }, []);
+
+  const remove = useCallback(async (id: string) => {
+    setNotes((prev) => prev.filter((n) => n.id !== id));
+    await supabase.from("interview_notes").delete().eq("id", id);
+  }, []);
+
+  return { notes, loading, refresh, add, update, remove };
 }
 
 export interface CandidateStat {

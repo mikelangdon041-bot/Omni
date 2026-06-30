@@ -85,6 +85,16 @@ export interface CandidateQuestion {
   created_at: string;
 }
 
+export interface InterviewNote {
+  id: string;
+  candidate_id: string;
+  user_id: string;
+  title: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface CandidateActivity {
   id: string;
   candidate_id: string;

@@ -104,7 +104,9 @@ export default function CandidateDetailPage() {
           onGoToInterviews={() => setTab("Interviews")}
         />
       )}
-      {tab === "Interviews" && <CandidateRecordings candidateId={candidate.id} />}
+      {tab === "Interviews" && (
+        <CandidateRecordings candidateId={candidate.id} userId={userId} />
+      )}
       {tab === "Questions" && (
         <QuestionsTab candidate={candidate} userId={userId} />
       )}
