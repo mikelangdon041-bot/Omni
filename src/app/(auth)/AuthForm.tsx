@@ -20,6 +20,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
       username: String(form.get("username") || ""),
       password: String(form.get("password") || ""),
       displayName: String(form.get("displayName") || ""),
+      company: String(form.get("company") || ""),
     };
 
     try {
@@ -64,13 +65,22 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
       </div>
 
       {isRegister && (
-        <Field
-          label="Display name (optional)"
-          name="displayName"
-          type="text"
-          autoComplete="name"
-          placeholder="Dr. Jane Smith"
-        />
+        <>
+          <Field
+            label="Company"
+            name="company"
+            type="text"
+            autoComplete="organization"
+            placeholder="Acme Medical"
+          />
+          <Field
+            label="Display name (optional)"
+            name="displayName"
+            type="text"
+            autoComplete="name"
+            placeholder="Dr. Jane Smith"
+          />
+        </>
       )}
 
       <Field

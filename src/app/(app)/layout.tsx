@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { AppHeader } from "@/components/AppHeader";
+import { ImpersonationBanner } from "@/components/ImpersonationBanner";
 
 export default async function AppLayout({
   children,
@@ -16,7 +18,7 @@ export default async function AppLayout({
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("username, display_name")
+    .select("username, display_name, role")
     .eq("id", user.id)
     .single();
 
@@ -26,9 +28,15 @@ export default async function AppLayout({
     (user.user_metadata?.username as string) ||
     "MSL";
 
+  const isAdmin = profile?.role === "admin" || profile?.role === "owner";
+  const impersonating = (await cookies()).has("omni-admin-return");
+
   return (
     <div className="flex min-h-full flex-1 flex-col">
-      <AppHeader username={username} />
+      {impersonating && (
+        <ImpersonationBanner username={profile?.username || username} />
+      )}
+      <AppHeader username={username} isAdmin={isAdmin} />
       <main className="flex-1">
         <div className="mx-auto max-w-5xl px-4 py-8 sm:px-8">{children}</div>
       </main>

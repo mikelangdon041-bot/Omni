@@ -3,11 +3,17 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LayoutGrid, Settings, LogOut, X } from "lucide-react";
+import { LayoutGrid, Settings, LogOut, X, Shield } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { MODULES, moduleForPath } from "@/lib/modules";
 
-export function AppHeader({ username }: { username: string }) {
+export function AppHeader({
+  username,
+  isAdmin,
+}: {
+  username: string;
+  isAdmin?: boolean;
+}) {
   const pathname = usePathname();
   const router = useRouter();
   const [launcher, setLauncher] = useState(false);
@@ -87,6 +93,14 @@ export function AppHeader({ username }: { username: string }) {
                     <p className="text-xs text-muted">Signed in as</p>
                     <p className="truncate text-sm font-medium">{username}</p>
                   </div>
+                  {isAdmin && (
+                    <Link
+                      href="/admin"
+                      className="flex items-center gap-2.5 px-4 py-2.5 text-sm text-ink transition hover:bg-canvas"
+                    >
+                      <Shield size={16} /> Admin
+                    </Link>
+                  )}
                   <Link
                     href="/settings"
                     className="flex items-center gap-2.5 px-4 py-2.5 text-sm text-ink transition hover:bg-canvas"

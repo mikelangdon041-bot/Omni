@@ -51,7 +51,7 @@ export async function POST(req: Request) {
   const admin = createAdminClient();
   const { data: target } = await admin
     .from("profiles")
-    .select("id, username")
+    .select("id, username, org_id")
     .eq("username", username)
     .single();
   if (!target) {
@@ -59,6 +59,18 @@ export async function POST(req: Request) {
   }
   if (target.id === owner.user.id) {
     return NextResponse.json({ error: "You already own this candidate" }, { status: 400 });
+  }
+  // Strict company isolation: can only share within the same organization.
+  const { data: me } = await admin
+    .from("profiles")
+    .select("org_id")
+    .eq("id", owner.user.id)
+    .single();
+  if (!me?.org_id || me.org_id !== target.org_id) {
+    return NextResponse.json(
+      { error: "That user isn't in your company" },
+      { status: 403 },
+    );
   }
 
   const { error } = await owner.supabase.from("candidate_shares").upsert(

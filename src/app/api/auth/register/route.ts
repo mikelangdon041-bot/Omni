@@ -10,6 +10,7 @@ export async function POST(req: Request) {
   const username = normalizeUsername(String(body.username || ""));
   const password = String(body.password || "");
   const displayName = String(body.displayName || "").trim();
+  const company = String(body.company || "").trim();
 
   if (!isValidUsername(username)) {
     return NextResponse.json(
@@ -48,15 +49,32 @@ export async function POST(req: Request) {
     );
   }
 
+  // A self-registration creates a new company; the registrant is its owner.
+  const { data: org, error: orgErr } = await admin
+    .from("organizations")
+    .insert({ name: company || `${displayName || username}'s Company` })
+    .select("id")
+    .single();
+  if (orgErr || !org) {
+    await admin.auth.admin.deleteUser(created.user.id);
+    return NextResponse.json(
+      { error: "Could not create account. Please try again." },
+      { status: 500 },
+    );
+  }
+
   const { error: profileErr } = await admin.from("profiles").insert({
     id: created.user.id,
     username,
     display_name: displayName || username,
+    org_id: org.id,
+    role: "owner",
   });
 
   if (profileErr) {
-    // Roll back the orphaned auth user so the username can be reused.
+    // Roll back the orphaned auth user + org so the username can be reused.
     await admin.auth.admin.deleteUser(created.user.id);
+    await admin.from("organizations").delete().eq("id", org.id);
     if (/duplicate|unique/i.test(profileErr.message)) {
       return NextResponse.json(
         { error: "That username is already taken." },
