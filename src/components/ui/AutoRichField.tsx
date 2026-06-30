@@ -10,12 +10,14 @@ export function AutoRichField({
   canEdit,
   onSave,
   placeholder,
+  minHeight,
 }: {
   label: string;
   initialHtml: string;
   canEdit: boolean;
   onSave: (html: string) => Promise<void>;
   placeholder?: string;
+  minHeight?: string;
 }) {
   const [html, setHtml] = useState(initialHtml);
   const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle");
@@ -55,7 +57,12 @@ export function AutoRichField({
           </span>
         )}
       </div>
-      <RichText initialHtml={initialHtml} onChange={setHtml} placeholder={placeholder} />
+      <RichText
+        value={html}
+        onChange={setHtml}
+        placeholder={placeholder}
+        minHeight={minHeight}
+      />
     </div>
   );
 }

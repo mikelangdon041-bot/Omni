@@ -24,6 +24,7 @@ export function ResumeCard({
   const [text, setText] = useState(candidate.resume_text || "");
   const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [uploading, setUploading] = useState(false);
+  const [extracting, setExtracting] = useState(false);
   const [fileName, setFileName] = useState(
     candidate.resume_url
       ? (candidate.resume_url.split("/").pop() || "").replace(/^\d+-/, "")
@@ -65,6 +66,27 @@ export function ResumeCard({
       }
       await updateCandidate(patch);
       setStatus("saved");
+
+      // PDF / DOCX: extract text server-side so AI can read it accurately.
+      if (!extracted) {
+        setExtracting(true);
+        try {
+          const res = await fetch("/api/interview/parse-resume", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({ candidateId: candidate.id, path }),
+          });
+          const data = await res.json();
+          if (res.ok && data.text) {
+            setText(data.text);
+            savedText.current = data.text;
+          }
+        } catch {
+          // keep the file; user can paste text if extraction fails
+        }
+        setExtracting(false);
+      }
     }
     setUploading(false);
   }
@@ -162,7 +184,10 @@ export function ResumeCard({
               <span className="text-xs">PDF, DOCX, or TXT</span>
             </button>
           )}
-          {text && (
+          {extracting && (
+            <p className="text-xs text-muted">Extracting text from your file…</p>
+          )}
+          {!extracting && text && (
             <div>
               <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted">
                 Extracted text (used for AI)

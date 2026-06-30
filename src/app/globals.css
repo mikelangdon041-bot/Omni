@@ -72,6 +72,17 @@ body {
   list-style: decimal;
   padding-left: 1.25rem;
 }
+.omni-rt li {
+  margin: 0.125rem 0;
+}
+.omni-rt b,
+.omni-rt strong {
+  font-weight: 600;
+}
+.omni-rt i,
+.omni-rt em {
+  font-style: italic;
+}
 .omni-rt-view ul {
   list-style: disc;
   padding-left: 1.25rem;
