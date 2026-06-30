@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Mail, Phone } from "lucide-react";
-import { useKOL } from "@/lib/territory/hooks";
+import { useKOL, useUserId } from "@/lib/territory/hooks";
 import {
   RELATIONSHIP_COLORS,
   RELATIONSHIP_LABELS,
@@ -17,12 +17,14 @@ import { Badge } from "@/components/territory/ui/Badge";
 import { Button } from "@/components/territory/ui/Button";
 import { EngagementRing } from "@/components/territory/ui/EngagementRing";
 import { ProfileSection } from "@/components/territory/ProfileSection";
+import { ActivityTimeline } from "@/components/territory/ActivityTimeline";
 
 const TABS = ["Profile", "Activity", "Meetings", "Strategy"] as const;
 type Tab = (typeof TABS)[number];
 
 export default function KOLDetailPage() {
   const params = useParams<{ id: string }>();
+  const { userId } = useUserId();
   const { kol, loading, update } = useKOL(params.id);
   const [tab, setTab] = useState<Tab>("Profile");
 
@@ -70,9 +72,17 @@ export default function KOLDetailPage() {
       </div>
 
       {tab === "Profile" && <ProfileSection kol={kol} update={update} />}
-      {tab !== "Profile" && (
+      {tab === "Activity" && (
+        <ActivityTimeline
+          kolId={kol.id}
+          userId={userId}
+          engagementScore={kol.engagement_score}
+          onEngagement={(score) => update({ engagement_score: score })}
+        />
+      )}
+      {(tab === "Meetings" || tab === "Strategy") && (
         <div className="rounded-xl border border-dashed border-border bg-surface px-6 py-16 text-center text-sm text-muted">
-          The {tab} tab is coming in the next update.
+          The {tab} tab is coming next.
         </div>
       )}
     </>
