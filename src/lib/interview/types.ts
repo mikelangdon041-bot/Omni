@@ -101,6 +101,57 @@ export interface CandidateShare {
   created_at: string;
 }
 
+// ------------------------------------------------------------------
+// Scorecards / structured feedback
+// ------------------------------------------------------------------
+export interface FeedbackRating {
+  competency: string;
+  rating: number; // 1–4
+  comment?: string;
+}
+
+export interface InterviewFeedback {
+  id: string;
+  candidate_id: string;
+  user_id: string;
+  recommendation: "strong_no" | "no" | "yes" | "strong_yes" | null;
+  ratings: FeedbackRating[];
+  notes: string;
+  submitted: boolean;
+  submitted_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export const SCORECARD_COMPETENCIES = [
+  "Communication",
+  "Domain expertise",
+  "Problem solving",
+  "Culture & values",
+  "Motivation",
+];
+
+export const RATING_LABELS: Record<number, string> = {
+  1: "Poor",
+  2: "Mixed",
+  3: "Good",
+  4: "Excellent",
+};
+
+export const RECOMMENDATIONS = [
+  { value: "strong_no", label: "Strong no", color: "bg-rose-100 text-rose-700" },
+  { value: "no", label: "No", color: "bg-amber-100 text-amber-700" },
+  { value: "yes", label: "Yes", color: "bg-sky-100 text-sky-700" },
+  { value: "strong_yes", label: "Strong yes", color: "bg-emerald-100 text-emerald-700" },
+] as const;
+
+export const RECOMMENDATION_LABEL: Record<string, string> = Object.fromEntries(
+  RECOMMENDATIONS.map((r) => [r.value, r.label]),
+);
+export const RECOMMENDATION_COLOR: Record<string, string> = Object.fromEntries(
+  RECOMMENDATIONS.map((r) => [r.value, r.color]),
+);
+
 export function candidateName(c: { first_name: string; last_name: string }) {
   return `${c.first_name} ${c.last_name}`.trim();
 }

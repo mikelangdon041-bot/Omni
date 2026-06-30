@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { Plus, Search, Mic, BookMarked } from "lucide-react";
+import { Plus, Search, Mic, BookMarked, LayoutGrid, List } from "lucide-react";
 import { ModuleHero } from "@/components/ui/ModuleHero";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -18,9 +18,18 @@ import {
 import {
   CANDIDATE_STATUSES,
   STATUS_LABELS,
+  candidateName,
   type Candidate,
   type CandidateStatus,
 } from "@/lib/interview/types";
+
+const PIPELINE: CandidateStatus[] = [
+  "active",
+  "screening",
+  "interviewing",
+  "offer",
+  "hired",
+];
 
 export default function InterviewPrepPage() {
   const { userId } = useUserId();
@@ -28,6 +37,7 @@ export default function InterviewPrepPage() {
   const { recordings: unassigned } = useUnassignedRecordings();
   const stats = useCandidateStats();
   const [showAdd, setShowAdd] = useState(false);
+  const [view, setView] = useState<"list" | "board">("list");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | CandidateStatus>("all");
 
@@ -107,6 +117,22 @@ export default function InterviewPrepPage() {
             </option>
           ))}
         </select>
+        <div className="flex overflow-hidden rounded-lg border border-border">
+          <button
+            onClick={() => setView("list")}
+            className={`px-3 py-2.5 ${view === "list" ? "bg-[var(--accent)] text-white" : "bg-surface text-muted hover:text-ink"}`}
+            title="List"
+          >
+            <List size={16} />
+          </button>
+          <button
+            onClick={() => setView("board")}
+            className={`px-3 py-2.5 ${view === "board" ? "bg-[var(--accent)] text-white" : "bg-surface text-muted hover:text-ink"}`}
+            title="Pipeline board"
+          >
+            <LayoutGrid size={16} />
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -129,6 +155,8 @@ export default function InterviewPrepPage() {
             ) : undefined
           }
         />
+      ) : view === "board" ? (
+        <PipelineBoard candidates={filtered} />
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map((c) => (
@@ -184,5 +212,42 @@ export default function InterviewPrepPage() {
         onCreate={onCreate}
       />
     </>
+  );
+}
+
+function PipelineBoard({ candidates }: { candidates: Candidate[] }) {
+  return (
+    <div className="flex gap-4 overflow-x-auto pb-2">
+      {PIPELINE.map((s) => {
+        const col = candidates.filter((c) => c.status === s);
+        return (
+          <div key={s} className="w-64 shrink-0">
+            <div className="mb-2 flex items-center justify-between px-1">
+              <span className="text-sm font-semibold">{STATUS_LABELS[s]}</span>
+              <span className="text-xs text-muted">{col.length}</span>
+            </div>
+            <div className="space-y-2">
+              {col.map((c) => (
+                <Link
+                  key={c.id}
+                  href={`/interview-prep/candidate/${c.id}`}
+                  className="block rounded-lg border border-border bg-surface p-3 shadow-sm transition hover:border-[var(--accent)]/40"
+                >
+                  <p className="truncate text-sm font-medium">{candidateName(c)}</p>
+                  {c.role_title && (
+                    <p className="truncate text-xs text-muted">{c.role_title}</p>
+                  )}
+                </Link>
+              ))}
+              {col.length === 0 && (
+                <p className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-xs text-muted">
+                  —
+                </p>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }

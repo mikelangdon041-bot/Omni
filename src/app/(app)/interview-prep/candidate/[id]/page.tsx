@@ -28,8 +28,9 @@ import { CandidateRecordings } from "@/components/interview/CandidateRecordings"
 import { QuestionsTab } from "@/components/interview/QuestionsTab";
 import { ActivityTab } from "@/components/interview/ActivityTab";
 import { ResumeCard } from "@/components/interview/ResumeCard";
+import { ScorecardTab } from "@/components/interview/ScorecardTab";
 
-const TABS = ["Overview", "Activity", "Interviews", "Questions"] as const;
+const TABS = ["Overview", "Activity", "Interviews", "Questions", "Scorecard"] as const;
 type Tab = (typeof TABS)[number];
 
 export default function CandidateDetailPage() {
@@ -104,6 +105,13 @@ export default function CandidateDetailPage() {
       {tab === "Interviews" && <CandidateRecordings candidateId={candidate.id} />}
       {tab === "Questions" && (
         <QuestionsTab candidate={candidate} userId={userId} />
+      )}
+      {tab === "Scorecard" && (
+        <ScorecardTab
+          candidateId={candidate.id}
+          userId={userId}
+          isOwner={canEdit}
+        />
       )}
     </>
   );

@@ -6,6 +6,7 @@ import type {
   Candidate,
   CandidateActivity,
   CandidateQuestion,
+  InterviewFeedback,
   QuestionBankItem,
 } from "./types";
 
@@ -288,6 +289,51 @@ export function useUnassignedRecordings() {
   }, [refresh]);
 
   return { recordings, loading, refresh };
+}
+
+// Interview scorecards / structured feedback for a candidate.
+export function useInterviewFeedback(candidateId: string, userId: string | null) {
+  const [all, setAll] = useState<InterviewFeedback[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    const { data } = await supabase
+      .from("interview_feedback")
+      .select("*")
+      .eq("candidate_id", candidateId);
+    setAll((data as InterviewFeedback[]) || []);
+    setLoading(false);
+  }, [candidateId]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const mine = userId ? all.find((f) => f.user_id === userId) || null : null;
+  const others = userId ? all.filter((f) => f.user_id !== userId) : [];
+
+  const save = useCallback(
+    async (partial: Partial<InterviewFeedback>) => {
+      if (!userId) return;
+      await supabase
+        .from("interview_feedback")
+        .upsert(
+          { candidate_id: candidateId, user_id: userId, ...partial },
+          { onConflict: "candidate_id,user_id" },
+        );
+      await refresh();
+    },
+    [candidateId, userId, refresh],
+  );
+
+  const submit = useCallback(
+    async (partial: Partial<InterviewFeedback>) => {
+      await save({ ...partial, submitted: true, submitted_at: new Date().toISOString() });
+    },
+    [save],
+  );
+
+  return { all, mine, others, loading, refresh, save, submit };
 }
 
 export interface CandidateStat {
