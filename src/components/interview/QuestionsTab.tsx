@@ -16,6 +16,7 @@ import {
 import type { Candidate } from "@/lib/interview/types";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
+import { SuggestQuestionsModal } from "@/components/interview/SuggestQuestionsModal";
 
 export function QuestionsTab({
   candidate,
@@ -28,17 +29,16 @@ export function QuestionsTab({
     candidate.id,
   );
   const bank = useQuestionBank(userId);
+  const [suggestOpen, setSuggestOpen] = useState(false);
 
   return (
     <div className="space-y-5">
-      <AiSuggestions
-        candidateId={candidate.id}
-        hasResume={!!candidate.resume_text?.trim()}
-        onAdd={(texts) =>
-          addMany(texts.map((t) => ({ text: t, source: "ai" })))
-        }
-        onSaveToBank={(t) => bank.add({ text: t, source: "ai" })}
-      />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-muted">Plan the questions for this interview.</p>
+        <Button onClick={() => setSuggestOpen(true)}>
+          <Sparkles size={15} /> Add questions
+        </Button>
+      </div>
 
       <PlannedQuestions
         questions={questions}
@@ -53,123 +53,19 @@ export function QuestionsTab({
           )
         }
       />
-    </div>
-  );
-}
 
-// ---- AI suggestions ----------------------------------------------
-function AiSuggestions({
-  candidateId,
-  hasResume,
-  onAdd,
-  onSaveToBank,
-}: {
-  candidateId: string;
-  hasResume: boolean;
-  onAdd: (texts: string[]) => Promise<unknown>;
-  onSaveToBank: (text: string) => Promise<unknown>;
-}) {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [selected, setSelected] = useState<Set<number>>(new Set());
-
-  async function suggest() {
-    setLoading(true);
-    setError(null);
-    setSuggestions([]);
-    setSelected(new Set());
-    try {
-      const res = await fetch("/api/interview/suggest-questions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({ candidateId }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Could not suggest");
-      setSuggestions(data.questions || []);
-      if ((data.questions || []).length === 0)
-        setError("No suggestions returned. Add resume text and try again.");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function toggle(i: number) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(i)) next.delete(i);
-      else next.add(i);
-      return next;
-    });
-  }
-
-  async function addSelected() {
-    const texts = [...selected].map((i) => suggestions[i]).filter(Boolean);
-    if (texts.length === 0) return;
-    await onAdd(texts);
-    setSuggestions((prev) => prev.filter((_, i) => !selected.has(i)));
-    setSelected(new Set());
-  }
-
-  return (
-    <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-muted">
-          AI suggestions
-        </h3>
-        <Button size="sm" onClick={suggest} disabled={loading || !hasResume}>
-          <Sparkles size={14} /> {loading ? "Thinking…" : "Suggest from resume"}
-        </Button>
-      </div>
-
-      {!hasResume && (
-        <p className="mt-3 text-sm text-muted">
-          Add the candidate&apos;s resume above to generate tailored questions.
-        </p>
-      )}
-      {error && <p className="mt-3 text-sm text-status-error">{error}</p>}
-
-      {suggestions.length > 0 && (
-        <>
-          <ul className="mt-4 space-y-1.5">
-            {suggestions.map((q, i) => (
-              <li
-                key={i}
-                className="flex items-start gap-2 rounded-lg border border-border p-2.5"
-              >
-                <button
-                  onClick={() => toggle(i)}
-                  className={`mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded border transition ${
-                    selected.has(i)
-                      ? "border-[var(--accent)] bg-[var(--accent)] text-white"
-                      : "border-border"
-                  }`}
-                  aria-label="Select"
-                >
-                  {selected.has(i) && <Check size={13} />}
-                </button>
-                <span className="flex-1 text-sm">{q}</span>
-                <button
-                  onClick={() => onSaveToBank(q)}
-                  title="Save to question bank"
-                  className="text-muted transition hover:text-[var(--accent)]"
-                >
-                  <BookmarkPlus size={15} />
-                </button>
-              </li>
-            ))}
-          </ul>
-          <div className="mt-3 flex justify-end">
-            <Button size="sm" onClick={addSelected} disabled={selected.size === 0}>
-              <Plus size={14} /> Add {selected.size || ""} to candidate
-            </Button>
-          </div>
-        </>
-      )}
+      <SuggestQuestionsModal
+        open={suggestOpen}
+        onClose={() => setSuggestOpen(false)}
+        candidateId={candidate.id}
+        hasResume={!!candidate.resume_text?.trim()}
+        onAddToInterview={(texts) =>
+          addMany(texts.map((t) => ({ text: t, source: "ai" })))
+        }
+        onAddToBank={(texts) =>
+          Promise.all(texts.map((t) => bank.add({ text: t, source: "ai" })))
+        }
+      />
     </div>
   );
 }
