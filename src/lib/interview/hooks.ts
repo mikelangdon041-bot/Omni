@@ -290,6 +290,43 @@ export function useUnassignedRecordings() {
   return { recordings, loading, refresh };
 }
 
+export interface CandidateStat {
+  interviews: number;
+  questions: number;
+}
+
+// Per-candidate counts (interviews + questions) across all accessible candidates.
+export function useCandidateStats() {
+  const [stats, setStats] = useState<Record<string, CandidateStat>>({});
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const [recs, qs] = await Promise.all([
+        supabase.from("recordings").select("candidate_id"),
+        supabase.from("candidate_questions").select("candidate_id"),
+      ]);
+      if (!active) return;
+      const map: Record<string, CandidateStat> = {};
+      const bump = (id: string | null, key: keyof CandidateStat) => {
+        if (!id) return;
+        map[id] = map[id] || { interviews: 0, questions: 0 };
+        map[id][key] += 1;
+      };
+      for (const r of (recs.data as { candidate_id: string | null }[]) || [])
+        bump(r.candidate_id, "interviews");
+      for (const q of (qs.data as { candidate_id: string | null }[]) || [])
+        bump(q.candidate_id, "questions");
+      setStats(map);
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return stats;
+}
+
 export function useCandidateRecordings(candidateId: string) {
   const [recordings, setRecordings] = useState<CandidateRecording[]>([]);
   const [loading, setLoading] = useState(true);

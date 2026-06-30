@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { LayoutGrid, Settings, LogOut, X, Shield } from "lucide-react";
-import { Logo } from "@/components/Logo";
 import { MODULES, moduleForPath } from "@/lib/modules";
 
 export function AppHeader({
@@ -50,22 +49,23 @@ export function AppHeader({
   return (
     <>
       <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border bg-surface/90 px-4 backdrop-blur">
-        {/* Left: Omni brand + the app you're currently in (click → its home) */}
-        <Link href="/" className="shrink-0">
-          <Logo />
-        </Link>
-        {active.slug !== "" && (
-          <Link href={active.href} className="flex items-center gap-2">
-            <span className="text-border">/</span>
+        {/* Left: just the app you're in (click → its home). Switch apps via the
+            launcher on the right. */}
+        {active.slug !== "" ? (
+          <Link href={active.href} className="flex items-center gap-2.5">
             <span
-              className="grid h-7 w-7 place-items-center rounded-lg text-white shadow-sm"
+              className="grid h-8 w-8 place-items-center rounded-lg text-white shadow-sm"
               style={{
                 backgroundImage: `linear-gradient(135deg, ${active.theme.gradFrom}, ${active.theme.gradTo})`,
               }}
             >
-              <active.icon size={15} />
+              <active.icon size={17} />
             </span>
             <span className="font-semibold tracking-tight">{active.label}</span>
+          </Link>
+        ) : (
+          <Link href="/" className="font-semibold tracking-tight">
+            Omni
           </Link>
         )}
 

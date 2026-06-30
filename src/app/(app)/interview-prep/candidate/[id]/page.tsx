@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Mail, Phone, MapPin, Pencil } from "lucide-react";
@@ -27,10 +27,9 @@ import { Input, Textarea } from "@/components/ui/Input";
 import { CandidateRecordings } from "@/components/interview/CandidateRecordings";
 import { QuestionsTab } from "@/components/interview/QuestionsTab";
 import { ActivityTab } from "@/components/interview/ActivityTab";
-import { AccessTab } from "@/components/interview/AccessTab";
-import { createClient } from "@/lib/supabase/client";
+import { ResumeCard } from "@/components/interview/ResumeCard";
 
-const TABS = ["Overview", "Interviews", "Questions", "Activity", "Access"] as const;
+const TABS = ["Overview", "Activity", "Interviews", "Questions"] as const;
 type Tab = (typeof TABS)[number];
 
 export default function CandidateDetailPage() {
@@ -40,57 +39,8 @@ export default function CandidateDetailPage() {
   const activity = useCandidateActivity(params.id);
   const recordings = useCandidateRecordings(params.id);
   const [tab, setTab] = useState<Tab>("Overview");
-  // For a non-owner viewer: their access level + whether they've interviewed.
-  const [viewerLevel, setViewerLevel] = useState<string | null>(null);
-  const [viewerInterviewed, setViewerInterviewed] = useState(false);
 
   const canEdit = !!candidate && candidate.user_id === userId;
-
-  // Resolve a shared viewer's access level.
-  useEffect(() => {
-    if (!candidate || !userId) return;
-    if (candidate.user_id === userId) {
-      setViewerLevel("owner");
-      return;
-    }
-    const supabase = createClient();
-    supabase
-      .from("candidate_shares")
-      .select("scope")
-      .eq("candidate_id", candidate.id)
-      .eq("shared_with", userId)
-      .single()
-      .then(({ data }) => {
-        const scope = data?.scope as { all?: boolean; level?: string } | undefined;
-        setViewerLevel(scope?.all ? "full" : scope?.level || "limited");
-      });
-    supabase
-      .from("recordings")
-      .select("id")
-      .eq("candidate_id", candidate.id)
-      .eq("user_id", userId)
-      .limit(1)
-      .then(({ data }) => setViewerInterviewed(!!(data && data.length)));
-  }, [candidate, userId]);
-
-  // Which tabs a viewer sees, and whether the Activity log hides others' notes.
-  let visibleTabs: Tab[] = [];
-  let activityOwnOnly = false;
-  if (canEdit) {
-    visibleTabs = [...TABS];
-  } else if (viewerLevel === "full") {
-    visibleTabs = ["Overview", "Interviews", "Questions", "Activity"];
-  } else if (viewerLevel === "limited") {
-    visibleTabs = ["Overview", "Interviews", "Questions", "Activity"];
-    activityOwnOnly = true;
-  } else if (viewerLevel === "post_interview") {
-    visibleTabs = viewerInterviewed
-      ? ["Overview", "Interviews", "Questions", "Activity"]
-      : ["Overview", "Questions"];
-  } else if (viewerLevel) {
-    visibleTabs = ["Overview"];
-  }
-  const activeTab = visibleTabs.includes(tab) ? tab : visibleTabs[0];
 
   // Update a field, and log status changes to the activity timeline.
   async function updateAndLog(partial: Partial<Candidate>) {
@@ -130,26 +80,19 @@ export default function CandidateDetailPage() {
 
       <Header candidate={candidate} update={updateAndLog} canEdit={canEdit} />
 
-      {visibleTabs.length > 0 && (
-        <Tabs tabs={visibleTabs} active={activeTab} onChange={setTab} />
-      )}
+      <Tabs tabs={TABS} active={tab} onChange={setTab} />
 
-      {activeTab === "Overview" && (
-        <Overview candidate={candidate} update={update} canEdit={canEdit} />
+      {tab === "Overview" && (
+        <Overview
+          candidate={candidate}
+          update={update}
+          canEdit={canEdit}
+          userId={userId}
+        />
       )}
-      {activeTab === "Interviews" && (
-        <CandidateRecordings candidateId={candidate.id} />
-      )}
-      {activeTab === "Questions" && (
-        <QuestionsTab candidate={candidate} userId={userId} updateCandidate={update} />
-      )}
-      {activeTab === "Activity" && (
+      {tab === "Activity" && (
         <ActivityTab
-          activity={
-            activityOwnOnly
-              ? activity.activity.filter((a) => a.user_id === userId)
-              : activity.activity
-          }
+          activity={activity.activity}
           interviews={recordings.recordings}
           loading={activity.loading}
           userId={userId}
@@ -158,8 +101,9 @@ export default function CandidateDetailPage() {
           remove={activity.remove}
         />
       )}
-      {activeTab === "Access" && canEdit && (
-        <AccessTab candidateId={candidate.id} />
+      {tab === "Interviews" && <CandidateRecordings candidateId={candidate.id} />}
+      {tab === "Questions" && (
+        <QuestionsTab candidate={candidate} userId={userId} />
       )}
     </>
   );
@@ -245,10 +189,12 @@ function Overview({
   candidate,
   update,
   canEdit,
+  userId,
 }: {
   candidate: Candidate;
   update: (p: Partial<Candidate>) => Promise<void>;
   canEdit: boolean;
+  userId: string | null;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Partial<Candidate>>({});
@@ -290,6 +236,21 @@ function Overview({
             </Button>
           )}
         </div>
+      )}
+
+      {canEdit ? (
+        <ResumeCard candidate={candidate} userId={userId} updateCandidate={update} />
+      ) : (
+        candidate.resume_text && (
+          <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
+            <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">
+              Resume
+            </h3>
+            <p className="whitespace-pre-wrap text-sm text-ink/90">
+              {candidate.resume_text}
+            </p>
+          </div>
+        )
       )}
 
       <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">

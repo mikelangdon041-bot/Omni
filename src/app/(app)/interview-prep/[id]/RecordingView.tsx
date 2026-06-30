@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
-import { RefreshCw, Pencil } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { RefreshCw, Pencil, ArrowLeft } from "lucide-react";
 import { StatusChip } from "@/components/StatusChip";
 import { SummaryTree } from "@/components/SummaryTree";
 import { parseOutline, type SummaryNodeRow } from "@/lib/summaryTree";
@@ -35,6 +35,7 @@ export function RecordingView({
   initialRecording: Recording;
   initialNodes: SummaryNodeRow[];
 }) {
+  const router = useRouter();
   const [recording, setRecording] = useState(initialRecording);
   const [nodes, setNodes] = useState(initialNodes);
   const [liveProgress, setLiveProgress] = useState<number | null>(null);
@@ -219,12 +220,12 @@ export function RecordingView({
   return (
     <>
       <div className="mb-6">
-        <Link
-          href="/interview-prep"
-          className="text-sm text-muted hover:text-ink"
+        <button
+          onClick={() => router.back()}
+          className="inline-flex items-center gap-1.5 text-sm text-muted hover:text-ink"
         >
-          ← Interview Prep
-        </Link>
+          <ArrowLeft size={15} /> Back
+        </button>
         <div className="mt-2 flex items-center justify-between gap-4">
           <h1 className="text-2xl font-semibold tracking-tight">
             {recording.title}

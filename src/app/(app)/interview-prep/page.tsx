@@ -11,6 +11,7 @@ import { CandidateCard } from "@/components/interview/CandidateCard";
 import { AddCandidateModal } from "@/components/interview/AddCandidateModal";
 import {
   useCandidates,
+  useCandidateStats,
   useUnassignedRecordings,
   useUserId,
 } from "@/lib/interview/hooks";
@@ -25,6 +26,7 @@ export default function InterviewPrepPage() {
   const { userId } = useUserId();
   const { candidates, loading, add } = useCandidates();
   const { recordings: unassigned } = useUnassignedRecordings();
+  const stats = useCandidateStats();
   const [showAdd, setShowAdd] = useState(false);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | CandidateStatus>("all");
@@ -134,6 +136,7 @@ export default function InterviewPrepPage() {
               key={c.id}
               candidate={c}
               shared={c.user_id !== userId}
+              stat={stats[c.id]}
             />
           ))}
         </div>
