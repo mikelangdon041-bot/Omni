@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { Plus, Search, Mic } from "lucide-react";
+import { Plus, Search, Mic, BookMarked } from "lucide-react";
 import { ModuleHero } from "@/components/ui/ModuleHero";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -64,12 +64,19 @@ export default function InterviewPrepPage() {
           { label: "Hired", value: hiredCount },
         ]}
         action={
-          <Button
-            onClick={() => setShowAdd(true)}
-            className="!bg-white !text-ink hover:!bg-white/90"
-          >
-            <Plus size={16} /> Add candidate
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Link href="/interview-prep/question-bank">
+              <Button className="!bg-white/15 !text-white hover:!bg-white/25">
+                <BookMarked size={16} /> Question bank
+              </Button>
+            </Link>
+            <Button
+              onClick={() => setShowAdd(true)}
+              className="!bg-white !text-ink hover:!bg-white/90"
+            >
+              <Plus size={16} /> Add candidate
+            </Button>
+          </div>
         }
       />
 

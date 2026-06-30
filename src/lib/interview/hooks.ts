@@ -210,12 +210,17 @@ export function useQuestionBank(userId: string | null) {
     [],
   );
 
+  const update = useCallback(async (id: string, text: string) => {
+    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, text } : i)));
+    await supabase.from("question_bank").update({ text }).eq("id", id);
+  }, []);
+
   const remove = useCallback(async (id: string) => {
     setItems((prev) => prev.filter((i) => i.id !== id));
     await supabase.from("question_bank").delete().eq("id", id);
   }, []);
 
-  return { items, loading, refresh, add, toggleFavorite, remove };
+  return { items, loading, refresh, add, toggleFavorite, update, remove };
 }
 
 // Long-term candidate activity timeline.

@@ -27,6 +27,12 @@ export async function POST(req: Request) {
   if (!candidate) {
     return NextResponse.json({ error: "Candidate not found" }, { status: 404 });
   }
+  if (!candidate.resume_text || !candidate.resume_text.trim()) {
+    return NextResponse.json(
+      { error: "Add the candidate's resume first — suggestions are based on it." },
+      { status: 400 },
+    );
+  }
 
   const { data: existingRows } = await supabase
     .from("candidate_questions")

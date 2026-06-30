@@ -42,6 +42,7 @@ export function QuestionsTab({
 
       <AiSuggestions
         candidateId={candidate.id}
+        hasResume={!!candidate.resume_text?.trim()}
         onAdd={(texts) =>
           addMany(texts.map((t) => ({ text: t, source: "ai" })))
         }
@@ -154,10 +155,12 @@ function ResumeCard({
 // ---- AI suggestions ----------------------------------------------
 function AiSuggestions({
   candidateId,
+  hasResume,
   onAdd,
   onSaveToBank,
 }: {
   candidateId: string;
+  hasResume: boolean;
   onAdd: (texts: string[]) => Promise<unknown>;
   onSaveToBank: (text: string) => Promise<unknown>;
 }) {
@@ -213,11 +216,16 @@ function AiSuggestions({
         <h3 className="text-sm font-semibold uppercase tracking-wide text-muted">
           AI suggestions
         </h3>
-        <Button size="sm" onClick={suggest} disabled={loading}>
+        <Button size="sm" onClick={suggest} disabled={loading || !hasResume}>
           <Sparkles size={14} /> {loading ? "Thinking…" : "Suggest from resume"}
         </Button>
       </div>
 
+      {!hasResume && (
+        <p className="mt-3 text-sm text-muted">
+          Add the candidate&apos;s resume above to generate tailored questions.
+        </p>
+      )}
       {error && <p className="mt-3 text-sm text-status-error">{error}</p>}
 
       {suggestions.length > 0 && (

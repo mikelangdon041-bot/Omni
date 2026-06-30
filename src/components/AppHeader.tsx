@@ -50,18 +50,24 @@ export function AppHeader({
   return (
     <>
       <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border bg-surface/90 px-4 backdrop-blur">
-        {/* Left: current app identity (you're fully inside this app) */}
-        <Link href={active.href} className="flex items-center gap-2.5">
-          <span
-            className="grid h-8 w-8 place-items-center rounded-lg text-white shadow-sm"
-            style={{
-              backgroundImage: `linear-gradient(135deg, ${active.theme.gradFrom}, ${active.theme.gradTo})`,
-            }}
-          >
-            <active.icon size={17} />
-          </span>
-          <span className="font-semibold tracking-tight">{active.label}</span>
+        {/* Left: Omni brand + the app you're currently in (click → its home) */}
+        <Link href="/" className="shrink-0">
+          <Logo />
         </Link>
+        {active.slug !== "" && (
+          <Link href={active.href} className="flex items-center gap-2">
+            <span className="text-border">/</span>
+            <span
+              className="grid h-7 w-7 place-items-center rounded-lg text-white shadow-sm"
+              style={{
+                backgroundImage: `linear-gradient(135deg, ${active.theme.gradFrom}, ${active.theme.gradTo})`,
+              }}
+            >
+              <active.icon size={15} />
+            </span>
+            <span className="font-semibold tracking-tight">{active.label}</span>
+          </Link>
+        )}
 
         {/* Right: switch-app launcher + account menu */}
         <div className="ml-auto flex items-center gap-1.5">
@@ -146,7 +152,7 @@ export function AppHeader({
             </div>
 
             <div className="grid grid-cols-3 gap-3">
-              {MODULES.map((m) => {
+              {MODULES.filter((m) => m.slug !== "").map((m) => {
                 const Icon = m.icon;
                 const isActive = m.href === active.href;
                 const tile = (

@@ -7,6 +7,7 @@ import { ArrowLeft, Mail, Phone, MapPin, Pencil } from "lucide-react";
 import {
   useCandidate,
   useCandidateActivity,
+  useCandidateRecordings,
   useUserId,
 } from "@/lib/interview/hooks";
 import {
@@ -26,35 +27,30 @@ import { Input, Textarea } from "@/components/ui/Input";
 import { CandidateRecordings } from "@/components/interview/CandidateRecordings";
 import { QuestionsTab } from "@/components/interview/QuestionsTab";
 import { ActivityTab } from "@/components/interview/ActivityTab";
-import { SharingTab } from "@/components/interview/SharingTab";
+import { AccessTab } from "@/components/interview/AccessTab";
 import { createClient } from "@/lib/supabase/client";
 
-const TABS = ["Overview", "Interviews", "Questions", "Activity", "Sharing"] as const;
+const TABS = ["Overview", "Interviews", "Questions", "Activity", "Access"] as const;
 type Tab = (typeof TABS)[number];
-
-const SECTION_TO_TAB: Record<string, Tab> = {
-  overview: "Overview",
-  interviews: "Interviews",
-  questions: "Questions",
-  activity: "Activity",
-};
 
 export default function CandidateDetailPage() {
   const params = useParams<{ id: string }>();
   const { userId } = useUserId();
   const { candidate, loading, update } = useCandidate(params.id);
   const activity = useCandidateActivity(params.id);
+  const recordings = useCandidateRecordings(params.id);
   const [tab, setTab] = useState<Tab>("Overview");
-  // For a non-owner viewer: which sections they're allowed to see (null = all).
-  const [allowedSections, setAllowedSections] = useState<string[] | null>(null);
+  // For a non-owner viewer: their access level + whether they've interviewed.
+  const [viewerLevel, setViewerLevel] = useState<string | null>(null);
+  const [viewerInterviewed, setViewerInterviewed] = useState(false);
 
   const canEdit = !!candidate && candidate.user_id === userId;
 
-  // Resolve a shared viewer's scope.
+  // Resolve a shared viewer's access level.
   useEffect(() => {
     if (!candidate || !userId) return;
     if (candidate.user_id === userId) {
-      setAllowedSections(null);
+      setViewerLevel("owner");
       return;
     }
     const supabase = createClient();
@@ -65,18 +61,35 @@ export default function CandidateDetailPage() {
       .eq("shared_with", userId)
       .single()
       .then(({ data }) => {
-        const scope = data?.scope as { all?: boolean; sections?: string[] } | undefined;
-        setAllowedSections(
-          !scope || scope.all
-            ? ["overview", "interviews", "questions", "activity"]
-            : scope.sections || [],
-        );
+        const scope = data?.scope as { all?: boolean; level?: string } | undefined;
+        setViewerLevel(scope?.all ? "full" : scope?.level || "limited");
       });
+    supabase
+      .from("recordings")
+      .select("id")
+      .eq("candidate_id", candidate.id)
+      .eq("user_id", userId)
+      .limit(1)
+      .then(({ data }) => setViewerInterviewed(!!(data && data.length)));
   }, [candidate, userId]);
 
-  const visibleTabs: Tab[] = canEdit
-    ? [...TABS]
-    : (allowedSections || []).map((s) => SECTION_TO_TAB[s]).filter(Boolean);
+  // Which tabs a viewer sees, and whether the Activity log hides others' notes.
+  let visibleTabs: Tab[] = [];
+  let activityOwnOnly = false;
+  if (canEdit) {
+    visibleTabs = [...TABS];
+  } else if (viewerLevel === "full") {
+    visibleTabs = ["Overview", "Interviews", "Questions", "Activity"];
+  } else if (viewerLevel === "limited") {
+    visibleTabs = ["Overview", "Interviews", "Questions", "Activity"];
+    activityOwnOnly = true;
+  } else if (viewerLevel === "post_interview") {
+    visibleTabs = viewerInterviewed
+      ? ["Overview", "Interviews", "Questions", "Activity"]
+      : ["Overview", "Questions"];
+  } else if (viewerLevel) {
+    visibleTabs = ["Overview"];
+  }
   const activeTab = visibleTabs.includes(tab) ? tab : visibleTabs[0];
 
   // Update a field, and log status changes to the activity timeline.
@@ -132,7 +145,12 @@ export default function CandidateDetailPage() {
       )}
       {activeTab === "Activity" && (
         <ActivityTab
-          activity={activity.activity}
+          activity={
+            activityOwnOnly
+              ? activity.activity.filter((a) => a.user_id === userId)
+              : activity.activity
+          }
+          interviews={recordings.recordings}
           loading={activity.loading}
           userId={userId}
           canEdit={canEdit}
@@ -140,8 +158,8 @@ export default function CandidateDetailPage() {
           remove={activity.remove}
         />
       )}
-      {activeTab === "Sharing" && canEdit && (
-        <SharingTab candidateId={candidate.id} />
+      {activeTab === "Access" && canEdit && (
+        <AccessTab candidateId={candidate.id} />
       )}
     </>
   );
