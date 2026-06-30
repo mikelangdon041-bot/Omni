@@ -1,12 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { Sparkles, Check, FileText, ListChecks } from "lucide-react";
+import { Sparkles, Check, FileText, ListChecks, Library } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/ui";
 
-type Mode = "standard" | "resume" | "generate";
+type Mode = "bank" | "standard" | "resume" | "generate";
 
 const STANDARD: string[] = [
   "Walk me through your background and what brought you here.",
@@ -28,6 +28,7 @@ export function SuggestQuestionsModal({
   onClose,
   candidateId,
   hasResume,
+  bankItems,
   onAddToInterview,
   onAddToBank,
 }: {
@@ -35,11 +36,12 @@ export function SuggestQuestionsModal({
   onClose: () => void;
   candidateId: string;
   hasResume: boolean;
+  bankItems: { id: string; text: string }[];
   onAddToInterview: (texts: string[]) => Promise<unknown>;
   onAddToBank: (texts: string[]) => Promise<unknown>;
 }) {
-  const [mode, setMode] = useState<Mode>("standard");
-  const [list, setList] = useState<string[]>(STANDARD);
+  const [mode, setMode] = useState<Mode>("bank");
+  const [list, setList] = useState<string[]>(bankItems.map((b) => b.text));
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [alsoBank, setAlsoBank] = useState(true);
   const [guidance, setGuidance] = useState("");
@@ -50,7 +52,8 @@ export function SuggestQuestionsModal({
     setMode(m);
     setSelected(new Set());
     setError(null);
-    if (m === "standard") setList(STANDARD);
+    if (m === "bank") setList(bankItems.map((b) => b.text));
+    else if (m === "standard") setList(STANDARD);
     else setList([]);
   }
 
@@ -90,7 +93,8 @@ export function SuggestQuestionsModal({
     const texts = [...selected].map((i) => list[i]).filter(Boolean);
     if (texts.length === 0) return;
     if (toInterview) await onAddToInterview(texts);
-    if (!toInterview || alsoBank) await onAddToBank(texts);
+    // Bank-mode items are already saved; don't re-save them.
+    if (mode !== "bank" && (!toInterview || alsoBank)) await onAddToBank(texts);
     onClose();
   }
 
@@ -101,6 +105,7 @@ export function SuggestQuestionsModal({
         <div className="flex flex-wrap gap-1.5">
           {(
             [
+              { m: "bank", icon: Library, label: "Your bank" },
               { m: "standard", icon: ListChecks, label: "Standard" },
               { m: "resume", icon: FileText, label: "From resume" },
               { m: "generate", icon: Sparkles, label: "Generate with AI" },
@@ -154,6 +159,12 @@ export function SuggestQuestionsModal({
           </div>
         )}
 
+        {mode === "bank" && bankItems.length === 0 && (
+          <p className="text-sm text-muted">
+            Your bank is empty — save questions from Standard, From-resume, or
+            Generate, then they&apos;ll show here.
+          </p>
+        )}
         {error && <p className="text-sm text-status-error">{error}</p>}
 
         {/* list */}
@@ -199,23 +210,29 @@ export function SuggestQuestionsModal({
 
         {/* footer actions */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-          <label className="flex items-center gap-2 text-sm text-muted">
-            <input
-              type="checkbox"
-              checked={alsoBank}
-              onChange={(e) => setAlsoBank(e.target.checked)}
-              className="h-4 w-4 accent-[var(--accent)]"
-            />
-            Also save to question bank
-          </label>
+          {mode === "bank" ? (
+            <span />
+          ) : (
+            <label className="flex items-center gap-2 text-sm text-muted">
+              <input
+                type="checkbox"
+                checked={alsoBank}
+                onChange={(e) => setAlsoBank(e.target.checked)}
+                className="h-4 w-4 accent-[var(--accent)]"
+              />
+              Also save to question bank
+            </label>
+          )}
           <div className="flex gap-2">
-            <Button
-              variant="secondary"
-              onClick={() => add(false)}
-              disabled={selected.size === 0}
-            >
-              Save to bank
-            </Button>
+            {mode !== "bank" && (
+              <Button
+                variant="secondary"
+                onClick={() => add(false)}
+                disabled={selected.size === 0}
+              >
+                Save to bank
+              </Button>
+            )}
             <Button onClick={() => add(true)} disabled={selected.size === 0}>
               Add {selected.size || ""} to interview
             </Button>

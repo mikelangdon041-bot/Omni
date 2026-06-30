@@ -1,21 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import {
-  Sparkles,
-  Plus,
-  Trash2,
-  BookmarkPlus,
-  Library,
-  Check,
-} from "lucide-react";
-import {
-  useCandidateQuestions,
-  useQuestionBank,
-} from "@/lib/interview/hooks";
+import Link from "next/link";
+import { Sparkles, Plus, Trash2, BookmarkPlus, Library, Check } from "lucide-react";
+import { useCandidateQuestions, useQuestionBank } from "@/lib/interview/hooks";
 import type { Candidate } from "@/lib/interview/types";
 import { Button } from "@/components/ui/Button";
-import { Modal } from "@/components/ui/Modal";
 import { SuggestQuestionsModal } from "@/components/interview/SuggestQuestionsModal";
 
 export function QuestionsTab({
@@ -35,9 +25,16 @@ export function QuestionsTab({
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted">Plan the questions for this interview.</p>
-        <Button onClick={() => setSuggestOpen(true)}>
-          <Sparkles size={15} /> Add questions
-        </Button>
+        <div className="flex gap-2">
+          <Link href="/interview-prep/question-bank">
+            <Button variant="secondary">
+              <Library size={15} /> Question bank
+            </Button>
+          </Link>
+          <Button onClick={() => setSuggestOpen(true)}>
+            <Sparkles size={15} /> Add questions
+          </Button>
+        </div>
       </div>
 
       <PlannedQuestions
@@ -46,12 +43,6 @@ export function QuestionsTab({
         update={update}
         remove={remove}
         onSaveToBank={(t) => bank.add({ text: t, source: "manual" })}
-        bank={bank.items}
-        onAddFromBank={(items) =>
-          addMany(
-            items.map((b) => ({ text: b.text, source: "bank", bank_id: b.id })),
-          )
-        }
       />
 
       <SuggestQuestionsModal
@@ -59,6 +50,7 @@ export function QuestionsTab({
         onClose={() => setSuggestOpen(false)}
         candidateId={candidate.id}
         hasResume={!!candidate.resume_text?.trim()}
+        bankItems={bank.items}
         onAddToInterview={(texts) =>
           addMany(texts.map((t) => ({ text: t, source: "ai" })))
         }
@@ -70,7 +62,6 @@ export function QuestionsTab({
   );
 }
 
-// ---- Planned questions -------------------------------------------
 type CQ = ReturnType<typeof useCandidateQuestions>["questions"][number];
 
 function PlannedQuestions({
@@ -79,20 +70,14 @@ function PlannedQuestions({
   update,
   remove,
   onSaveToBank,
-  bank,
-  onAddFromBank,
 }: {
   questions: CQ[];
   add: (p: Partial<CQ>) => Promise<unknown>;
   update: (id: string, p: Partial<CQ>) => Promise<unknown>;
   remove: (id: string) => Promise<unknown>;
   onSaveToBank: (text: string) => Promise<unknown>;
-  bank: { id: string; text: string; favorite: boolean }[];
-  onAddFromBank: (items: { id: string; text: string }[]) => Promise<unknown>;
 }) {
   const [draft, setDraft] = useState("");
-  const [bankOpen, setBankOpen] = useState(false);
-  const [bankSel, setBankSel] = useState<Set<string>>(new Set());
 
   async function addManual() {
     const t = draft.trim();
@@ -101,30 +86,18 @@ function PlannedQuestions({
     setDraft("");
   }
 
-  async function confirmBank() {
-    const items = bank.filter((b) => bankSel.has(b.id));
-    if (items.length) await onAddFromBank(items);
-    setBankSel(new Set());
-    setBankOpen(false);
-  }
-
   return (
     <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-muted">
-          Questions for this interview
-        </h3>
-        <Button variant="secondary" size="sm" onClick={() => setBankOpen(true)}>
-          <Library size={14} /> Add from bank
-        </Button>
-      </div>
+      <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">
+        Questions for this interview
+      </h3>
 
       <div className="mb-4 flex gap-2">
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && addManual()}
-          placeholder="Add a question…"
+          placeholder="Type a question and press Enter…"
           className="flex-1 rounded-lg border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20"
         />
         <Button size="sm" onClick={addManual}>
@@ -134,7 +107,8 @@ function PlannedQuestions({
 
       {questions.length === 0 ? (
         <p className="text-sm text-muted">
-          No questions yet. Add your own, pull from your bank, or generate from the resume.
+          No questions yet. Type one above, or use “Add questions” to pull from
+          your bank, standard sets, or AI.
         </p>
       ) : (
         <ul className="space-y-2">
@@ -185,53 +159,6 @@ function PlannedQuestions({
           ))}
         </ul>
       )}
-
-      <Modal open={bankOpen} onClose={() => setBankOpen(false)} title="Your question bank">
-        {bank.length === 0 ? (
-          <p className="text-sm text-muted">
-            Your bank is empty. Save questions with the bookmark icon to reuse them later.
-          </p>
-        ) : (
-          <>
-            <ul className="space-y-1.5">
-              {bank.map((b) => {
-                const sel = bankSel.has(b.id);
-                return (
-                  <li key={b.id}>
-                    <button
-                      onClick={() =>
-                        setBankSel((prev) => {
-                          const n = new Set(prev);
-                          if (n.has(b.id)) n.delete(b.id);
-                          else n.add(b.id);
-                          return n;
-                        })
-                      }
-                      className={`flex w-full items-start gap-2 rounded-lg border p-2.5 text-left text-sm transition ${
-                        sel ? "border-[var(--accent)] bg-[var(--accent-soft)]" : "border-border"
-                      }`}
-                    >
-                      <span
-                        className={`mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded border ${
-                          sel ? "border-[var(--accent)] bg-[var(--accent)] text-white" : "border-border"
-                        }`}
-                      >
-                        {sel && <Check size={13} />}
-                      </span>
-                      <span className="flex-1">{b.text}</span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-            <div className="mt-4 flex justify-end">
-              <Button size="sm" onClick={confirmBank} disabled={bankSel.size === 0}>
-                <Plus size={14} /> Add {bankSel.size || ""} selected
-              </Button>
-            </div>
-          </>
-        )}
-      </Modal>
     </div>
   );
 }
