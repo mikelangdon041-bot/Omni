@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Search, ArrowUpDown, MapPin } from "lucide-react";
+import { Plus, Search, ArrowUpDown, MapPin, List } from "lucide-react";
 import { ModuleHero } from "@/components/ui/ModuleHero";
 import { Button } from "@/components/territory/ui/Button";
 import { KOLCard } from "@/components/territory/KOLCard";
 import { AddKOLModal } from "@/components/territory/AddKOLModal";
 import { TerritoryTasks } from "@/components/territory/TerritoryTasks";
 import { ImportExport } from "@/components/territory/ImportExport";
+import { KolMap } from "@/components/territory/KolMap";
 import { useKOLs, useReminders, useUserId } from "@/lib/territory/hooks";
 import {
   RELATIONSHIP_LABELS,
@@ -24,7 +25,7 @@ type SortKey = "name" | "priority" | "engagement";
 
 export default function TerritoryDashboard() {
   const { userId } = useUserId();
-  const { kols, loading, add } = useKOLs(userId);
+  const { kols, loading, add, update } = useKOLs(userId);
   const { reminders } = useReminders(userId);
 
   const [showAdd, setShowAdd] = useState(false);
@@ -33,6 +34,7 @@ export default function TerritoryDashboard() {
   const [stateFilter, setStateFilter] = useState("all");
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [view, setView] = useState<"list" | "map">("list");
   const [activeList, setActiveList] = useState<string>("all");
   const [customLists, setCustomLists] = useState<string[]>([]);
 
@@ -229,11 +231,29 @@ export default function TerritoryDashboard() {
           >
             <ArrowUpDown size={16} />
           </button>
+          <div className="flex overflow-hidden rounded-lg border border-border">
+            <button
+              onClick={() => setView("list")}
+              className={`px-3 py-2.5 ${view === "list" ? "bg-[var(--accent)] text-white" : "bg-surface text-muted hover:text-ink"}`}
+              title="List"
+            >
+              <List size={16} />
+            </button>
+            <button
+              onClick={() => setView("map")}
+              className={`px-3 py-2.5 ${view === "map" ? "bg-[var(--accent)] text-white" : "bg-surface text-muted hover:text-ink"}`}
+              title="Map"
+            >
+              <MapPin size={16} />
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Grid */}
-      {loading ? (
+      {/* Grid / Map */}
+      {view === "map" ? (
+        <KolMap kols={filtered} update={update} />
+      ) : loading ? (
         <p className="py-12 text-center text-sm text-muted">Loading…</p>
       ) : filtered.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border bg-surface px-6 py-16 text-center text-sm text-muted">

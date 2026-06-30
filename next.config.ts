@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  transpilePackages: ["leaflet", "react-leaflet", "@react-leaflet/core"],
   // ffmpeg-static resolves its binary path from its own __dirname. If Next
   // bundles it, that path breaks at runtime (spawn ENOENT on Vercel). Keep it
   // external so the require resolves the real node_modules path...
