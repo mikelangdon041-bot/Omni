@@ -20,6 +20,7 @@ import { ProfileSection } from "@/components/territory/ProfileSection";
 import { ActivityTimeline } from "@/components/territory/ActivityTimeline";
 import { MeetingsSection } from "@/components/territory/MeetingsSection";
 import { StrategySection } from "@/components/territory/StrategySection";
+import { MeetingPrep } from "@/components/territory/MeetingPrep";
 
 const TABS = ["Profile", "Activity", "Meetings", "Strategy"] as const;
 type Tab = (typeof TABS)[number];
@@ -158,6 +159,7 @@ function Header({
               </Button>
             </a>
           )}
+          <MeetingPrep kolId={kol.id} />
         </div>
       </div>
 
