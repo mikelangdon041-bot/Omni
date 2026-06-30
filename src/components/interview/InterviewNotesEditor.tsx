@@ -7,6 +7,7 @@ import type { InterviewNote } from "@/lib/interview/types";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { AutoRichField } from "@/components/ui/AutoRichField";
+import { useConfirm } from "@/components/ui/Feedback";
 import { cn } from "@/lib/ui";
 
 export function InterviewNotesEditor({
@@ -27,6 +28,7 @@ export function InterviewNotesEditor({
   remove: (id: string) => Promise<void>;
 }) {
   const [title, setTitle] = useState(note.title);
+  const confirm = useConfirm();
 
   return (
     <Modal open={open} onClose={onClose} title="Interview notes" size="lg">
@@ -48,8 +50,15 @@ export function InterviewNotesEditor({
           />
           <div className="flex justify-end">
             <button
-              onClick={() => {
-                if (window.confirm("Delete these interview notes?")) {
+              onClick={async () => {
+                if (
+                  await confirm({
+                    title: "Delete interview notes?",
+                    message: "This can't be undone.",
+                    confirmLabel: "Delete",
+                    danger: true,
+                  })
+                ) {
                   remove(note.id);
                   onClose();
                 }

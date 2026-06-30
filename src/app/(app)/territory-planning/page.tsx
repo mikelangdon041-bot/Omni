@@ -25,7 +25,7 @@ type SortKey = "name" | "priority" | "engagement";
 
 export default function TerritoryDashboard() {
   const { userId } = useUserId();
-  const { kols, loading, add, update } = useKOLs(userId);
+  const { kols, loading, add, addMany, update } = useKOLs(userId);
   const { reminders } = useReminders(userId);
 
   const [showAdd, setShowAdd] = useState(false);
@@ -168,7 +168,7 @@ export default function TerritoryDashboard() {
           <ImportExport
             kols={kols}
             onImport={async (rows) => {
-              for (const r of rows) await add(r);
+              await addMany(rows);
             }}
           />
         </div>

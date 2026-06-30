@@ -67,6 +67,19 @@ export function useKOLs(userId: string | null) {
     [userId],
   );
 
+  // Bulk insert (import). Throws on error so the caller can show it.
+  const addMany = useCallback(
+    async (partials: Partial<KOL>[]) => {
+      if (!userId || partials.length === 0) return 0;
+      const rows = partials.map((p) => ({ ...p, user_id: userId }));
+      const { data, error } = await supabase.from("kols").insert(rows).select("*");
+      if (error) throw new Error(error.message);
+      if (data) setKols((prev) => [...(data as KOL[]), ...prev]);
+      return data?.length ?? 0;
+    },
+    [userId],
+  );
+
   const update = useCallback(async (id: string, partial: Partial<KOL>) => {
     setKols((prev) =>
       prev.map((k) => (k.id === id ? { ...k, ...partial } : k)),
@@ -79,7 +92,7 @@ export function useKOLs(userId: string | null) {
     await supabase.from("kols").delete().eq("id", id);
   }, []);
 
-  return { kols, loading, refresh, add, update, remove };
+  return { kols, loading, refresh, add, addMany, update, remove };
 }
 
 export function useKOL(id: string) {

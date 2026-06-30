@@ -31,6 +31,28 @@ export function ResumeCard({
       : "",
   );
   const savedText = useRef(candidate.resume_text || "");
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  // Sign the uploaded file for an inline preview.
+  useEffect(() => {
+    if (!candidate.resume_url) {
+      setPreviewUrl(null);
+      return;
+    }
+    let active = true;
+    supabase.storage
+      .from("resumes")
+      .createSignedUrl(candidate.resume_url, 600)
+      .then(({ data }) => {
+        if (active) setPreviewUrl(data?.signedUrl || null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [candidate.resume_url]);
+
+  const isPdf = /\.pdf$/i.test(candidate.resume_url || "");
+  const isImage = /\.(png|jpe?g|gif|webp)$/i.test(candidate.resume_url || "");
 
   // Debounced autosave of the pasted resume text.
   useEffect(() => {
@@ -91,14 +113,6 @@ export function ResumeCard({
     setUploading(false);
   }
 
-  async function viewFile() {
-    if (!candidate.resume_url) return;
-    const { data } = await supabase.storage
-      .from("resumes")
-      .createSignedUrl(candidate.resume_url, 300);
-    if (data?.signedUrl) window.open(data.signedUrl, "_blank");
-  }
-
   return (
     <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
       <div className="mb-3 flex items-center justify-between">
@@ -153,26 +167,47 @@ export function ResumeCard({
             className="hidden"
           />
           {candidate.resume_url ? (
-            <div className="flex items-center justify-between rounded-lg border border-border bg-canvas px-4 py-3">
-              <span className="flex min-w-0 items-center gap-2 text-sm">
-                <FileText size={15} className="shrink-0 text-[var(--accent)]" />
-                <span className="truncate">{fileName || "Resume file"}</span>
-              </span>
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={viewFile}
-                  className="inline-flex items-center gap-1 text-xs font-medium text-[var(--accent)] hover:underline"
-                >
-                  <ExternalLink size={13} /> Preview
-                </button>
-                <button
-                  onClick={() => fileRef.current?.click()}
-                  className="text-xs font-medium text-muted hover:text-ink"
-                >
-                  Replace
-                </button>
+            <>
+              <div className="flex items-center justify-between rounded-lg border border-border bg-canvas px-4 py-3">
+                <span className="flex min-w-0 items-center gap-2 text-sm">
+                  <FileText size={15} className="shrink-0 text-[var(--accent)]" />
+                  <span className="truncate">{fileName || "Resume file"}</span>
+                </span>
+                <div className="flex items-center gap-3">
+                  {previewUrl && (
+                    <a
+                      href={previewUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-xs font-medium text-[var(--accent)] hover:underline"
+                    >
+                      <ExternalLink size={13} /> Open
+                    </a>
+                  )}
+                  <button
+                    onClick={() => fileRef.current?.click()}
+                    className="text-xs font-medium text-muted hover:text-ink"
+                  >
+                    Replace
+                  </button>
+                </div>
               </div>
-            </div>
+              {previewUrl && isPdf && (
+                <iframe
+                  src={previewUrl}
+                  title="Resume preview"
+                  className="h-[28rem] w-full rounded-lg border border-border"
+                />
+              )}
+              {previewUrl && isImage && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={previewUrl}
+                  alt="Resume preview"
+                  className="max-h-[28rem] w-full rounded-lg border border-border object-contain"
+                />
+              )}
+            </>
           ) : (
             <button
               onClick={() => fileRef.current?.click()}

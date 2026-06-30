@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/Button";
 import { Input, Select } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { Badge } from "@/components/ui/Badge";
+import { useToast } from "@/components/ui/Feedback";
 
 interface OrgUser {
   id: string;
@@ -19,6 +20,7 @@ interface OrgUser {
 
 export function AdminUsers() {
   const router = useRouter();
+  const toast = useToast();
   const [users, setUsers] = useState<OrgUser[]>([]);
   const [me, setMe] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -89,7 +91,7 @@ export function AdminUsers() {
       router.refresh();
     } else {
       const d = await res.json().catch(() => ({}));
-      alert(d.error || "Could not impersonate");
+      toast("error", d.error || "Could not impersonate");
     }
   }
 

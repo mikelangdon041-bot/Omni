@@ -5,10 +5,12 @@ import { useState } from "react";
 import { Trash2, Pencil, Check } from "lucide-react";
 import { useUnassignedRecordings } from "@/lib/interview/hooks";
 import { StatusChip } from "@/components/ui/StatusChip";
+import { useConfirm } from "@/components/ui/Feedback";
 import { candidateName, type Candidate } from "@/lib/interview/types";
 
 export function UnassignedRecordings({ candidates }: { candidates: Candidate[] }) {
   const { recordings, rename, assign, remove } = useUnassignedRecordings();
+  const confirm = useConfirm();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [title, setTitle] = useState("");
 
@@ -99,8 +101,15 @@ export function UnassignedRecordings({ candidates }: { candidates: Candidate[] }
                   ))}
                 </select>
                 <button
-                  onClick={() => {
-                    if (window.confirm("Delete this recording permanently?"))
+                  onClick={async () => {
+                    if (
+                      await confirm({
+                        title: "Delete recording?",
+                        message: "This permanently removes the recording and its summary.",
+                        confirmLabel: "Delete",
+                        danger: true,
+                      })
+                    )
                       remove(r.id);
                   }}
                   title="Delete"

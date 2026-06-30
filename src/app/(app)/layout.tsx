@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { AppHeader } from "@/components/AppHeader";
 import { ImpersonationBanner } from "@/components/ImpersonationBanner";
+import { FeedbackProvider } from "@/components/ui/Feedback";
 
 export default async function AppLayout({
   children,
@@ -32,14 +33,16 @@ export default async function AppLayout({
   const impersonating = (await cookies()).has("omni-admin-return");
 
   return (
-    <div className="flex min-h-full flex-1 flex-col">
-      {impersonating && (
-        <ImpersonationBanner username={profile?.username || username} />
-      )}
-      <AppHeader username={username} isAdmin={isAdmin} />
-      <main className="flex-1">
-        <div className="mx-auto max-w-5xl px-4 py-8 sm:px-8">{children}</div>
-      </main>
-    </div>
+    <FeedbackProvider>
+      <div className="flex min-h-full flex-1 flex-col">
+        {impersonating && (
+          <ImpersonationBanner username={profile?.username || username} />
+        )}
+        <AppHeader username={username} isAdmin={isAdmin} />
+        <main className="flex-1">
+          <div className="mx-auto max-w-5xl px-4 py-8 sm:px-8">{children}</div>
+        </main>
+      </div>
+    </FeedbackProvider>
   );
 }

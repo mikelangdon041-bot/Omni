@@ -191,11 +191,17 @@ export function ImportModal({
   }
 
   async function doImport() {
+    setError(null);
     setStep("importing");
     const chosen = profiles.filter((_, i) => selected.has(i));
-    await onImport(chosen);
-    setCount(chosen.length);
-    setStep("done");
+    try {
+      await onImport(chosen);
+      setCount(chosen.length);
+      setStep("done");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Import failed");
+      setStep("preview");
+    }
   }
 
   function close() {
