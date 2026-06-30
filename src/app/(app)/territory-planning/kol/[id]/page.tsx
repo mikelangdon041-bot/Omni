@@ -60,7 +60,7 @@ export default function KOLDetailPage() {
             className={cn(
               "-mb-px border-b-2 px-4 py-2.5 text-sm font-medium transition",
               tab === t
-                ? "border-primary text-primary"
+                ? "border-[var(--accent)] text-[var(--accent)]"
                 : "border-transparent text-muted hover:text-ink",
             )}
           >
@@ -96,7 +96,7 @@ function Header({
           className="h-16 w-16 shrink-0 rounded-full object-cover"
         />
       ) : (
-        <span className="grid h-16 w-16 shrink-0 place-items-center rounded-full bg-primary-soft text-lg font-semibold text-primary">
+        <span className="grid h-16 w-16 shrink-0 place-items-center rounded-full bg-[var(--accent-soft)] text-lg font-semibold text-[var(--accent)]">
           {kolInitials(kol) || "?"}
         </span>
       )}

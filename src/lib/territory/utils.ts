@@ -1,9 +1,7 @@
 import type { Activity, RelationshipLevel } from "./types";
 
-// Tiny classnames helper (no clsx dependency).
-export function cn(...parts: Array<string | false | null | undefined>): string {
-  return parts.filter(Boolean).join(" ");
-}
+// Shared classnames helper (re-exported so existing territory imports keep working).
+export { cn } from "@/lib/ui";
 
 // ------------------------------------------------------------------
 // Labels & colors

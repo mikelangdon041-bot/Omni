@@ -14,7 +14,7 @@ export function KOLCard({ kol }: { kol: KOL }) {
   return (
     <Link
       href={`/territory-planning/kol/${kol.id}`}
-      className="flex flex-col rounded-xl border border-border bg-surface p-4 shadow-sm transition hover:border-primary/40 hover:shadow"
+      className="flex flex-col rounded-xl border border-border bg-surface p-4 shadow-sm transition hover:border-[var(--accent)]/40 hover:shadow"
     >
       <div className="flex items-start gap-3">
         {kol.photo_url ? (
@@ -25,7 +25,7 @@ export function KOLCard({ kol }: { kol: KOL }) {
             className="h-12 w-12 shrink-0 rounded-full object-cover"
           />
         ) : (
-          <span className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-primary-soft text-sm font-semibold text-primary">
+          <span className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-[var(--accent-soft)] text-sm font-semibold text-[var(--accent)]">
             {kolInitials(kol) || "?"}
           </span>
         )}

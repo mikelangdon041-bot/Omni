@@ -1,34 +1,49 @@
 @import "tailwindcss";
 
 /*
-  Omni theme — professional clinical base with warm accents.
-  Base: cool slate canvas. Primary: deep teal-blue. Accent: warm amber.
+  Omni theme — distinct indigo-violet identity with a warm coral accent.
+  Cool violet-tinted canvas, deep ink, vivid primary.
 */
 @theme {
-  --color-canvas: #f4f7f9;
+  --color-canvas: #f6f6fc;
   --color-surface: #ffffff;
-  --color-ink: #0f1b2a;
-  --color-muted: #5c6b7a;
-  --color-border: #e3e9ef;
+  --color-ink: #161427;
+  --color-muted: #6c6982;
+  --color-border: #e7e5f2;
 
-  --color-primary: #0e6e7d;
-  --color-primary-hover: #0b5a66;
+  --color-primary: #5a4ff3;
+  --color-primary-hover: #4a3fde;
   --color-primary-fg: #ffffff;
-  --color-primary-soft: #e2f1f3;
+  --color-primary-soft: #ebe9fe;
 
-  --color-accent: #f59e0b;
-  --color-accent-hover: #d98708;
-  --color-accent-soft: #fdf0d5;
+  --color-accent: #ff6a4d;
+  --color-accent-hover: #f2543a;
+  --color-accent-soft: #ffe7e1;
 
   /* status chips */
-  --color-status-uploading: #6366f1;
-  --color-status-transcribing: #0e6e7d;
-  --color-status-summarizing: #f59e0b;
-  --color-status-complete: #16a34a;
-  --color-status-error: #dc2626;
+  --color-status-uploading: #8b5cf6;
+  --color-status-transcribing: #5a4ff3;
+  --color-status-summarizing: #ff6a4d;
+  --color-status-complete: #10b981;
+  --color-status-error: #e11d48;
 
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+}
+
+/*
+  Per-module accent vars. Default to the brand; each module's layout overrides
+  these on its subtree so components reading var(--accent) pick up the module
+  identity automatically. Non-module pages (auth) get the brand fallback.
+*/
+:root {
+  --accent: var(--color-primary);
+  --accent-hover: var(--color-primary-hover);
+  --accent-soft: var(--color-primary-soft);
+  --accent-fg: #ffffff;
+  --grad-from: #5a4ff3;
+  --grad-via: #8b5cf6;
+  --grad-to: #ff6a4d;
 }
 
 html,
@@ -42,4 +57,19 @@ body {
   font-family: var(--font-sans), system-ui, -apple-system, Segoe UI, Roboto,
     Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Signature brand gradient used by the logo + a few brand surfaces. */
+.omni-gradient {
+  background-image: linear-gradient(135deg, #5a4ff3 0%, #8b5cf6 50%, #ff6a4d 120%);
+}
+
+/* Module hero gradient — driven by the active module's --grad-* vars. */
+.omni-hero {
+  background-image: linear-gradient(
+    135deg,
+    var(--grad-from) 0%,
+    var(--grad-via) 55%,
+    var(--grad-to) 130%
+  );
 }

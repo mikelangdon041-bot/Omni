@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Search, ArrowUpDown } from "lucide-react";
-import { PageHeader } from "@/components/PageHeader";
+import { Plus, Search, ArrowUpDown, MapPin } from "lucide-react";
+import { ModuleHero } from "@/components/ui/ModuleHero";
 import { Button } from "@/components/territory/ui/Button";
 import { KOLCard } from "@/components/territory/KOLCard";
 import { AddKOLModal } from "@/components/territory/AddKOLModal";
@@ -115,28 +115,29 @@ export default function TerritoryDashboard() {
 
   return (
     <>
-      <PageHeader
-        title="Territory Planning"
-        subtitle="Manage your KOLs, outreach cycles, and engagement."
+      <ModuleHero
+        eyebrow="Territory Planning"
+        icon={MapPin}
+        title="Your KOL territory"
+        subtitle="Track contacts, outreach cycles, and engagement across your region."
+        stats={[
+          { label: "KOLs", value: stats.total },
+          { label: "Active", value: stats.active },
+          { label: "Advocates", value: stats.advocates },
+          {
+            label: stats.overdue > 0 ? `Tasks · ${stats.overdue} overdue` : "Open tasks",
+            value: stats.tasks,
+          },
+        ]}
         action={
-          <Button onClick={() => setShowAdd(true)}>
+          <Button
+            onClick={() => setShowAdd(true)}
+            className="!bg-white !text-ink hover:!bg-white/90"
+          >
             <Plus size={16} /> Add KOL
           </Button>
         }
       />
-
-      {/* Stats */}
-      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="Total KOLs" value={stats.total} />
-        <Stat label="Active" value={stats.active} />
-        <Stat label="Advocates" value={stats.advocates} />
-        <Stat
-          label="Open tasks"
-          value={stats.tasks}
-          hint={stats.overdue > 0 ? `${stats.overdue} overdue` : undefined}
-          hintColor="text-status-error"
-        />
-      </div>
 
       {/* List tabs */}
       <div className="mb-4 flex flex-wrap items-center gap-1.5">
@@ -245,26 +246,6 @@ export default function TerritoryDashboard() {
   );
 }
 
-function Stat({
-  label,
-  value,
-  hint,
-  hintColor,
-}: {
-  label: string;
-  value: number;
-  hint?: string;
-  hintColor?: string;
-}) {
-  return (
-    <div className="rounded-xl border border-border bg-surface p-4 shadow-sm">
-      <p className="text-2xl font-semibold tracking-tight">{value}</p>
-      <p className="text-xs text-muted">{label}</p>
-      {hint && <p className={cn("mt-0.5 text-xs font-medium", hintColor)}>{hint}</p>}
-    </div>
-  );
-}
-
 function ListTab({
   label,
   active,
@@ -280,7 +261,7 @@ function ListTab({
       className={cn(
         "rounded-full px-3 py-1 text-xs font-medium transition",
         active
-          ? "bg-primary text-primary-fg"
+          ? "bg-[var(--accent)] text-[var(--accent-fg)]"
           : "bg-surface text-muted hover:bg-canvas hover:text-ink border border-border",
       )}
     >

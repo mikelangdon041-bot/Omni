@@ -1,6 +1,7 @@
 import Link from "next/link";
+import { Mic } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
-import { PageHeader } from "@/components/PageHeader";
+import { ModuleHero } from "@/components/ui/ModuleHero";
 import { StatusChip } from "@/components/StatusChip";
 import { NewRecording } from "./NewRecording";
 
@@ -13,11 +14,21 @@ export default async function InterviewPrepPage() {
     .select("id, title, status, total_chunks, chunks_done, created_at")
     .order("created_at", { ascending: false });
 
+  const total = recordings?.length || 0;
+  const completed =
+    recordings?.filter((r) => r.status === "complete").length || 0;
+
   return (
     <>
-      <PageHeader
-        title="Interview Prep"
-        subtitle="Upload a recording, get a transcript and a nested summary."
+      <ModuleHero
+        eyebrow="Interview Prep"
+        icon={Mic}
+        title="Turn recordings into nested summaries"
+        subtitle="Upload an interview, get a full transcript and an organized, de-duplicated outline."
+        stats={[
+          { label: "Recordings", value: total },
+          { label: "Completed", value: completed },
+        ]}
       />
 
       <NewRecording />

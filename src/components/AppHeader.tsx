@@ -5,19 +5,17 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Menu, X, Settings, LogOut } from "lucide-react";
 import { Logo } from "@/components/Logo";
-import { NAV_ITEMS } from "@/lib/nav";
+import { MODULES, moduleForPath } from "@/lib/modules";
 
 export function AppHeader({ username }: { username: string }) {
   const pathname = usePathname();
   const router = useRouter();
   const [open, setOpen] = useState(false);
 
-  // Close the drawer on navigation.
   useEffect(() => {
     setOpen(false);
   }, [pathname]);
 
-  // Lock scroll + Escape-to-close while the drawer is open.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
@@ -38,11 +36,7 @@ export function AppHeader({ username }: { username: string }) {
     router.refresh();
   }
 
-  // The currently active module (for the header title).
-  const active =
-    NAV_ITEMS.find((i) =>
-      i.href === "/" ? pathname === "/" : pathname.startsWith(i.href),
-    ) || NAV_ITEMS[0];
+  const active = moduleForPath(pathname);
 
   return (
     <>
@@ -57,9 +51,16 @@ export function AppHeader({ username }: { username: string }) {
         <Link href="/" className="flex items-center gap-2">
           <Logo />
         </Link>
-        <span className="ml-1 hidden text-sm text-muted sm:inline">
-          / {active.label}
-        </span>
+        {active.slug !== "" && (
+          <span className="ml-1 hidden items-center gap-1.5 text-sm text-muted sm:flex">
+            <span className="text-border">/</span>
+            <span
+              className="h-2 w-2 rounded-full"
+              style={{ backgroundColor: active.theme.accent }}
+            />
+            {active.label}
+          </span>
+        )}
         <div className="ml-auto">
           <span className="grid h-8 w-8 place-items-center rounded-full bg-accent-soft text-sm font-semibold text-accent">
             {username.slice(0, 1).toUpperCase()}
@@ -67,7 +68,7 @@ export function AppHeader({ username }: { username: string }) {
         </div>
       </header>
 
-      {/* Drawer */}
+      {/* App-switcher drawer */}
       {open && (
         <div className="fixed inset-0 z-40">
           <div
@@ -90,28 +91,27 @@ export function AppHeader({ username }: { username: string }) {
               Switch app
             </p>
             <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-1">
-              {NAV_ITEMS.map((item) => {
-                const isActive =
-                  item.href === "/"
-                    ? pathname === "/"
-                    : pathname.startsWith(item.href);
+              {MODULES.map((m) => {
+                const isActive = m.href === active.href;
+                const Icon = m.icon;
                 return (
                   <Link
-                    key={item.href}
-                    href={item.href}
+                    key={m.href}
+                    href={m.href}
                     className={`group flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition ${
                       isActive
-                        ? "bg-primary-soft font-medium text-primary"
+                        ? "bg-canvas font-medium text-ink"
                         : "text-muted hover:bg-canvas hover:text-ink"
                     }`}
                   >
                     <span
-                      className={`text-base ${isActive ? "text-accent" : "text-muted group-hover:text-ink"}`}
+                      className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-white"
+                      style={{ backgroundColor: m.theme.accent }}
                     >
-                      {item.icon}
+                      <Icon size={15} />
                     </span>
-                    <span className="flex-1">{item.label}</span>
-                    {!item.ready && (
+                    <span className="flex-1">{m.label}</span>
+                    {!m.ready && (
                       <span className="rounded-full bg-canvas px-1.5 py-0.5 text-[10px] font-medium text-muted">
                         soon
                       </span>
