@@ -6,6 +6,7 @@ import { ModuleHero } from "@/components/ui/ModuleHero";
 import { Button } from "@/components/territory/ui/Button";
 import { KOLCard } from "@/components/territory/KOLCard";
 import { AddKOLModal } from "@/components/territory/AddKOLModal";
+import { TerritoryTasks } from "@/components/territory/TerritoryTasks";
 import { useKOLs, useReminders, useUserId } from "@/lib/territory/hooks";
 import {
   RELATIONSHIP_LABELS,
@@ -130,12 +131,15 @@ export default function TerritoryDashboard() {
           },
         ]}
         action={
-          <Button
-            onClick={() => setShowAdd(true)}
-            className="!bg-white !text-ink hover:!bg-white/90"
-          >
-            <Plus size={16} /> Add KOL
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <TerritoryTasks userId={userId} />
+            <Button
+              onClick={() => setShowAdd(true)}
+              className="!bg-white !text-ink hover:!bg-white/90"
+            >
+              <Plus size={16} /> Add KOL
+            </Button>
+          </div>
         }
       />
 
