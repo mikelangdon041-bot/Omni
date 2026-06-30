@@ -9,9 +9,16 @@ import {
   MessageCircleQuestion,
   Share2,
   Trash2,
+  Mail,
+  Phone,
+  Headphones,
+  Users,
+  Plus,
+  ArrowLeft,
 } from "lucide-react";
 import type { CandidateActivity } from "@/lib/interview/types";
 import { Button } from "@/components/ui/Button";
+import { Modal } from "@/components/ui/Modal";
 
 interface InterviewItem {
   id: string;
@@ -26,7 +33,29 @@ const ICONS: Record<string, React.ElementType> = {
   recording: Mic,
   question_asked: MessageCircleQuestion,
   share: Share2,
+  email: Mail,
+  call: Phone,
+  phone_screen: Headphones,
+  interview: Users,
 };
+
+// Activity types in the picker. `interview` types jump to the Interviews tab.
+const ADD_TYPES: {
+  type: string;
+  label: string;
+  icon: React.ElementType;
+  interview?: boolean;
+}[] = [
+  { type: "note", label: "Note", icon: StickyNote },
+  { type: "email", label: "Email", icon: Mail },
+  { type: "call", label: "Call", icon: Phone },
+  { type: "phone_screen", label: "Phone screen", icon: Headphones, interview: true },
+  { type: "interview", label: "Interview", icon: Users, interview: true },
+];
+
+const TYPE_LABEL: Record<string, string> = Object.fromEntries(
+  ADD_TYPES.map((t) => [t.type, t.label]),
+);
 
 type Item =
   | { kind: "activity"; at: string; data: CandidateActivity }
@@ -40,6 +69,7 @@ export function ActivityTab({
   canEdit,
   log,
   remove,
+  onGoToInterviews,
 }: {
   activity: CandidateActivity[];
   interviews?: InterviewItem[];
@@ -53,8 +83,11 @@ export function ActivityTab({
     meta?: Record<string, unknown>,
   ) => Promise<unknown>;
   remove: (id: string) => Promise<unknown>;
+  onGoToInterviews?: () => void;
 }) {
-  const [note, setNote] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [chosen, setChosen] = useState<string | null>(null);
+  const [body, setBody] = useState("");
   const [saving, setSaving] = useState(false);
 
   // Merge notes/status-changes with interviews into one reverse-chron timeline.
@@ -63,32 +96,79 @@ export function ActivityTab({
     ...interviews.map((r) => ({ kind: "interview" as const, at: r.created_at, data: r })),
   ].sort((a, b) => +new Date(b.at) - +new Date(a.at));
 
-  async function addNote() {
-    const t = note.trim();
-    if (!t) return;
+  function pick(t: { type: string; interview?: boolean }) {
+    if (t.interview) {
+      setPickerOpen(false);
+      onGoToInterviews?.();
+      return;
+    }
+    setChosen(t.type);
+  }
+
+  async function saveActivity() {
+    if (!chosen) return;
     setSaving(true);
-    await log("note", t, userId);
-    setNote("");
+    await log(chosen, body.trim(), userId);
     setSaving(false);
+    setBody("");
+    setChosen(null);
+    setPickerOpen(false);
   }
 
   return (
     <div className="space-y-5">
       {canEdit && (
-        <div className="rounded-xl border border-border bg-surface p-4 shadow-sm">
-          <textarea
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="Log a note — a call, an update, an impression…"
-            className="w-full resize-y rounded-lg border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20"
-          />
-          <div className="mt-2 flex justify-end">
-            <Button size="sm" onClick={addNote} disabled={saving || !note.trim()}>
-              {saving ? "Adding…" : "Add note"}
-            </Button>
-          </div>
+        <div className="flex justify-end">
+          <Button onClick={() => { setChosen(null); setPickerOpen(true); }}>
+            <Plus size={16} /> Add activity
+          </Button>
         </div>
       )}
+
+      <Modal
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        title={chosen ? `Log ${TYPE_LABEL[chosen]?.toLowerCase()}` : "Add activity"}
+        size="sm"
+      >
+        {chosen ? (
+          <div className="space-y-3">
+            <textarea
+              autoFocus
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              placeholder="What happened?"
+              className="min-h-28 w-full resize-y rounded-lg border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20"
+            />
+            <div className="flex justify-between">
+              <Button variant="secondary" onClick={() => setChosen(null)}>
+                <ArrowLeft size={14} /> Back
+              </Button>
+              <Button onClick={saveActivity} disabled={saving || !body.trim()}>
+                {saving ? "Saving…" : "Log it"}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-2.5">
+            {ADD_TYPES.map((t) => (
+              <button
+                key={t.type}
+                onClick={() => pick(t)}
+                className="flex flex-col items-center gap-2 rounded-xl border border-border p-4 text-sm font-medium transition hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]"
+              >
+                <t.icon size={20} className="text-[var(--accent)]" />
+                {t.label}
+                {t.interview && (
+                  <span className="text-[10px] font-normal text-muted">
+                    → Interviews
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+      </Modal>
 
       {loading ? (
         <p className="py-8 text-center text-sm text-muted">Loading…</p>

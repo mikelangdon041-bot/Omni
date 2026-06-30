@@ -101,6 +101,7 @@ export default function CandidateDetailPage() {
           canEdit={canEdit}
           log={activity.log}
           remove={activity.remove}
+          onGoToInterviews={() => setTab("Interviews")}
         />
       )}
       {tab === "Interviews" && <CandidateRecordings candidateId={candidate.id} />}
