@@ -44,7 +44,7 @@ export default async function InterviewPrepPage() {
             {recordings.map((r) => {
               const detail =
                 r.status === "transcribing" && r.total_chunks
-                  ? `${r.chunks_done}/${r.total_chunks}`
+                  ? `${Math.round((r.chunks_done / r.total_chunks) * 100)}%`
                   : undefined;
               return (
                 <li key={r.id}>

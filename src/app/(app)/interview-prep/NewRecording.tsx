@@ -2,6 +2,9 @@
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Upload, ShieldCheck } from "lucide-react";
+import { Modal } from "@/components/ui/Modal";
+import { Button } from "@/components/ui/Button";
 
 type Phase = "idle" | "uploading" | "preparing" | "error";
 
@@ -12,13 +15,12 @@ export function NewRecording() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [consented, setConsented] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   async function handleUpload(file: File) {
     setError(null);
     const ext = file.name.split(".").pop()?.toLowerCase() || "bin";
 
-    // 1) Ask the server to create the record + sign a direct-to-storage URL.
     const signRes = await fetch("/api/recordings/sign-upload", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -27,7 +29,6 @@ export function NewRecording() {
     const signed = await signRes.json();
     if (!signRes.ok) throw new Error(signed.error || "Could not start upload");
 
-    // 2) PUT the bytes straight to storage via XHR (real progress events).
     setPhase("uploading");
     await new Promise<void>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
@@ -46,7 +47,6 @@ export function NewRecording() {
       xhr.send(file);
     });
 
-    // 3) Tell the server it's there → server chunks the audio.
     setPhase("preparing");
     const upRes = await fetch(`/api/recordings/${signed.recordingId}/uploaded`, {
       method: "POST",
@@ -54,7 +54,6 @@ export function NewRecording() {
     const up = await upRes.json();
     if (!upRes.ok) throw new Error(up.error || "Could not prepare audio");
 
-    // 4) Hand off to the detail page, which runs the transcription worker.
     router.push(`/interview-prep/${signed.recordingId}`);
   }
 
@@ -67,41 +66,19 @@ export function NewRecording() {
     });
   }
 
+  function approveAndPick() {
+    setConfirmOpen(false);
+    fileRef.current?.click();
+  }
+
   const busy = phase === "uploading" || phase === "preparing";
 
   return (
     <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
       <h2 className="font-semibold">New interview recording</h2>
       <p className="mt-1 text-sm text-muted">
-        Upload audio — we&apos;ll transcribe it and build a nested summary.
+        Upload audio — we&apos;ll transcribe it and build a detailed nested summary.
       </p>
-
-      {/* Consent / permission disclaimer — required before uploading. */}
-      <div className="mt-4 rounded-lg border border-accent/40 bg-accent-soft/60 p-4">
-        <p className="text-sm font-medium text-ink">
-          ⚠️ Consent required
-        </p>
-        <p className="mt-1 text-sm text-muted">
-          Only upload recordings you have permission to use. You are responsible
-          for obtaining the necessary consent from all participants (e.g. the
-          HCP/KOL) to record the conversation and to process it for transcription
-          and summarization, in line with your organization&apos;s policies and
-          applicable privacy laws.
-        </p>
-        <label className="mt-3 flex items-start gap-2.5 text-sm">
-          <input
-            type="checkbox"
-            checked={consented}
-            onChange={(e) => setConsented(e.target.checked)}
-            disabled={busy}
-            className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
-          />
-          <span className="text-ink">
-            I confirm I have permission and the necessary consent from all
-            participants to upload and use this recording.
-          </span>
-        </label>
-      </div>
 
       <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
         <label className="flex-1">
@@ -109,9 +86,9 @@ export function NewRecording() {
           <input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder="e.g. Dr. Patel — Phase III discussion"
+            placeholder="e.g. Jane Smith — Senior MSL screen"
             disabled={busy}
-            className="w-full rounded-lg border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:opacity-60"
+            className="w-full rounded-lg border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20 disabled:opacity-60"
           />
         </label>
 
@@ -123,25 +100,25 @@ export function NewRecording() {
           disabled={busy}
           className="hidden"
         />
-        <button
+        <Button
           type="button"
-          onClick={() => fileRef.current?.click()}
-          disabled={busy || !consented}
-          title={!consented ? "Confirm consent above to enable upload" : undefined}
-          className="inline-flex shrink-0 items-center justify-center rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-fg shadow-sm transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
+          onClick={() => setConfirmOpen(true)}
+          disabled={busy}
+          className="shrink-0"
         >
+          <Upload size={16} />
           {phase === "uploading"
             ? `Uploading… ${progress}%`
             : phase === "preparing"
               ? "Preparing audio…"
-              : "Choose audio file"}
-        </button>
+              : "Upload audio"}
+        </Button>
       </div>
 
       {phase === "uploading" && (
         <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-canvas">
           <div
-            className="h-full rounded-full bg-accent transition-all"
+            className="h-full rounded-full bg-[var(--accent)] transition-all"
             style={{ width: `${progress}%` }}
           />
         </div>
@@ -152,6 +129,34 @@ export function NewRecording() {
           {error}
         </p>
       )}
+
+      {/* Consent gate — shown only when the user initiates an upload. */}
+      <Modal
+        open={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        title="Before you upload"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <div className="flex gap-3">
+            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[var(--accent-soft)] text-[var(--accent)]">
+              <ShieldCheck size={18} />
+            </span>
+            <p className="text-sm text-muted">
+              Only upload recordings you have permission to use. By continuing you
+              confirm you have the necessary consent from all participants to
+              record and process this conversation, per your organization&apos;s
+              policies and applicable privacy laws.
+            </p>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setConfirmOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={approveAndPick}>I have consent — choose file</Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

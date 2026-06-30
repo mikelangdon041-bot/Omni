@@ -35,27 +35,37 @@ export async function transcribeChunk(
   return text.trim();
 }
 
-const SUMMARY_SYSTEM_PROMPT = `You organize an interview transcript into a faithful, nested bullet-point outline.
+const SUMMARY_SYSTEM_PROMPT = `You turn an interview transcript into a thorough, faithful, nested bullet outline that someone who was NOT in the room could read and fully understand what was covered.
 
-Rules:
-- Output ONLY a nested bullet list. No preamble, no headings, no closing remarks.
-- Use "- " for every bullet. Indent sub-points with exactly 2 spaces per level.
-- Top-level bullet = a main topic or theme. Indented sub-bullets = supporting details under it. Go deeper (4, 6 spaces) where the detail warrants it.
-- Group similar ideas together even if they were said at different times. Do not repeat the same point twice.
-- Preserve every specific number, name, date, dosage, product, and quote. Do not round or generalize them away.
-- Only include what was actually said. Do not infer, assume, or add information that is not in the transcript.
-- Keep each bullet concise (a phrase or short sentence), not a paragraph.`;
+Structure:
+- Output ONLY a nested bullet list. No preamble, no headings, no closing remarks, no markdown bold/italics.
+- Use "- " for every bullet. Indent each level with exactly 2 spaces (0, 2, 4, 6 …).
+- Each top-level bullet is a distinct topic, question, or theme from the conversation. Under it, nest the discussion: what was asked, how it was answered, examples given, follow-ups, and any conclusions. Go 2–3 levels deep where the content warrants it.
+- Organize the whole interview top to bottom: opening/background, each substantive topic or question explored, and any wrap-up or next steps.
 
-// Summarize a full transcript into an indented bullet outline (plain text).
+Completeness (most important):
+- Every bullet must be a COMPLETE, SELF-CONTAINED sentence — never a 2–6 word label or fragment. Write it so it stands on its own without the heading.
+- Capture the substance, not just the topic: include the specifics of what was actually said — names, numbers, dates, companies, products, roles, projects, metrics, tools, outcomes, opinions, concerns, and reasoning.
+- Be comprehensive. It is better to include a detail than to drop it. Do not compress multiple distinct points into one vague bullet.
+- Group genuinely repeated ideas together so nothing is said twice, but do not omit distinct details just to be brief.
+
+Faithfulness:
+- Include only what was actually said. Do not infer, assume, embellish, or add information that is not in the transcript.
+- Preserve the speaker's meaning and any specific figures or quotes accurately.`;
+
+// Summarize a full transcript into a detailed indented bullet outline (plain text).
 export async function summarizeTranscript(transcript: string): Promise<string> {
+  // Allow generous output so long interviews aren't truncated into terse bullets.
+  const maxTokens = Math.min(8000, Math.max(2000, Math.round(transcript.length / 3)));
   const res = await openai().chat.completions.create({
     model: SUMMARY_MODEL,
     temperature: 0.3,
+    max_tokens: maxTokens,
     messages: [
       { role: "system", content: SUMMARY_SYSTEM_PROMPT },
       {
         role: "user",
-        content: `Organize this interview transcript into a nested bullet outline:\n\n${transcript}`,
+        content: `Organize this interview transcript into a detailed, complete nested bullet outline that captures everything discussed:\n\n${transcript}`,
       },
     ],
   });

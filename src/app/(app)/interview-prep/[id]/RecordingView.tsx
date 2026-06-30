@@ -128,9 +128,13 @@ export function RecordingView({
     recording.status === "summarizing";
 
   const chunksDone = liveProgress ?? recording.chunks_done;
+  const pct =
+    recording.total_chunks > 0
+      ? Math.round((chunksDone / recording.total_chunks) * 100)
+      : 0;
   const detail =
     recording.status === "transcribing" && recording.total_chunks
-      ? `${chunksDone}/${recording.total_chunks}`
+      ? `${pct}%`
       : undefined;
 
   return (
@@ -162,15 +166,11 @@ export function RecordingView({
             <div className="mt-3">
               <div className="h-2 w-full overflow-hidden rounded-full bg-canvas">
                 <div
-                  className="h-full rounded-full bg-accent transition-all"
-                  style={{
-                    width: `${Math.round((chunksDone / recording.total_chunks) * 100)}%`,
-                  }}
+                  className="h-full rounded-full bg-[var(--accent)] transition-all"
+                  style={{ width: `${pct}%` }}
                 />
               </div>
-              <p className="mt-1.5 text-xs text-muted">
-                {chunksDone} of {recording.total_chunks} segments
-              </p>
+              <p className="mt-1.5 text-xs text-muted">{pct}% transcribed</p>
             </div>
           )}
           <p className="mt-3 text-xs text-muted">
