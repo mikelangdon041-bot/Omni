@@ -7,6 +7,7 @@ import { Button } from "@/components/territory/ui/Button";
 import { KOLCard } from "@/components/territory/KOLCard";
 import { AddKOLModal } from "@/components/territory/AddKOLModal";
 import { TerritoryTasks } from "@/components/territory/TerritoryTasks";
+import { ImportExport } from "@/components/territory/ImportExport";
 import { useKOLs, useReminders, useUserId } from "@/lib/territory/hooks";
 import {
   RELATIONSHIP_LABELS,
@@ -161,6 +162,14 @@ export default function TerritoryDashboard() {
         >
           + New list
         </button>
+        <div className="ml-auto">
+          <ImportExport
+            kols={kols}
+            onImport={async (rows) => {
+              for (const r of rows) await add(r);
+            }}
+          />
+        </div>
       </div>
 
       {/* Search + filters */}
