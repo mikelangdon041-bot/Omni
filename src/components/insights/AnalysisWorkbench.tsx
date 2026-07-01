@@ -11,10 +11,10 @@ import {
   BarChart3,
   Loader2,
 } from "lucide-react";
+import { Building2, User } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useUserId } from "@/lib/territory/hooks";
-import { useKOLs } from "@/lib/territory/hooks";
 import {
   useOrgProfile,
   useResponses,
@@ -22,6 +22,7 @@ import {
   useSurveyDefinition,
 } from "@/lib/insights/hooks";
 import { runAnalysis, type AnalyticsData } from "@/lib/insights/analytics";
+import type { KOL } from "@/lib/territory/types";
 import {
   defaultSpec,
   type AnalysisSpec,
@@ -51,12 +52,23 @@ const FILTER_OPS: { value: string; label: string }[] = [
 
 export function AnalysisWorkbench() {
   const { userId } = useUserId();
-  const { orgId } = useOrgProfile();
+  const { orgId, isAdmin } = useOrgProfile();
+  const [scope, setScope] = useState<"mine" | "org">("mine");
   const { template, questions, options, loading: defLoading } =
     useSurveyDefinition();
-  const { responses, answers, loading: respLoading } = useResponses(userId);
-  const { kols } = useKOLs(userId);
+  const { responses, answers, loading: respLoading } = useResponses(
+    userId,
+    isAdmin ? scope : "mine",
+  );
   const saved = useSavedAnalyses(userId);
+
+  // KOLs come from the responses themselves (works for both "mine" and the
+  // admin org-wide scope without needing a separate territory query).
+  const kols = useMemo(() => {
+    const byId = new Map<string, KOL>();
+    for (const r of responses) if (r.kol) byId.set(r.kol.id, r.kol);
+    return [...byId.values()];
+  }, [responses]);
 
   const [spec, setSpec] = useState<AnalysisSpec>(defaultSpec());
   const [prompt, setPrompt] = useState("");
@@ -139,8 +151,31 @@ export function AnalysisWorkbench() {
     await saved.save(title, activeSpec, template?.id ?? null, orgId);
   }
 
+  // Admin-only scope switch: analyze your own KOLs, or the whole organization.
+  const scopeToggle = isAdmin ? (
+    <div className="mb-4 inline-flex rounded-lg border border-border bg-surface p-0.5 shadow-sm">
+      <ScopeButton
+        active={scope === "mine"}
+        onClick={() => setScope("mine")}
+        icon={User}
+        label="My KOLs"
+      />
+      <ScopeButton
+        active={scope === "org"}
+        onClick={() => setScope("org")}
+        icon={Building2}
+        label="All KOLs (org)"
+      />
+    </div>
+  ) : null;
+
   if (defLoading || respLoading) {
-    return <p className="py-12 text-center text-sm text-muted">Loading…</p>;
+    return (
+      <>
+        {scopeToggle}
+        <p className="py-12 text-center text-sm text-muted">Loading…</p>
+      </>
+    );
   }
   if (!template) {
     return (
@@ -152,10 +187,17 @@ export function AnalysisWorkbench() {
   }
   if (responses.length === 0) {
     return (
-      <EmptyState
-        title="No responses yet"
-        hint="Add KOLs and answer some surveys in the KOLs tab. Your analytics will appear here."
-      />
+      <>
+        {scopeToggle}
+        <EmptyState
+          title="No responses yet"
+          hint={
+            scope === "org"
+              ? "No one in your organization has answered any surveys yet."
+              : "Add KOLs and answer some surveys in the KOLs tab. Your analytics will appear here."
+          }
+        />
+      </>
     );
   }
 
@@ -166,6 +208,17 @@ export function AnalysisWorkbench() {
 
   return (
     <div className="flex flex-col gap-5">
+      {isAdmin && (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {scopeToggle}
+          <span className="text-xs text-muted">
+            {scope === "org"
+              ? `Organization-wide · ${kols.length} KOLs across all MSLs`
+              : `Your KOLs · ${kols.length}`}
+          </span>
+        </div>
+      )}
+
       {/* AI free-text bar */}
       <div className="rounded-2xl border border-border bg-gradient-to-br from-accent-soft/60 to-surface p-4 shadow-sm">
         <div className="flex items-center gap-2">
@@ -412,6 +465,31 @@ function ControlSelect({
         ))}
       </select>
     </label>
+  );
+}
+
+function ScopeButton({
+  active,
+  onClick,
+  icon: Icon,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: typeof User;
+  label: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={
+        active
+          ? "inline-flex items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-[var(--accent-fg)]"
+          : "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-muted hover:text-ink"
+      }
+    >
+      <Icon size={14} /> {label}
+    </button>
   );
 }
 

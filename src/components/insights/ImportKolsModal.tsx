@@ -44,6 +44,18 @@ export function ImportKolsModal({
     });
   }
 
+  const allFilteredPicked =
+    filtered.length > 0 && filtered.every((k) => picked.has(k.id));
+
+  function toggleAll() {
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (allFilteredPicked) for (const k of filtered) next.delete(k.id);
+      else for (const k of filtered) next.add(k.id);
+      return next;
+    });
+  }
+
   async function handleImport() {
     if (picked.size === 0) return;
     setBusy(true);
@@ -68,6 +80,25 @@ export function ImportKolsModal({
             className="w-full rounded-lg border border-border bg-surface py-2.5 pl-9 pr-3 text-sm outline-none focus:border-[var(--accent)]"
           />
         </div>
+
+        {filtered.length > 0 && (
+          <button
+            onClick={toggleAll}
+            className="flex items-center gap-2 self-start rounded-md px-1 text-xs font-medium text-[var(--accent)] hover:underline"
+          >
+            <span
+              className={cn(
+                "grid h-4 w-4 place-items-center rounded border",
+                allFilteredPicked
+                  ? "border-[var(--accent)] bg-[var(--accent)] text-white"
+                  : "border-border",
+              )}
+            >
+              {allFilteredPicked && <Check size={11} />}
+            </span>
+            {allFilteredPicked ? "Clear all" : `Select all (${filtered.length})`}
+          </button>
+        )}
 
         <div className="max-h-80 overflow-y-auto rounded-lg border border-border">
           {filtered.length === 0 ? (

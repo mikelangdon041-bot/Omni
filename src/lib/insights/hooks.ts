@@ -281,18 +281,26 @@ export interface ResponseWithKol extends SurveyResponse {
   kol: KOL;
 }
 
-export function useResponses(userId: string | null) {
+// scope "mine" = the signed-in MSL's own KOL surveys (default). scope "org" =
+// every KOL survey in the organization — RLS only returns these for org admins
+// (see 0012), so it's safe to request as any user.
+export function useResponses(
+  userId: string | null,
+  scope: "mine" | "org" = "mine",
+) {
   const [responses, setResponses] = useState<ResponseWithKol[]>([]);
   const [answers, setAnswers] = useState<SurveyAnswer[]>([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     if (!userId) return;
-    const { data } = await supabase
+    setLoading(true);
+    let query = supabase
       .from("survey_responses")
       .select("*, kol:kols(*)")
-      .eq("user_id", userId)
       .order("updated_at", { ascending: false });
+    if (scope === "mine") query = query.eq("user_id", userId);
+    const { data } = await query;
     const rows = (data as ResponseWithKol[]) || [];
     setResponses(rows);
 
@@ -307,7 +315,7 @@ export function useResponses(userId: string | null) {
       setAnswers([]);
     }
     setLoading(false);
-  }, [userId]);
+  }, [userId, scope]);
 
   useEffect(() => {
     void refresh();

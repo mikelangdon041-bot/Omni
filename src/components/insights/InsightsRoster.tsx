@@ -163,7 +163,7 @@ export function InsightsRoster({ userId }: { userId: string | null }) {
         </select>
         <div className="flex gap-2">
           <Button variant="secondary" onClick={() => setShowImport(true)}>
-            <Download size={16} /> Import
+            <Download size={16} /> Import KOLs
           </Button>
           <Button onClick={() => setShowAdd(true)}>
             <Plus size={16} /> Add KOL
