@@ -58,13 +58,19 @@ export default async function SettingsPage() {
         {isAdmin && (
           <section className="rounded-xl border border-border bg-surface p-5 shadow-sm">
             <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">
-              Company
+              Team & access
             </h2>
+            <p className="mb-3 text-sm text-muted">
+              By default a member only sees the interviews they&apos;re assigned to
+              (plus that candidate&apos;s overview and their own scorecard). Make
+              someone an <span className="font-medium text-ink">admin</span> here to
+              give them access to everything.
+            </p>
             <Link
               href="/admin"
               className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface px-4 py-2.5 text-sm font-medium text-ink transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
             >
-              <Shield size={16} /> Manage members
+              <Shield size={16} /> Manage members &amp; roles
             </Link>
           </section>
         )}
