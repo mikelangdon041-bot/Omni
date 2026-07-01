@@ -6,6 +6,7 @@ import { Modal } from "@/components/territory/ui/Modal";
 import { Input, Select } from "@/components/territory/ui/Input";
 import { Button } from "@/components/territory/ui/Button";
 import { RELATIONSHIP_LABELS } from "@/lib/territory/utils";
+import { useUserId, useFieldSuggestions } from "@/lib/territory/hooks";
 import type { KOL, RelationshipLevel } from "@/lib/territory/types";
 
 export function AddKOLModal({
@@ -20,8 +21,14 @@ export function AddKOLModal({
   lists: string[];
 }) {
   const router = useRouter();
+  const { userId } = useUserId();
+  const suggestions = useFieldSuggestions(userId);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const ac = (opts?: string[]) =>
+    opts && opts.length ? (
+      opts.map((o) => <option key={o} value={o} />)
+    ) : null;
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -66,12 +73,16 @@ export function AddKOLModal({
         <section className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Input label="First name" name="first_name" required />
           <Input label="Last name" name="last_name" required />
-          <Input label="Title / position" name="title_position" />
-          <Input label="Specialty" name="specialty" />
-          <Input label="Institution" name="institution" />
+          <Input label="Title / position" name="title_position" list="ac-title" />
+          <Input label="Specialty" name="specialty" list="ac-specialty" />
+          <Input label="Institution" name="institution" list="ac-institution" />
           <Input label="Phone" name="phone" />
           <Input label="Email" name="email" type="email" />
-          <Input label="Address" name="address" placeholder="City, ST 12345" />
+          <Input label="Address" name="address" placeholder="City, ST 12345" list="ac-address" />
+          <datalist id="ac-title">{ac(suggestions.title_position)}</datalist>
+          <datalist id="ac-specialty">{ac(suggestions.specialty)}</datalist>
+          <datalist id="ac-institution">{ac(suggestions.institution)}</datalist>
+          <datalist id="ac-address">{ac(suggestions.address)}</datalist>
         </section>
 
         <section className="grid grid-cols-1 gap-4 sm:grid-cols-3">
