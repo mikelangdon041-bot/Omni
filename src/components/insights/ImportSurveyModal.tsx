@@ -89,6 +89,14 @@ export function ImportSurveyModal({
     setDrafts((prev) => prev.map((d) => (d.tempId === tempId ? { ...d, ...p } : d)));
   }
 
+  function setAllChoice(type: "single" | "multi") {
+    setDrafts((prev) =>
+      prev.map((d) =>
+        d.type === "single" || d.type === "multi" ? { ...d, type } : d,
+      ),
+    );
+  }
+
   async function doImport() {
     const included = new Set(drafts.filter((d) => d.include).map((d) => d.tempId));
     const final: ImportDraftQuestion[] = drafts
@@ -203,6 +211,22 @@ export function ImportSurveyModal({
               className="text-xs font-medium text-[var(--accent)] hover:underline"
             >
               Re-detect
+            </button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 rounded-lg bg-canvas px-3 py-2 text-xs">
+            <span className="text-muted">Set all choice questions to:</span>
+            <button
+              onClick={() => setAllChoice("single")}
+              className="rounded-md border border-border bg-surface px-2 py-1 font-medium hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              Choose one
+            </button>
+            <button
+              onClick={() => setAllChoice("multi")}
+              className="rounded-md border border-border bg-surface px-2 py-1 font-medium hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              Select all that apply
             </button>
           </div>
 

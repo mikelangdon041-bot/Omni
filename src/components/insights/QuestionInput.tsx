@@ -19,13 +19,15 @@ export function QuestionInput({
     case "single":
     case "boolean":
       return (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-col gap-1.5">
+          <div className="flex flex-wrap gap-2">
           {node.options.map((o) => {
             const active = selected.has(o.id);
             return (
               <button
                 key={o.id}
-                onClick={() => onChange({ optionIds: [o.id] })}
+                // Click the selected option again to clear the answer.
+                onClick={() => onChange(active ? {} : { optionIds: [o.id] })}
                 className={cn(
                   "rounded-lg border px-3.5 py-2 text-sm font-medium transition",
                   active
@@ -43,6 +45,10 @@ export function QuestionInput({
               </button>
             );
           })}
+          </div>
+          {selected.size > 0 && (
+            <span className="text-[11px] text-muted">Tap the selected answer again to clear it.</span>
+          )}
         </div>
       );
 

@@ -42,6 +42,13 @@ const KOL_GROUPINGS: { value: GroupBy; label: string }[] = [
   { value: "kol", label: "Individual KOL" },
 ];
 
+const EXAMPLE_PROMPTS = [
+  "Overall impressions of the drug",
+  "Efficacy by specialty",
+  "What trends am I seeing?",
+  "Anything out of the ordinary?",
+];
+
 const FILTER_OPS: { value: string; label: string }[] = [
   { value: "is", label: "is" },
   { value: "is_not", label: "is not" },
@@ -53,7 +60,8 @@ const FILTER_OPS: { value: string; label: string }[] = [
 export function AnalysisWorkbench() {
   const { userId } = useUserId();
   const { orgId, isAdmin } = useOrgProfile();
-  const [scope, setScope] = useState<"mine" | "org">("mine");
+  // Admins default to the whole organization; they can narrow to their own KOLs.
+  const [scope, setScope] = useState<"mine" | "org">("org");
   const { template, questions, options, loading: defLoading } =
     useSurveyDefinition();
   const { responses, answers, loading: respLoading } = useResponses(
@@ -219,15 +227,30 @@ export function AnalysisWorkbench() {
         </div>
       )}
 
-      {/* AI free-text bar */}
-      <div className="rounded-2xl border border-border bg-gradient-to-br from-accent-soft/60 to-surface p-4 shadow-sm">
-        <div className="flex items-center gap-2">
-          <Wand2 size={18} className="shrink-0 text-[var(--accent)]" />
+      {/* Ask-your-data panel */}
+      <div className="rounded-2xl border border-border bg-gradient-to-br from-accent-soft/60 to-surface p-5 shadow-sm">
+        <div className="mb-3 flex items-start gap-2.5">
+          <Wand2 size={20} className="mt-0.5 shrink-0 text-[var(--accent)]" />
+          <div>
+            <h3 className="text-sm font-semibold text-ink">
+              Ask your data in plain language
+            </h3>
+            <p className="mt-0.5 text-xs text-muted">
+              Describe what you want to see and we&apos;ll build the chart —
+              compare answers across specialty, tier or relationship, filter to a
+              subset of KOLs, or ask open questions like{" "}
+              <span className="italic">“what trends am I seeing?”</span> or{" "}
+              <span className="italic">“anything out of the ordinary?”</span>
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 rounded-xl border border-border bg-surface px-3 py-2 shadow-sm">
           <input
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && runAi()}
-            placeholder="Ask in plain English — e.g. “average efficacy by specialty for KOLs who use Drug X”"
+            placeholder="What do you want to analyze?"
             className="w-full bg-transparent text-sm outline-none placeholder:text-muted"
           />
           <Button onClick={runAi} disabled={aiBusy || !prompt.trim()}>
@@ -235,25 +258,41 @@ export function AnalysisWorkbench() {
             Analyze
           </Button>
         </div>
-        <div className="mt-2 flex flex-wrap items-center gap-2">
+
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+          <span className="text-[11px] font-medium text-muted">Try:</span>
+          {EXAMPLE_PROMPTS.map((ex) => (
+            <button
+              key={ex}
+              onClick={() => setPrompt(ex)}
+              className="rounded-full border border-border bg-surface/70 px-2.5 py-1 text-[11px] text-muted transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              {ex}
+            </button>
+          ))}
           <button
             onClick={loadSuggestions}
             disabled={suggestBusy}
-            className="inline-flex items-center gap-1.5 rounded-full bg-surface px-2.5 py-1 text-xs font-medium text-[var(--accent)] shadow-sm transition hover:bg-white disabled:opacity-60"
+            className="inline-flex items-center gap-1.5 rounded-full bg-[var(--accent)] px-2.5 py-1 text-[11px] font-medium text-[var(--accent-fg)] shadow-sm transition hover:opacity-90 disabled:opacity-60"
           >
-            {suggestBusy ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-            Suggest insights
+            {suggestBusy ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
+            Suggest insights for me
           </button>
-          {suggestions.map((s, i) => (
-            <button
-              key={i}
-              onClick={() => setSpec(s.spec)}
-              className="rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-ink transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
-            >
-              {s.title}
-            </button>
-          ))}
         </div>
+
+        {suggestions.length > 0 && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {suggestions.map((s, i) => (
+              <button
+                key={i}
+                onClick={() => setSpec(s.spec)}
+                className="rounded-full border border-[var(--accent)]/40 bg-surface px-2.5 py-1 text-[11px] text-ink transition hover:bg-accent-soft hover:text-[var(--accent)]"
+              >
+                ✨ {s.title}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {error && (

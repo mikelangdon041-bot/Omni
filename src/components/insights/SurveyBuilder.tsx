@@ -61,6 +61,7 @@ export function SurveyBuilder() {
     updateOption,
     removeOption,
     bulkImport,
+    setAllChoiceType,
   } = admin;
 
   const [editor, setEditor] = useState<EditorCtx | null>(null);
@@ -245,6 +246,32 @@ export function SurveyBuilder() {
           )}
         </div>
       </div>
+
+      {/* Bulk answer-style control */}
+      {questions.some((q) => q.type === "single" || q.type === "multi") && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm shadow-sm">
+          <span className="text-muted">Set all choice questions to:</span>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={busy}
+            onClick={() => setAllChoiceType(template.id, "single")}
+          >
+            Choose one (single)
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={busy}
+            onClick={() => setAllChoiceType(template.id, "multi")}
+          >
+            Select all that apply (multiple)
+          </Button>
+          <span className="text-xs text-muted">
+            (or set each question individually below)
+          </span>
+        </div>
+      )}
 
       {/* Question tree */}
       {tree.length === 0 ? (

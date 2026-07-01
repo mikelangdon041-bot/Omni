@@ -196,6 +196,20 @@ export function useSurveyAdmin(orgId: string | null) {
     [def],
   );
 
+  // Bulk-switch every choice question (single/multi) in the template to one
+  // answer type — "make them all single-select" / "all multi-select" in one go.
+  const setAllChoiceType = useCallback(
+    async (templateId: string, type: "single" | "multi") => {
+      await supabase
+        .from("survey_questions")
+        .update({ type })
+        .eq("template_id", templateId)
+        .in("type", ["single", "multi"]);
+      await def.refresh();
+    },
+    [def],
+  );
+
   // Bulk-create a reviewed import draft into a template: questions in document
   // order (parents first) with their options + branch links, one refresh at end.
   const bulkImport = useCallback(
@@ -270,6 +284,7 @@ export function useSurveyAdmin(orgId: string | null) {
     updateOption,
     removeOption,
     bulkImport,
+    setAllChoiceType,
   };
 }
 
