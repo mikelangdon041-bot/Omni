@@ -16,6 +16,7 @@ import {
   Play,
 } from "lucide-react";
 import { BackButton } from "@/components/BackButton";
+import { AddTaskButton } from "@/components/AddTaskButton";
 import { createClient } from "@/lib/supabase/client";
 import {
   useInterview,
@@ -224,6 +225,12 @@ function Header({
           >
             <UserPlus size={14} /> Assign
           </button>
+          <AddTaskButton
+            app="interview"
+            link={`/interview-prep/interview/${interview.id}`}
+            entityLabel={candidateNameStr ? `${candidateNameStr} · ${interview.title}` : interview.title}
+            compact
+          />
         </div>
       </div>
 

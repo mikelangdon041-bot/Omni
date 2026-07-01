@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Mail, Phone, Building2, MapPin, Pencil, Check } from "lucide-react";
 import { BackButton } from "@/components/BackButton";
+import { AddTaskButton } from "@/components/AddTaskButton";
 import { useKOL, useUserId } from "@/lib/territory/hooks";
 import {
   RELATIONSHIP_COLORS,
@@ -148,6 +149,11 @@ function Header({
             <div className="flex shrink-0 items-center gap-3">
               {/* Meeting prep — deliberately set apart and accented so it stands out. */}
               <MeetingPrep kolId={kol.id} prominent />
+              <AddTaskButton
+                app="territory"
+                link={`/territory-planning/kol/${kol.id}`}
+                entityLabel={kolFullName(kol)}
+              />
               <EngagementRing score={kol.engagement_score} size={56} />
             </div>
           </div>

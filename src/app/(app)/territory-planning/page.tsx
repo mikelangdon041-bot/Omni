@@ -6,7 +6,6 @@ import { ModuleHero } from "@/components/ui/ModuleHero";
 import { Button } from "@/components/territory/ui/Button";
 import { KOLCard } from "@/components/territory/KOLCard";
 import { AddKOLModal } from "@/components/territory/AddKOLModal";
-import { TerritoryTasks } from "@/components/territory/TerritoryTasks";
 import { ImportExport } from "@/components/territory/ImportExport";
 import { KolMap } from "@/components/territory/KolMap";
 import { TerritoryCalendar } from "@/components/territory/TerritoryCalendar";
@@ -136,7 +135,6 @@ export default function TerritoryDashboard() {
         ]}
         action={
           <div className="flex flex-wrap gap-2">
-            <TerritoryTasks userId={userId} />
             <Button
               onClick={() => setShowAdd(true)}
               className="!bg-white !text-ink hover:!bg-white/90"
