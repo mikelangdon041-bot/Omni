@@ -66,7 +66,7 @@ export const MODULES: ModuleDef[] = [
     label: "Insights",
     icon: Sparkles,
     blurb: "Capture and distill field insights.",
-    ready: false,
+    ready: true,
     theme: t("#d97706", "#b45309", "#fef3c7", "#f59e0b", "#f97316", "#ea580c"),
   },
   {
