@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
@@ -9,12 +9,14 @@ import {
   Sparkles,
   ChevronUp,
   ChevronDown,
+  ChevronRight,
+  ChevronLeft,
   Trash2,
   Check,
-  Mic,
   Play,
 } from "lucide-react";
 import { BackButton } from "@/components/BackButton";
+import { createClient } from "@/lib/supabase/client";
 import {
   useInterview,
   useCandidate,
@@ -32,19 +34,44 @@ import {
 } from "@/lib/interview/types";
 import { cn } from "@/lib/ui";
 import { Button } from "@/components/ui/Button";
-import { StatusChip } from "@/components/ui/StatusChip";
 import { RichText } from "@/components/ui/RichText";
 import { SuggestQuestionsModal } from "@/components/interview/SuggestQuestionsModal";
 import { AssignInterviewModal } from "@/components/interview/AssignInterviewModal";
+import { RecordingPanel } from "@/components/interview/RecordingPanel";
 import { NewRecording } from "@/app/(app)/interview-prep/NewRecording";
 
+const supabase = createClient();
 const STATUSES: InterviewStatus[] = ["scheduled", "in_progress", "complete", "canceled"];
+const Q_OPEN_KEY = "omni_iv_questions_open";
 
 export default function InterviewWorkspacePage() {
   const params = useParams<{ id: string }>();
   const { userId } = useUserId();
   const { interview, loading, update } = useInterview(params.id);
   const { candidate } = useCandidate(interview?.candidate_id || "");
+  const recordings = useInterviewRecordings(params.id);
+  const [interviewer, setInterviewer] = useState("");
+  const [qOpen, setQOpen] = useState(true);
+
+  // Restore the questions panel open/closed preference.
+  useEffect(() => {
+    const v = localStorage.getItem(Q_OPEN_KEY);
+    if (v !== null) setQOpen(v === "1");
+  }, []);
+  function toggleQ() {
+    setQOpen((v) => {
+      localStorage.setItem(Q_OPEN_KEY, v ? "0" : "1");
+      return !v;
+    });
+  }
+
+  // Interviewer name for the default recording title.
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      const m = data.user?.user_metadata as { display_name?: string; username?: string } | undefined;
+      setInterviewer(m?.display_name || m?.username || "Interviewer");
+    });
+  }, []);
 
   if (loading) {
     return <p className="py-12 text-center text-sm text-muted">Loading…</p>;
@@ -60,24 +87,54 @@ export default function InterviewWorkspacePage() {
     );
   }
 
+  const cName = candidate ? candidateName(candidate) : "";
+  const defaultTitle = `${cName || "Candidate"} | ${interviewer} · ${new Date().toLocaleDateString()}`;
+
   return (
     <>
       <BackButton />
-      <Header interview={interview} update={update} candidateNameStr={candidate ? candidateName(candidate) : ""} candidateRole={candidate?.role_title || ""} candidateId={interview.candidate_id} />
+      <Header
+        interview={interview}
+        update={update}
+        candidateNameStr={cName}
+        candidateRole={candidate?.role_title || ""}
+        candidateId={interview.candidate_id}
+        defaultTitle={defaultTitle}
+        onUploaded={() => recordings.refresh()}
+      />
 
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1.6fr_1fr]">
+      <div className={cn("grid grid-cols-1 gap-5", qOpen && "lg:grid-cols-[1.6fr_1fr]")}>
         <div className="space-y-5">
           <NotesCard interview={interview} update={update} />
           <NextStepsCard interview={interview} update={update} />
-          <AudioCard interviewId={interview.id} candidateId={interview.candidate_id} />
+          {/* Recordings render inline — no separate page. */}
+          {recordings.recordings.map((r) => (
+            <RecordingPanel
+              key={r.id}
+              recordingId={r.id}
+              embedded
+              onDeleted={() => recordings.refresh()}
+            />
+          ))}
         </div>
-        <div className="space-y-5">
-          <QuestionsCard
-            candidateId={interview.candidate_id}
-            interviewId={interview.id}
-            userId={userId}
-          />
-        </div>
+
+        {qOpen ? (
+          <div className="space-y-5">
+            <QuestionsCard
+              candidateId={interview.candidate_id}
+              interviewId={interview.id}
+              userId={userId}
+              onCollapse={toggleQ}
+            />
+          </div>
+        ) : (
+          <button
+            onClick={toggleQ}
+            className="fixed bottom-6 right-6 z-20 inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-4 py-2.5 text-sm font-medium shadow-lg transition hover:border-[var(--accent)]"
+          >
+            <ChevronLeft size={15} /> Questions
+          </button>
+        )}
       </div>
     </>
   );
@@ -90,20 +147,21 @@ function Header({
   candidateNameStr,
   candidateRole,
   candidateId,
+  defaultTitle,
+  onUploaded,
 }: {
   interview: Interview;
   update: (p: Partial<Interview>) => Promise<void>;
   candidateNameStr: string;
   candidateRole: string;
   candidateId: string;
+  defaultTitle: string;
+  onUploaded: () => void;
 }) {
   const [assignOpen, setAssignOpen] = useState(false);
   const [title, setTitle] = useState(interview.title);
   const scheduled = interview.scheduled_at
-    ? new Date(interview.scheduled_at).toLocaleString([], {
-        dateStyle: "medium",
-        timeStyle: "short",
-      })
+    ? new Date(interview.scheduled_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })
     : "Not scheduled";
 
   return (
@@ -131,11 +189,13 @@ function Header({
           </div>
         </div>
 
+        {/* Actions — visually distinct: status (select), Start (filled),
+            Upload (outline), Assign (ghost) so nothing looks the same. */}
         <div className="flex flex-wrap items-center gap-2">
           <select
             value={interview.status}
             onChange={(e) => update({ status: e.target.value as InterviewStatus })}
-            className="rounded-lg border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+            className="rounded-lg border border-border bg-canvas px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
           >
             {STATUSES.map((s) => (
               <option key={s} value={s}>
@@ -144,13 +204,26 @@ function Header({
             ))}
           </select>
           {interview.status === "scheduled" && (
-            <Button size="sm" onClick={() => update({ status: "in_progress" })}>
+            <button
+              onClick={() => update({ status: "in_progress" })}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:opacity-90"
+            >
               <Play size={14} /> Start
-            </Button>
+            </button>
           )}
-          <Button variant="secondary" size="sm" onClick={() => setAssignOpen(true)}>
+          <NewRecording
+            candidateId={candidateId}
+            interviewId={interview.id}
+            defaultTitle={defaultTitle}
+            onUploaded={onUploaded}
+            compact
+          />
+          <button
+            onClick={() => setAssignOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-muted transition hover:bg-canvas hover:text-ink"
+          >
             <UserPlus size={14} /> Assign
-          </Button>
+          </button>
         </div>
       </div>
 
@@ -166,17 +239,10 @@ function Header({
 }
 
 // ---- Notes ---------------------------------------------------------
-function NotesCard({
-  interview,
-  update,
-}: {
-  interview: Interview;
-  update: (p: Partial<Interview>) => Promise<void>;
-}) {
+function NotesCard({ interview, update }: { interview: Interview; update: (p: Partial<Interview>) => Promise<void> }) {
   const [html, setHtml] = useState(interview.notes || "");
   const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle");
 
-  // Autosave (debounced) so notes are never lost mid-interview.
   function onChange(next: string) {
     setHtml(next);
     setStatus("saving");
@@ -190,9 +256,7 @@ function NotesCard({
   return (
     <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-muted">
-          Interview notes
-        </h3>
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-muted">Interview notes</h3>
         {status !== "idle" && (
           <span className="text-xs text-muted">{status === "saving" ? "Saving…" : "Saved"}</span>
         )}
@@ -203,21 +267,13 @@ function NotesCard({
 }
 
 // ---- Next steps ----------------------------------------------------
-function NextStepsCard({
-  interview,
-  update,
-}: {
-  interview: Interview;
-  update: (p: Partial<Interview>) => Promise<void>;
-}) {
+function NextStepsCard({ interview, update }: { interview: Interview; update: (p: Partial<Interview>) => Promise<void> }) {
   const [next, setNext] = useState(interview.next_steps || "");
   const followUp = interview.follow_up_at ? interview.follow_up_at.slice(0, 10) : "";
 
   return (
     <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
-      <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">
-        Next steps & follow-up
-      </h3>
+      <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">Next steps &amp; follow-up</h3>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_12rem]">
         <label className="block">
           <span className="mb-1 block text-xs font-medium text-muted">Next step</span>
@@ -234,53 +290,11 @@ function NextStepsCard({
           <input
             type="date"
             value={followUp}
-            onChange={(e) =>
-              update({ follow_up_at: e.target.value ? new Date(e.target.value).toISOString() : null })
-            }
+            onChange={(e) => update({ follow_up_at: e.target.value ? new Date(e.target.value).toISOString() : null })}
             className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
           />
         </label>
       </div>
-    </div>
-  );
-}
-
-// ---- Audio / recordings -------------------------------------------
-function AudioCard({ interviewId, candidateId }: { interviewId: string; candidateId: string }) {
-  const { recordings, loading } = useInterviewRecordings(interviewId);
-
-  return (
-    <div className="space-y-3">
-      <NewRecording candidateId={candidateId} interviewId={interviewId} />
-      {!loading && recordings.length > 0 && (
-        <ul className="space-y-2">
-          {recordings.map((r) => {
-            const detail =
-              r.status === "transcribing" && r.total_chunks
-                ? `${Math.round((r.chunks_done / r.total_chunks) * 100)}%`
-                : undefined;
-            return (
-              <li key={r.id}>
-                <Link
-                  href={`/interview-prep/${r.id}`}
-                  className="flex items-center justify-between gap-4 rounded-xl border border-border bg-surface px-4 py-3 shadow-sm transition hover:border-[var(--accent)]/40"
-                >
-                  <span className="flex min-w-0 items-center gap-2">
-                    <Mic size={15} className="shrink-0 text-[var(--accent)]" />
-                    <span className="min-w-0">
-                      <span className="block truncate text-sm font-medium">{r.title}</span>
-                      <span className="text-xs text-muted">
-                        {new Date(r.created_at).toLocaleString()}
-                      </span>
-                    </span>
-                  </span>
-                  <StatusChip status={r.status} detail={detail} />
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
-      )}
     </div>
   );
 }
@@ -290,25 +304,24 @@ function QuestionsCard({
   candidateId,
   interviewId,
   userId,
+  onCollapse,
 }: {
   candidateId: string;
   interviewId: string;
   userId: string | null;
+  onCollapse: () => void;
 }) {
-  const { questions, addMany, update, remove, move } = useCandidateQuestions(
-    candidateId,
-    interviewId,
-  );
+  const { questions, addMany, update, remove, move } = useCandidateQuestions(candidateId, interviewId);
   const bank = useQuestionBank(userId);
   const [addOpen, setAddOpen] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
 
   return (
-    <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
+    <div className="rounded-xl border border-border bg-surface p-5 shadow-sm lg:sticky lg:top-20">
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-muted">
-          Questions
-        </h3>
+        <button onClick={onCollapse} className="inline-flex items-center gap-1 text-sm font-semibold uppercase tracking-wide text-muted transition hover:text-ink" title="Collapse">
+          <ChevronRight size={15} /> Questions
+        </button>
         <Button size="sm" onClick={() => setAddOpen(true)}>
           <Sparkles size={14} /> Add
         </Button>
@@ -325,58 +338,30 @@ function QuestionsCard({
             <li key={q.id} className="rounded-lg border border-border">
               <div className="flex items-start gap-2 p-2.5">
                 <div className="flex flex-col">
-                  <button
-                    onClick={() => move(q.id, -1)}
-                    disabled={i === 0}
-                    className="text-muted transition hover:text-ink disabled:opacity-30"
-                    title="Move up"
-                  >
+                  <button onClick={() => move(q.id, -1)} disabled={i === 0} className="text-muted transition hover:text-ink disabled:opacity-30" title="Move up">
                     <ChevronUp size={14} />
                   </button>
-                  <button
-                    onClick={() => move(q.id, 1)}
-                    disabled={i === questions.length - 1}
-                    className="text-muted transition hover:text-ink disabled:opacity-30"
-                    title="Move down"
-                  >
+                  <button onClick={() => move(q.id, 1)} disabled={i === questions.length - 1} className="text-muted transition hover:text-ink disabled:opacity-30" title="Move down">
                     <ChevronDown size={14} />
                   </button>
                 </div>
                 <button
                   onClick={() => update(q.id, { asked: !q.asked })}
-                  className={cn(
-                    "mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded border transition",
-                    q.asked
-                      ? "border-[var(--accent)] bg-[var(--accent)] text-white"
-                      : "border-border",
-                  )}
+                  className={cn("mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded border transition", q.asked ? "border-[var(--accent)] bg-[var(--accent)] text-white" : "border-border")}
                   title={q.asked ? "Asked" : "Mark asked"}
                 >
                   {q.asked && <Check size={13} />}
                 </button>
-                <button
-                  onClick={() => setExpanded(expanded === q.id ? null : q.id)}
-                  className={cn(
-                    "flex-1 text-left text-sm",
-                    q.asked && "text-muted line-through",
-                  )}
-                >
+                <button onClick={() => setExpanded(expanded === q.id ? null : q.id)} className={cn("flex-1 text-left text-sm", q.asked && "text-muted line-through")}>
                   {q.text}
                 </button>
-                <button
-                  onClick={() => remove(q.id)}
-                  className="text-muted transition hover:text-status-error"
-                  title="Remove"
-                >
+                <button onClick={() => remove(q.id)} className="text-muted transition hover:text-status-error" title="Remove">
                   <Trash2 size={14} />
                 </button>
               </div>
               {expanded === q.id && (
                 <div className="border-t border-border p-2.5">
-                  <AnswerNotes
-                    initial={q.answer_notes}
-                    onSave={(html) => update(q.id, { answer_notes: html })}
-                  />
+                  <AnswerNotes initial={q.answer_notes} onSave={(html) => update(q.id, { answer_notes: html })} />
                 </div>
               )}
             </li>
@@ -391,29 +376,18 @@ function QuestionsCard({
         hasResume
         bankItems={bank.items}
         onAddToInterview={(texts) => addMany(texts.map((t) => ({ text: t, source: "ai" })))}
-        onAddToBank={(texts) =>
-          Promise.all(texts.map((t) => bank.add({ text: t, source: "ai" })))
-        }
+        onAddToBank={(texts) => Promise.all(texts.map((t) => bank.add({ text: t, source: "ai" })))}
       />
     </div>
   );
 }
 
-function AnswerNotes({
-  initial,
-  onSave,
-}: {
-  initial: string;
-  onSave: (html: string) => void;
-}) {
+function AnswerNotes({ initial, onSave }: { initial: string; onSave: (html: string) => void }) {
   const [html, setHtml] = useState(initial || "");
   function onChange(next: string) {
     setHtml(next);
     clearTimeout((onChange as unknown as { t?: ReturnType<typeof setTimeout> }).t);
-    (onChange as unknown as { t?: ReturnType<typeof setTimeout> }).t = setTimeout(
-      () => onSave(next),
-      700,
-    );
+    (onChange as unknown as { t?: ReturnType<typeof setTimeout> }).t = setTimeout(() => onSave(next), 700);
   }
   return (
     <>

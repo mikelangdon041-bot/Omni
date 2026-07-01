@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   StickyNote,
   ArrowRightLeft,
@@ -20,10 +21,14 @@ import {
   Clock,
 } from "lucide-react";
 import type { CandidateActivity } from "@/lib/interview/types";
+import { INTERVIEW_STAGE_LABELS } from "@/lib/interview/types";
+import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { useConfirm } from "@/components/ui/Feedback";
 import { RichText, RichTextView } from "@/components/ui/RichText";
+
+const supabase = createClient();
 
 // Strip HTML to a plain-text preview for the collapsed timeline rows.
 const stripHtml = (html: string) =>
@@ -104,6 +109,7 @@ type Item =
 
 export function ActivityTab({
   activity,
+  candidateId,
   interviews = [],
   loading,
   userId,
@@ -113,6 +119,7 @@ export function ActivityTab({
   onGoToInterviews,
 }: {
   activity: CandidateActivity[];
+  candidateId: string;
   interviews?: InterviewItem[];
   loading: boolean;
   userId: string | null;
@@ -127,10 +134,11 @@ export function ActivityTab({
   onGoToInterviews?: () => void;
 }) {
   const confirm = useConfirm();
+  const router = useRouter();
   const [pickerOpen, setPickerOpen] = useState(false);
   const [chosen, setChosen] = useState<string | null>(null);
   const [detail, setDetail] = useState<CandidateActivity | null>(null);
-  const [members, setMembers] = useState<{ username: string; display_name: string | null }[]>([]);
+  const [members, setMembers] = useState<{ id: string; username: string; display_name: string | null }[]>([]);
 
   // form fields
   const [when, setWhen] = useState(() => new Date().toISOString().slice(0, 16));
@@ -142,6 +150,9 @@ export function ActivityTab({
   const [direction, setDirection] = useState("outbound");
   const [nextStep, setNextStep] = useState("");
   const [followUp, setFollowUp] = useState("");
+  const [scheduleLater, setScheduleLater] = useState(false);
+  const [assignee, setAssignee] = useState("");
+  const [title, setTitle] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -164,13 +175,55 @@ export function ActivityTab({
     setParticipants(new Set());
     setNotes("");
     setOutcome("");
-    setDirection(type === "email" || type === "call" ? "outbound" : "outbound");
+    setDirection("outbound");
     setNextStep("");
     setFollowUp("");
+    // Interviews default to "schedule for later"; other types are logged as past.
+    setScheduleLater(isInterviewType(type));
+    setAssignee("");
+    setTitle(type === "phone_screen" ? "Phone screen" : "Interview");
+  }
+
+  // Create an interview (Interviews tab) instead of logging a past activity.
+  async function scheduleInterview() {
+    if (!chosen) return;
+    setSaving(true);
+    const { data } = await supabase
+      .from("interviews")
+      .insert({
+        candidate_id: candidateId,
+        created_by: userId,
+        assignee_id: assignee || null,
+        title: title.trim() || "Interview",
+        stage: chosen,
+        scheduled_at: when ? new Date(when).toISOString() : null,
+        status: "scheduled",
+        notes: notes.trim(),
+      })
+      .select("id")
+      .single();
+    // Notify the assignee (+ email framework) if one was chosen.
+    if (data && assignee) {
+      await fetch("/api/interview/assign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ interviewId: data.id, mode: "existing", assigneeId: assignee }),
+      }).catch(() => {});
+    }
+    setSaving(false);
+    setChosen(null);
+    setPickerOpen(false);
+    if (data) router.push(`/interview-prep/interview/${data.id}`);
+    else onGoToInterviews?.();
   }
 
   async function save() {
     if (!chosen) return;
+    if (isInterviewType(chosen) && scheduleLater) {
+      await scheduleInterview();
+      return;
+    }
     setSaving(true);
     const meta: Meta = {
       occurred_at: new Date(when).toISOString(),
@@ -205,10 +258,69 @@ export function ActivityTab({
       <Modal
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
-        title={chosen ? `Log: ${TYPE_LABEL[chosen]}` : "Add activity"}
+        title={
+          chosen
+            ? isInterviewType(chosen) && scheduleLater
+              ? `Schedule: ${INTERVIEW_STAGE_LABELS[chosen] || TYPE_LABEL[chosen]}`
+              : `Log: ${TYPE_LABEL[chosen]}`
+            : "Add activity"
+        }
       >
         {chosen ? (
           <div className="space-y-4">
+            {isInterviewType(chosen) && (
+              <div className="flex gap-1.5">
+                <button
+                  onClick={() => setScheduleLater(true)}
+                  className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition ${scheduleLater ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]" : "border-border text-muted hover:text-ink"}`}
+                >
+                  Schedule for later
+                </button>
+                <button
+                  onClick={() => setScheduleLater(false)}
+                  className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition ${!scheduleLater ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]" : "border-border text-muted hover:text-ink"}`}
+                >
+                  Log a past one
+                </button>
+              </div>
+            )}
+
+            {isInterviewType(chosen) && scheduleLater ? (
+              <>
+                <Field label="Title">
+                  <input value={title} onChange={(e) => setTitle(e.target.value)} className={inputCls} />
+                </Field>
+                <Field label="When">
+                  <input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} className={inputCls} />
+                </Field>
+                <Field label="Assign to">
+                  <select value={assignee} onChange={(e) => setAssignee(e.target.value)} className={inputCls}>
+                    <option value="">Unassigned — assign later</option>
+                    {members.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.display_name || m.username} (@{m.username})
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-xs text-muted">
+                    Need someone who isn&apos;t here yet? Open the interview after
+                    scheduling to invite them.
+                  </p>
+                </Field>
+                <Field label="Prep notes (optional)">
+                  <RichText value={notes} onChange={setNotes} placeholder="Anything to prepare or remember…" />
+                </Field>
+                <div className="flex justify-between border-t border-border pt-4">
+                  <Button variant="secondary" onClick={() => setChosen(null)}>
+                    <ArrowLeft size={14} /> Back
+                  </Button>
+                  <Button onClick={save} disabled={saving}>
+                    {saving ? "Scheduling…" : "Schedule interview"}
+                  </Button>
+                </div>
+              </>
+            ) : (
+            <>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <Field label="When">
                 <input
@@ -291,12 +403,6 @@ export function ActivityTab({
                 />
               </Field>
             </div>
-            {isInterviewType(chosen) && (
-              <p className="rounded-lg bg-[var(--accent-soft)] px-3 py-2 text-xs text-muted">
-                Logging the basics here. To write up the interview or attach a
-                recording, open it from the timeline or the Interviews tab.
-              </p>
-            )}
             <div className="flex justify-between border-t border-border pt-4">
               <Button variant="secondary" onClick={() => setChosen(null)}>
                 <ArrowLeft size={14} /> Back
@@ -305,6 +411,8 @@ export function ActivityTab({
                 {saving ? "Saving…" : "Log activity"}
               </Button>
             </div>
+            </>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">

@@ -31,6 +31,10 @@ export function SuggestQuestionsModal({
   bankItems,
   onAddToInterview,
   onAddToBank,
+  interviews,
+  onAddToInterviewId,
+  onNeedInterview,
+  addLabel = "Add to interview",
 }: {
   open: boolean;
   onClose: () => void;
@@ -39,6 +43,11 @@ export function SuggestQuestionsModal({
   bankItems: { id: string; text: string }[];
   onAddToInterview: (texts: string[]) => Promise<unknown>;
   onAddToBank: (texts: string[]) => Promise<unknown>;
+  // When provided (candidate context), "Add to interview" asks which interview.
+  interviews?: { id: string; title: string }[];
+  onAddToInterviewId?: (interviewId: string, texts: string[]) => Promise<unknown>;
+  onNeedInterview?: () => void;
+  addLabel?: string;
 }) {
   const [mode, setMode] = useState<Mode>("write");
   const [list, setList] = useState<string[]>([]);
@@ -48,6 +57,8 @@ export function SuggestQuestionsModal({
   const [guidance, setGuidance] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+  const [targetIv, setTargetIv] = useState("");
 
   function switchMode(m: Mode) {
     setMode(m);
@@ -103,8 +114,27 @@ export function SuggestQuestionsModal({
   async function add(toInterview: boolean) {
     const texts = selectedTexts();
     if (texts.length === 0) return;
+    // Candidate context: adding "to interview" first asks which one.
+    if (toInterview && interviews) {
+      if (interviews.length === 0) {
+        onNeedInterview?.();
+        return;
+      }
+      setTargetIv(interviews[0].id);
+      setPicking(true);
+      return;
+    }
     if (toInterview) await onAddToInterview(texts);
     if (mode !== "bank" && (!toInterview || alsoBank)) await onAddToBank(texts);
+    onClose();
+  }
+
+  async function confirmPick() {
+    const texts = selectedTexts();
+    if (!targetIv || texts.length === 0 || !onAddToInterviewId) return;
+    await onAddToInterviewId(targetIv, texts);
+    if (mode !== "bank" && alsoBank) await onAddToBank(texts);
+    setPicking(false);
     onClose();
   }
 
@@ -230,31 +260,56 @@ export function SuggestQuestionsModal({
           </>
         )}
 
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-          {mode === "bank" ? (
-            <span />
-          ) : (
-            <label className="flex items-center gap-2 text-sm text-muted">
-              <input
-                type="checkbox"
-                checked={alsoBank}
-                onChange={(e) => setAlsoBank(e.target.checked)}
-                className="h-4 w-4 accent-[var(--accent)]"
-              />
-              Also save to question bank
-            </label>
-          )}
-          <div className="flex gap-2">
-            {mode !== "bank" && (
-              <Button variant="secondary" onClick={() => add(false)} disabled={nothing}>
-                Save to bank
+        {picking ? (
+          <div className="space-y-3 border-t border-border pt-4">
+            <p className="text-sm font-medium">Add to which interview?</p>
+            <select
+              value={targetIv}
+              onChange={(e) => setTargetIv(e.target.value)}
+              className="w-full rounded-lg border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-[var(--accent)]"
+            >
+              {(interviews || []).map((iv) => (
+                <option key={iv.id} value={iv.id}>
+                  {iv.title}
+                </option>
+              ))}
+            </select>
+            <div className="flex justify-between">
+              <Button variant="secondary" onClick={() => setPicking(false)}>
+                Back
               </Button>
-            )}
-            <Button onClick={() => add(true)} disabled={nothing}>
-              Add to interview
-            </Button>
+              <Button onClick={confirmPick} disabled={!targetIv}>
+                Add to this interview
+              </Button>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+            {mode === "bank" ? (
+              <span />
+            ) : (
+              <label className="flex items-center gap-2 text-sm text-muted">
+                <input
+                  type="checkbox"
+                  checked={alsoBank}
+                  onChange={(e) => setAlsoBank(e.target.checked)}
+                  className="h-4 w-4 accent-[var(--accent)]"
+                />
+                Also save to question bank
+              </label>
+            )}
+            <div className="flex gap-2">
+              {mode !== "bank" && (
+                <Button variant="secondary" onClick={() => add(false)} disabled={nothing}>
+                  Save to bank
+                </Button>
+              )}
+              <Button onClick={() => add(true)} disabled={nothing}>
+                {addLabel}
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
     </Modal>
   );

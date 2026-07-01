@@ -91,6 +91,7 @@ export default function CandidateDetailPage() {
       {tab === "Activity" && (
         <ActivityTab
           activity={activity.activity}
+          candidateId={candidate.id}
           interviews={recordings.recordings}
           loading={activity.loading}
           userId={userId}
@@ -104,7 +105,11 @@ export default function CandidateDetailPage() {
         <InterviewsTab candidateId={candidate.id} userId={userId} />
       )}
       {tab === "Questions" && (
-        <QuestionsTab candidate={candidate} userId={userId} />
+        <QuestionsTab
+          candidate={candidate}
+          userId={userId}
+          onGoToInterviews={() => setTab("Interviews")}
+        />
       )}
       {tab === "Scorecard" && (
         <ScorecardTab

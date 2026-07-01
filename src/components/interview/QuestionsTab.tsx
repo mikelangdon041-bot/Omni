@@ -3,23 +3,45 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Sparkles, Trash2, BookmarkPlus, Library, Check } from "lucide-react";
-import { useCandidateQuestions, useQuestionBank } from "@/lib/interview/hooks";
+import {
+  useCandidateQuestions,
+  useQuestionBank,
+  useInterviews,
+} from "@/lib/interview/hooks";
 import type { Candidate } from "@/lib/interview/types";
+import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/Button";
 import { SuggestQuestionsModal } from "@/components/interview/SuggestQuestionsModal";
+
+const supabase = createClient();
 
 export function QuestionsTab({
   candidate,
   userId,
+  onGoToInterviews,
 }: {
   candidate: Candidate;
   userId: string | null;
+  onGoToInterviews?: () => void;
 }) {
   const { questions, addMany, update, remove } = useCandidateQuestions(
     candidate.id,
   );
   const bank = useQuestionBank(userId);
+  const { interviews } = useInterviews(candidate.id);
   const [suggestOpen, setSuggestOpen] = useState(false);
+
+  // Add questions to a specific interview (rows carry that interview_id).
+  async function addToInterview(interviewId: string, texts: string[]) {
+    const rows = texts.map((t, i) => ({
+      candidate_id: candidate.id,
+      interview_id: interviewId,
+      text: t,
+      source: "manual",
+      sort_order: i,
+    }));
+    await supabase.from("candidate_questions").insert(rows);
+  }
 
   return (
     <div className="space-y-5">
@@ -47,6 +69,13 @@ export function QuestionsTab({
         candidateId={candidate.id}
         hasResume={!!candidate.resume_text?.trim()}
         bankItems={bank.items}
+        interviews={interviews.map((iv) => ({ id: iv.id, title: iv.title }))}
+        addLabel="Add to interview"
+        onAddToInterviewId={addToInterview}
+        onNeedInterview={() => {
+          setSuggestOpen(false);
+          onGoToInterviews?.();
+        }}
         onAddToInterview={(texts) =>
           addMany(texts.map((t) => ({ text: t, source: "ai" })))
         }

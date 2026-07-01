@@ -12,10 +12,14 @@ export function NewRecording({
   candidateId,
   interviewId,
   onUploaded,
+  defaultTitle,
+  compact,
 }: {
   candidateId?: string;
   interviewId?: string;
   onUploaded?: (recordingId: string) => void;
+  defaultTitle?: string;
+  compact?: boolean;
 }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -27,7 +31,7 @@ export function NewRecording({
   async function handleUpload(file: File) {
     setError(null);
     const ext = file.name.split(".").pop()?.toLowerCase() || "bin";
-    const title = file.name.replace(/\.[^.]+$/, "");
+    const title = defaultTitle?.trim() || file.name.replace(/\.[^.]+$/, "");
 
     const signRes = await fetch("/api/recordings/sign-upload", {
       method: "POST",
@@ -86,6 +90,56 @@ export function NewRecording({
   }
 
   const busy = phase === "uploading" || phase === "preparing";
+
+  // Compact: just a button (for placing among header actions).
+  if (compact) {
+    return (
+      <>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="audio/*,video/mp4,.m4a,.mp3,.wav,.webm"
+          onChange={onPick}
+          disabled={busy}
+          className="hidden"
+        />
+        <button
+          type="button"
+          onClick={() => setConfirmOpen(true)}
+          disabled={busy}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-[var(--accent)] bg-transparent px-3 py-2 text-sm font-medium text-[var(--accent)] transition hover:bg-[var(--accent-soft)] disabled:opacity-60"
+        >
+          <Upload size={15} />
+          {phase === "uploading"
+            ? `Uploading… ${progress}%`
+            : phase === "preparing"
+              ? "Processing…"
+              : "Upload audio"}
+        </button>
+        {error && <p className="mt-2 text-xs text-status-error">{error}</p>}
+        <Modal open={confirmOpen} onClose={() => setConfirmOpen(false)} title="Before you upload" size="sm">
+          <div className="space-y-4">
+            <div className="flex gap-3">
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[var(--accent-soft)] text-[var(--accent)]">
+                <ShieldCheck size={18} />
+              </span>
+              <p className="text-sm text-muted">
+                Only upload recordings you have permission to use. By continuing you
+                confirm you have consent from all participants to record and process
+                this conversation.
+              </p>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setConfirmOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={approveAndPick}>I have consent — choose file</Button>
+            </div>
+          </div>
+        </Modal>
+      </>
+    );
+  }
 
   return (
     <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
