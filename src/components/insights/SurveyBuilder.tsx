@@ -8,6 +8,7 @@ import {
   CornerDownRight,
   CheckCircle2,
   FileEdit,
+  Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
@@ -19,7 +20,12 @@ import {
   QuestionEditorModal,
   type QuestionSubmit,
 } from "./QuestionEditorModal";
-import type { QuestionNode, QuestionType } from "@/lib/insights/types";
+import { ImportSurveyModal } from "./ImportSurveyModal";
+import type {
+  ImportDraftQuestion,
+  QuestionNode,
+  QuestionType,
+} from "@/lib/insights/types";
 
 const TYPE_BADGE: Record<QuestionType, string> = {
   single: "Single",
@@ -54,15 +60,25 @@ export function SurveyBuilder() {
     addOption,
     updateOption,
     removeOption,
+    bulkImport,
   } = admin;
 
   const [editor, setEditor] = useState<EditorCtx | null>(null);
+  const [showImport, setShowImport] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const tree = useMemo(
     () => buildTree(questions, options),
     [questions, options],
   );
+
+  // Import a reviewed document draft — create the template first if needed.
+  async function handleImport(drafts: ImportDraftQuestion[]) {
+    let t = template;
+    if (!t) t = await createTemplate({ name: "KOL Insights Survey" });
+    if (!t) throw new Error("Could not create the survey");
+    return bulkImport(t.id, drafts);
+  }
 
   if (profileLoading || loading) {
     return <p className="py-12 text-center text-sm text-muted">Loading…</p>;
@@ -79,22 +95,35 @@ export function SurveyBuilder() {
 
   if (!template) {
     return (
-      <EmptyState
-        title="No survey yet"
-        hint="Create your organization's canonical KOL insights survey. Every MSL will answer the same questions per KOL."
-        action={
-          <Button
-            disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              await createTemplate({ name: "KOL Insights Survey" });
-              setBusy(false);
-            }}
-          >
-            <Plus size={16} /> Create survey
-          </Button>
-        }
-      />
+      <>
+        <EmptyState
+          title="No survey yet"
+          hint="Import an existing survey document, or start one from scratch. Every MSL will answer the same questions per KOL."
+          action={
+            <div className="flex flex-wrap justify-center gap-2">
+              <Button onClick={() => setShowImport(true)}>
+                <Upload size={16} /> Import from document
+              </Button>
+              <Button
+                variant="secondary"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  await createTemplate({ name: "KOL Insights Survey" });
+                  setBusy(false);
+                }}
+              >
+                <Plus size={16} /> Start from scratch
+              </Button>
+            </div>
+          }
+        />
+        <ImportSurveyModal
+          open={showImport}
+          onClose={() => setShowImport(false)}
+          onImport={handleImport}
+        />
+      </>
     );
   }
 
@@ -192,24 +221,29 @@ export function SurveyBuilder() {
             </span>
           </div>
         </div>
-        {published ? (
-          <Button
-            variant="secondary"
-            disabled={busy}
-            onClick={() => updateTemplate(template.id, { status: "draft" })}
-          >
-            Unpublish
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={() => setShowImport(true)}>
+            <Upload size={16} /> Import
           </Button>
-        ) : (
-          <Button
-            disabled={busy || questions.length === 0}
-            onClick={() =>
-              updateTemplate(template.id, { status: "published" })
-            }
-          >
-            <CheckCircle2 size={16} /> Publish
-          </Button>
-        )}
+          {published ? (
+            <Button
+              variant="secondary"
+              disabled={busy}
+              onClick={() => updateTemplate(template.id, { status: "draft" })}
+            >
+              Unpublish
+            </Button>
+          ) : (
+            <Button
+              disabled={busy || questions.length === 0}
+              onClick={() =>
+                updateTemplate(template.id, { status: "published" })
+              }
+            >
+              <CheckCircle2 size={16} /> Publish
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Question tree */}
@@ -262,6 +296,12 @@ export function SurveyBuilder() {
         onSubmit={(data) => {
           if (editor) return persistQuestion(data, editor);
         }}
+      />
+
+      <ImportSurveyModal
+        open={showImport}
+        onClose={() => setShowImport(false)}
+        onImport={handleImport}
       />
     </div>
   );

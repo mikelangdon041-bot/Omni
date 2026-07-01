@@ -86,6 +86,30 @@ export interface SurveyAnswer {
 }
 
 // ------------------------------------------------------------------
+// Document import (parse a survey doc → editable draft the user confirms)
+// ------------------------------------------------------------------
+export interface ImportDraftOption {
+  label: string;
+  color?: string;
+}
+
+export interface ImportDraftQuestion {
+  tempId: string; // stable ref within the draft (parents referenced by children)
+  section: string;
+  text: string;
+  type: QuestionType;
+  options: ImportDraftOption[];
+  parentTempId: string | null; // gated follow-up: parent question's tempId
+  parentOptionLabel: string | null; // …revealed by this option of the parent
+  required: boolean;
+}
+
+export interface ImportDraft {
+  title: string;
+  questions: ImportDraftQuestion[];
+}
+
+// ------------------------------------------------------------------
 // Analysis workbench
 // ------------------------------------------------------------------
 export type ChartType =

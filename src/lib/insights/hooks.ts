@@ -4,15 +4,17 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useUserId } from "@/lib/territory/hooks";
 import type { KOL } from "@/lib/territory/types";
-import type {
-  AnalysisSpec,
-  AnswerValue,
-  SavedAnalysis,
-  SurveyAnswer,
-  SurveyOption,
-  SurveyQuestion,
-  SurveyResponse,
-  SurveyTemplate,
+import {
+  DEFAULT_PALETTE,
+  type AnalysisSpec,
+  type AnswerValue,
+  type ImportDraftQuestion,
+  type SavedAnalysis,
+  type SurveyAnswer,
+  type SurveyOption,
+  type SurveyQuestion,
+  type SurveyResponse,
+  type SurveyTemplate,
 } from "./types";
 
 const supabase = createClient();
@@ -194,6 +196,69 @@ export function useSurveyAdmin(orgId: string | null) {
     [def],
   );
 
+  // Bulk-create a reviewed import draft into a template: questions in document
+  // order (parents first) with their options + branch links, one refresh at end.
+  const bulkImport = useCallback(
+    async (templateId: string, drafts: ImportDraftQuestion[]) => {
+      const idMap = new Map<string, string>(); // tempId -> real question id
+      // real question id -> (option label -> real option id)
+      const optMap = new Map<string, Map<string, string>>();
+      const baseOrder = def.questions.length;
+      let created = 0;
+
+      for (let i = 0; i < drafts.length; i++) {
+        const d = drafts[i];
+        const parentQuestionId = d.parentTempId
+          ? idMap.get(d.parentTempId) ?? null
+          : null;
+        const parentOptionId =
+          parentQuestionId && d.parentOptionLabel
+            ? optMap.get(parentQuestionId)?.get(d.parentOptionLabel) ?? null
+            : null;
+
+        const { data: q } = await supabase
+          .from("survey_questions")
+          .insert({
+            template_id: templateId,
+            text: d.text,
+            type: d.type,
+            section: d.section,
+            required: d.required,
+            parent_question_id: parentQuestionId,
+            parent_option_id: parentOptionId,
+            sort_order: baseOrder + i,
+          })
+          .select("*")
+          .single();
+        const question = q as SurveyQuestion | null;
+        if (!question) continue;
+        idMap.set(d.tempId, question.id);
+        created++;
+
+        if (d.options.length) {
+          const rows = d.options.map((o, oi) => ({
+            question_id: question.id,
+            label: o.label,
+            color: o.color || DEFAULT_PALETTE[oi % DEFAULT_PALETTE.length],
+            sort_order: oi,
+          }));
+          const { data: opts } = await supabase
+            .from("survey_options")
+            .insert(rows)
+            .select("*");
+          const labelToId = new Map<string, string>();
+          for (const o of (opts as SurveyOption[]) || [])
+            labelToId.set(o.label, o.id);
+          optMap.set(question.id, labelToId);
+        }
+      }
+
+      await def.refresh();
+      return created;
+    },
+    [def],
+  );
+
   return {
     ...def,
     createTemplate,
@@ -204,6 +269,7 @@ export function useSurveyAdmin(orgId: string | null) {
     addOption,
     updateOption,
     removeOption,
+    bulkImport,
   };
 }
 
