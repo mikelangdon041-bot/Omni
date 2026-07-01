@@ -7,17 +7,16 @@ import { Button } from "@/components/territory/ui/Button";
 import { Input } from "@/components/territory/ui/Input";
 import { RichText, RichTextView } from "@/components/ui/RichText";
 
-// Editable text fields grouped into sections.
+// Editable text fields. Contact info now lives on the header card; this tab is
+// the KOL's background (Profile) and their links.
 const SECTIONS: { title: string; fields: { key: keyof KOL; label: string; long?: boolean }[] }[] = [
   {
-    title: "Contact",
+    title: "Profile",
     fields: [
-      { key: "title_position", label: "Title / position" },
-      { key: "specialty", label: "Specialty" },
-      { key: "institution", label: "Institution" },
-      { key: "phone", label: "Phone" },
-      { key: "email", label: "Email" },
-      { key: "address", label: "Address" },
+      { key: "tier", label: "Tier" },
+      { key: "society_associations", label: "Societies / associations", long: true },
+      { key: "leadership_appointments", label: "Leadership appointments", long: true },
+      { key: "publications", label: "Publications", long: true },
     ],
   },
   {
@@ -28,15 +27,6 @@ const SECTIONS: { title: string; fields: { key: keyof KOL; label: string; long?:
       { key: "website_other", label: "Other link" },
     ],
   },
-  {
-    title: "Profile",
-    fields: [
-      { key: "tier", label: "Tier" },
-      { key: "society_associations", label: "Societies / associations", long: true },
-      { key: "leadership_appointments", label: "Leadership appointments", long: true },
-      { key: "publications", label: "Publications", long: true },
-    ],
-  },
 ];
 // Note: engagement-strategy fields live on the Strategy tab (StrategySection),
 // not here — the Profile tab is for who the KOL is, the Strategy tab is the plan.
@@ -44,11 +34,21 @@ const SECTIONS: { title: string; fields: { key: keyof KOL; label: string; long?:
 export function ProfileSection({
   kol,
   update,
+  editing: editingProp,
+  onEditingChange,
 }: {
   kol: KOL;
   update: (partial: Partial<KOL>) => Promise<void>;
+  editing?: boolean;
+  onEditingChange?: (v: boolean) => void;
 }) {
-  const [editing, setEditing] = useState(false);
+  const controlled = editingProp !== undefined;
+  const [editingState, setEditingState] = useState(false);
+  const editing = controlled ? !!editingProp : editingState;
+  const setEditing = (v: boolean) => {
+    if (controlled) onEditingChange?.(v);
+    else setEditingState(v);
+  };
   const [draft, setDraft] = useState<Partial<KOL>>({});
   const [saving, setSaving] = useState(false);
 
@@ -66,29 +66,33 @@ export function ProfileSection({
 
   return (
     <div className="space-y-5">
-      <div className="flex justify-end">
-        {editing ? (
-          <div className="flex gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                setEditing(false);
-                setDraft({});
-              }}
-            >
-              Cancel
+      {/* When editing is controlled by the parent (tab row), the parent shows
+          the Edit trigger; we only render Save/Cancel while editing. */}
+      {(editing || !controlled) && (
+        <div className="flex justify-end">
+          {editing ? (
+            <div className="flex gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  setEditing(false);
+                  setDraft({});
+                }}
+              >
+                Cancel
+              </Button>
+              <Button size="sm" onClick={save} disabled={saving}>
+                {saving ? "Saving…" : "Save"}
+              </Button>
+            </div>
+          ) : (
+            <Button variant="secondary" size="sm" onClick={() => setEditing(true)}>
+              <Pencil size={14} /> Edit
             </Button>
-            <Button size="sm" onClick={save} disabled={saving}>
-              {saving ? "Saving…" : "Save"}
-            </Button>
-          </div>
-        ) : (
-          <Button variant="secondary" size="sm" onClick={() => setEditing(true)}>
-            <Pencil size={14} /> Edit
-          </Button>
-        )}
-      </div>
+          )}
+        </div>
+      )}
 
       {SECTIONS.map((section) => (
         <div

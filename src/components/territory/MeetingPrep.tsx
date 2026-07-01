@@ -6,7 +6,7 @@ import type { MeetingPrep as Prep } from "@/lib/territory/ai";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 
-export function MeetingPrep({ kolId }: { kolId: string }) {
+export function MeetingPrep({ kolId, prominent }: { kolId: string; prominent?: boolean }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,9 +36,18 @@ export function MeetingPrep({ kolId }: { kolId: string }) {
 
   return (
     <>
-      <Button variant="secondary" size="sm" onClick={run}>
-        <Sparkles size={14} /> Meeting prep
-      </Button>
+      {prominent ? (
+        <button
+          onClick={run}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--accent)] px-3.5 py-2 text-sm font-semibold text-white shadow-sm transition hover:opacity-90"
+        >
+          <Sparkles size={15} /> AI Meeting prep
+        </button>
+      ) : (
+        <Button variant="secondary" size="sm" onClick={run}>
+          <Sparkles size={14} /> Meeting prep
+        </Button>
+      )}
 
       <Modal open={open} onClose={() => setOpen(false)} title="AI meeting prep" size="lg">
         {loading ? (
