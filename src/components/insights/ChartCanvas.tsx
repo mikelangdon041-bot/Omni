@@ -40,10 +40,12 @@ export function ChartCanvas({
   result,
   spec,
   height = 380,
+  defaultTitles,
 }: {
   result: AnalysisResult;
   spec: AnalysisSpec;
   height?: number;
+  defaultTitles?: { x: string; y: string };
 }) {
   const colors = spec.style.colors.length ? spec.style.colors : DEFAULT_PALETTE;
   const color = (i: number) => colors[i % colors.length];
@@ -59,8 +61,10 @@ export function ChartCanvas({
     );
   }
 
-  const xLabel = spec.style.xTitle;
-  const yLabel = spec.style.yTitle || result.valueLabel;
+  // Axis titles default to the analysis dimensions (e.g. "Specialty" / "Average
+  // efficacy") unless the user typed an override in the editor.
+  const xLabel = spec.style.xTitle || defaultTitles?.x || "";
+  const yLabel = spec.style.yTitle || defaultTitles?.y || result.valueLabel;
 
   // ---- Scatter ------------------------------------------------------
   if (result.kind === "scatter") {

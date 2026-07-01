@@ -21,7 +21,11 @@ import {
   useSavedAnalyses,
   useSurveyDefinition,
 } from "@/lib/insights/hooks";
-import { runAnalysis, type AnalyticsData } from "@/lib/insights/analytics";
+import {
+  runAnalysis,
+  summarizeData,
+  type AnalyticsData,
+} from "@/lib/insights/analytics";
 import type { KOL } from "@/lib/territory/types";
 import {
   defaultSpec,
@@ -105,6 +109,14 @@ export function AnalysisWorkbench() {
   const metric = questions.find((q) => q.id === activeSpec.questionId);
   const recommended = recommendedType(activeSpec, metric);
 
+  // Human labels used for default axis titles + the "what ran" description.
+  const groupLabel = groupByLabel(activeSpec.groupBy, questions);
+  const defaultTitles = {
+    x: activeSpec.groupBy === "none" ? metric?.text ?? "" : groupLabel,
+    y: result.valueLabel,
+  };
+  const description = describeSpec(activeSpec, metric, groupLabel, questions);
+
   function patch(p: Partial<AnalysisSpec>) {
     setSpec((s) => ({ ...(s.questionId ? s : activeSpec), ...p }));
   }
@@ -139,7 +151,10 @@ export function AnalysisWorkbench() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
-        body: JSON.stringify({ templateId: template.id }),
+        body: JSON.stringify({
+          templateId: template.id,
+          dataSummary: summarizeData(data),
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Could not suggest");
@@ -333,6 +348,18 @@ export function AnalysisWorkbench() {
             onChange={patch}
           />
 
+          {/* What's being charted — so the user can confirm intent */}
+          <div className="flex items-start gap-2 rounded-lg border border-[var(--accent)]/30 bg-accent-soft/50 px-3 py-2">
+            <BarChart3 size={15} className="mt-0.5 shrink-0 text-[var(--accent)]" />
+            <p className="text-xs text-ink">
+              <span className="font-semibold">Showing:</span> {description}{" "}
+              <span className="text-muted">
+                Not what you meant? Rephrase your request above, or adjust the
+                controls.
+              </span>
+            </p>
+          </div>
+
           {/* Chart */}
           <div className="rounded-2xl border border-border bg-surface p-4 shadow-sm">
             {activeSpec.title && (
@@ -340,7 +367,11 @@ export function AnalysisWorkbench() {
                 {activeSpec.title}
               </h3>
             )}
-            <ChartCanvas result={result} spec={activeSpec} />
+            <ChartCanvas
+              result={result}
+              spec={activeSpec}
+              defaultTitles={defaultTitles}
+            />
             <div className="mt-3 flex justify-end">
               <Button variant="secondary" size="sm" onClick={handleSave}>
                 <Save size={14} /> Save analysis
@@ -387,6 +418,7 @@ export function AnalysisWorkbench() {
           onChange={patch}
           seriesKeys={result.seriesKeys}
           recommended={recommended}
+          defaultTitles={defaultTitles}
         />
       </div>
     </div>
@@ -530,6 +562,54 @@ function ScopeButton({
       <Icon size={14} /> {label}
     </button>
   );
+}
+
+// Human label for a groupBy value (KOL field or answer:<questionId>).
+function groupByLabel(groupBy: GroupBy, questions: SurveyQuestion[]): string {
+  if (groupBy === "none") return "";
+  if (groupBy.startsWith("answer:")) {
+    const q = questions.find((x) => x.id === groupBy.slice(7));
+    return q ? short(q.text, 40) : "answer";
+  }
+  return (
+    KOL_GROUPINGS.find((g) => g.value === groupBy)?.label ?? String(groupBy)
+  );
+}
+
+// Plain-English description of exactly what the current spec will chart — shown
+// so the user can confirm the AI (or manual) analysis matches their intent.
+function describeSpec(
+  spec: AnalysisSpec,
+  metric: SurveyQuestion | undefined,
+  groupLabel: string,
+  questions: SurveyQuestion[],
+): string {
+  if (!metric) return "Pick a question to analyze.";
+  const numeric = metric.type === "scale" || metric.type === "number";
+  const aggPhrase =
+    spec.aggregate === "avg"
+      ? `Average of “${short(metric.text, 60)}”`
+      : numeric
+        ? `Count of KOLs by “${short(metric.text, 60)}”`
+        : spec.aggregate === "percent"
+          ? `% of KOLs choosing each answer to “${short(metric.text, 60)}”`
+          : `How many KOLs chose each answer to “${short(metric.text, 60)}”`;
+  const groupPhrase =
+    spec.groupBy === "none" ? "" : `, grouped by ${groupLabel}`;
+  const filterPhrase = spec.filters.length
+    ? ` — filtered to ${spec.filters
+        .map((f) => `${filterFieldLabel(f.field, questions)} ${f.op} “${f.value}”`)
+        .join(", ")}`
+    : "";
+  return `${aggPhrase}${groupPhrase}${filterPhrase}.`;
+}
+
+function filterFieldLabel(field: string, questions: SurveyQuestion[]): string {
+  if (field.startsWith("answer:")) {
+    const q = questions.find((x) => x.id === field.slice(7));
+    return q ? `answer to “${short(q.text, 30)}”` : "answer";
+  }
+  return field;
 }
 
 function aggregateOptions(metric: SurveyQuestion | undefined) {

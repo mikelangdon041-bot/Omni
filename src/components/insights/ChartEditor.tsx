@@ -29,11 +29,13 @@ export function ChartEditor({
   onChange,
   seriesKeys,
   recommended,
+  defaultTitles,
 }: {
   spec: AnalysisSpec;
   onChange: (patch: Partial<AnalysisSpec>) => void;
   seriesKeys: string[];
   recommended?: ChartType;
+  defaultTitles?: { x: string; y: string };
 }) {
   function setStyle(patch: Partial<ChartStyle>) {
     onChange({ style: { ...spec.style, ...patch } });
@@ -96,11 +98,13 @@ export function ChartEditor({
             label="X-axis"
             value={spec.style.xTitle}
             onChange={(v) => setStyle({ xTitle: v })}
+            placeholder={defaultTitles?.x}
           />
           <LabeledInput
             label="Y-axis"
             value={spec.style.yTitle}
             onChange={(v) => setStyle({ yTitle: v })}
+            placeholder={defaultTitles?.y}
           />
         </div>
       </Section>

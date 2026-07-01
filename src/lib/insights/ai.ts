@@ -87,24 +87,31 @@ export async function suggestAnalyses(opts: {
   questions: SurveyQuestion[];
   options: SurveyOption[];
   count?: number;
+  dataSummary?: string;
 }): Promise<{ title: string; spec: AnalysisSpec }[]> {
-  const { questions, options, count = 5 } = opts;
-  const system = `You are a medical-affairs insights analyst. Given a KOL survey catalog, propose ${count} genuinely interesting, non-obvious analyses an MSL would want. Return ONLY JSON: {"suggestions":[{"title":"...","spec":{...AnalysisSpec...}}]}.
+  const { questions, options, count = 5, dataSummary } = opts;
+  const system = `You are a medical-affairs insights analyst. Look at the ACTUAL data summary below and propose ${count} genuinely interesting, non-obvious analyses that surface real patterns in THIS data (e.g. a group that skews notably positive/negative, an unexpected split, a strong driver). Base your picks on the numbers you see, not generic ideas. Return ONLY JSON: {"suggestions":[{"title":"...","spec":{...AnalysisSpec...}}]}. Make each title reference what's interesting (e.g. "Neurologists rate efficacy highest").
 
 Available KOL grouping/filter fields: ${KOL_FIELDS.join(", ")}.
 
 Survey question catalog:
 ${catalog(questions, options)}
 
+Actual data summary (counts/averages across current responses):
+${dataSummary || "(no data summary provided)"}
+
 ${SPEC_SHAPE}`;
 
   const res = await openai().chat.completions.create({
     model: MODEL,
-    temperature: 0.7,
+    temperature: 0.6,
     response_format: { type: "json_object" },
     messages: [
       { role: "system", content: system },
-      { role: "user", content: `Suggest ${count} analyses.` },
+      {
+        role: "user",
+        content: `Suggest ${count} analyses grounded in the data summary above.`,
+      },
     ],
   });
 

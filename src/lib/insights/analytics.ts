@@ -445,3 +445,66 @@ export function rosterStats(
     leastAnswered: least,
   };
 }
+
+// ------------------------------------------------------------------
+// A compact, text summary of the ACTUAL answers — fed to the AI so its
+// suggestions reflect real patterns in the data (not just the question list).
+// ------------------------------------------------------------------
+export function summarizeData(data: AnalyticsData, maxQuestions = 30): string {
+  const records = buildRecords(data);
+  if (records.length === 0) return "No responses yet.";
+
+  const lines: string[] = [`KOLs with responses: ${records.length}.`];
+
+  // KOL-field spreads that are useful for grouping.
+  const specialties = tally(records.map((r) => r.kol.specialty || "Unknown"));
+  const tiers = tally(records.map((r) => r.kol.tier || "Untiered"));
+  lines.push(`Specialties: ${topTally(specialties, 6)}.`);
+  lines.push(`Tiers: ${topTally(tiers, 6)}.`);
+
+  let shown = 0;
+  for (const q of data.questions) {
+    if (shown >= maxQuestions) break;
+    const vals = records
+      .map((r) => r.answers.get(q.id))
+      .filter((v): v is AnswerValue => !!v);
+    if (vals.length === 0) continue;
+    shown++;
+
+    if (q.type === "scale" || q.type === "number") {
+      const nums = vals
+        .map((v) => (typeof v.scale === "number" ? v.scale : v.number))
+        .filter((n): n is number => typeof n === "number");
+      const avgV =
+        nums.length > 0
+          ? Math.round((nums.reduce((a, b) => a + b, 0) / nums.length) * 10) / 10
+          : 0;
+      lines.push(`Q "${q.text}" [${q.type}] — n=${nums.length}, avg=${avgV}.`);
+    } else if (q.type === "text") {
+      lines.push(`Q "${q.text}" [text] — ${vals.length} free-text responses.`);
+    } else {
+      const labels: string[] = [];
+      for (const v of vals)
+        for (const id of v.optionIds || [])
+          labels.push(optionLabel(data.options, id));
+      lines.push(
+        `Q "${q.text}" [${q.type}] — n=${vals.length}: ${topTally(tally(labels), 6)}.`,
+      );
+    }
+  }
+  return lines.join("\n");
+}
+
+function tally(items: string[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const i of items) m.set(i, (m.get(i) || 0) + 1);
+  return m;
+}
+
+function topTally(m: Map<string, number>, n: number): string {
+  return [...m.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, n)
+    .map(([k, v]) => `${k} (${v})`)
+    .join(", ");
+}

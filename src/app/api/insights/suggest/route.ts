@@ -15,6 +15,7 @@ export async function POST(req: Request) {
 
   const body = await req.json().catch(() => ({}));
   const templateId = String(body.templateId || "");
+  const dataSummary = typeof body.dataSummary === "string" ? body.dataSummary : "";
   if (!templateId)
     return NextResponse.json({ error: "templateId required" }, { status: 400 });
 
@@ -32,6 +33,7 @@ export async function POST(req: Request) {
     const suggestions = await suggestAnalyses({
       questions: qs,
       options: (options as SurveyOption[]) || [],
+      dataSummary,
     });
     return NextResponse.json({ suggestions });
   } catch (err) {
