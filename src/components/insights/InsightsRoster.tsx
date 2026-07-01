@@ -9,6 +9,7 @@ import {
   ChevronDown,
   ChevronRight,
   ArrowRight,
+  ArrowUpDown,
   Trash2,
   CircleDot,
   CheckCircle2,
@@ -38,6 +39,23 @@ import type { AnswerValue, QuestionNode, SurveyAnswer } from "@/lib/insights/typ
 import { ImportKolsModal } from "./ImportKolsModal";
 import { AddKolModal } from "./AddKolModal";
 
+type SortKey =
+  | "name"
+  | "completion"
+  | "priority"
+  | "engagement"
+  | "status"
+  | "specialty";
+
+const SORT_LABELS: Record<SortKey, string> = {
+  name: "Name",
+  completion: "Completion",
+  priority: "Priority",
+  engagement: "Engagement",
+  status: "Status",
+  specialty: "Specialty",
+};
+
 export function InsightsRoster({ userId }: { userId: string | null }) {
   const { orgId } = useOrgProfile();
   const { template, questions, options, loading: defLoading } =
@@ -54,6 +72,8 @@ export function InsightsRoster({ userId }: { userId: string | null }) {
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "not_started" | "in_progress" | "complete">("all");
+  const [sortKey, setSortKey] = useState<SortKey>("name");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [showImport, setShowImport] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
 
@@ -95,7 +115,7 @@ export function InsightsRoster({ userId }: { userId: string | null }) {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return responses.filter((r) => {
+    const out = responses.filter((r) => {
       if (statusFilter !== "all" && r.status !== statusFilter) return false;
       if (!q) return true;
       const k = r.kol;
@@ -103,7 +123,35 @@ export function InsightsRoster({ userId }: { userId: string | null }) {
         .toLowerCase()
         .includes(q);
     });
-  }, [responses, search, statusFilter]);
+
+    const STATUS_RANK: Record<string, number> = {
+      not_started: 0,
+      in_progress: 1,
+      complete: 2,
+    };
+    out.sort((a, b) => {
+      let cmp = 0;
+      if (sortKey === "name") {
+        cmp = `${a.kol?.last_name}${a.kol?.first_name}`.localeCompare(
+          `${b.kol?.last_name}${b.kol?.first_name}`,
+        );
+      } else if (sortKey === "completion") {
+        cmp =
+          (compByResponse.get(a.id)?.pct ?? 0) -
+          (compByResponse.get(b.id)?.pct ?? 0);
+      } else if (sortKey === "priority") {
+        cmp = (a.kol?.priority ?? 0) - (b.kol?.priority ?? 0);
+      } else if (sortKey === "engagement") {
+        cmp = (a.kol?.engagement_score ?? 0) - (b.kol?.engagement_score ?? 0);
+      } else if (sortKey === "status") {
+        cmp = (STATUS_RANK[a.status] ?? 0) - (STATUS_RANK[b.status] ?? 0);
+      } else if (sortKey === "specialty") {
+        cmp = (a.kol?.specialty ?? "").localeCompare(b.kol?.specialty ?? "");
+      }
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return out;
+  }, [responses, search, statusFilter, sortKey, sortDir, compByResponse]);
 
   async function handleImport(kolIds: string[]) {
     if (!template) return;
@@ -161,6 +209,27 @@ export function InsightsRoster({ userId }: { userId: string | null }) {
           <option value="in_progress">In progress</option>
           <option value="complete">Complete</option>
         </select>
+        <div className="flex items-center gap-1.5">
+          <select
+            value={sortKey}
+            onChange={(e) => setSortKey(e.target.value as SortKey)}
+            className="rounded-lg border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-[var(--accent)]"
+            title="Sort by"
+          >
+            {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
+              <option key={k} value={k}>
+                {SORT_LABELS[k]}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
+            className="rounded-lg border border-border bg-surface p-2.5 text-muted transition hover:text-ink"
+            title={sortDir === "asc" ? "Ascending — click to reverse" : "Descending — click to reverse"}
+          >
+            <ArrowUpDown size={16} />
+          </button>
+        </div>
         <div className="flex gap-2">
           <Button variant="secondary" onClick={() => setShowImport(true)}>
             <Download size={16} /> Import KOLs
