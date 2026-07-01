@@ -8,7 +8,15 @@ import { Button } from "@/components/ui/Button";
 
 type Phase = "idle" | "uploading" | "preparing" | "error";
 
-export function NewRecording({ candidateId }: { candidateId?: string }) {
+export function NewRecording({
+  candidateId,
+  interviewId,
+  onUploaded,
+}: {
+  candidateId?: string;
+  interviewId?: string;
+  onUploaded?: (recordingId: string) => void;
+}) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [phase, setPhase] = useState<Phase>("idle");
@@ -24,7 +32,7 @@ export function NewRecording({ candidateId }: { candidateId?: string }) {
     const signRes = await fetch("/api/recordings/sign-upload", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, ext, candidateId }),
+      body: JSON.stringify({ title, ext, candidateId, interviewId }),
     });
     const signed = await signRes.json();
     if (!signRes.ok) throw new Error(signed.error || "Could not start upload");
@@ -54,7 +62,13 @@ export function NewRecording({ candidateId }: { candidateId?: string }) {
     const up = await upRes.json();
     if (!upRes.ok) throw new Error(up.error || "Could not prepare audio");
 
-    router.push(`/interview-prep/${signed.recordingId}`);
+    if (onUploaded) {
+      onUploaded(signed.recordingId as string);
+      setPhase("idle");
+      setProgress(0);
+    } else {
+      router.push(`/interview-prep/${signed.recordingId}`);
+    }
   }
 
   function onPick(e: React.ChangeEvent<HTMLInputElement>) {

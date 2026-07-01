@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { RefreshCw, Pencil, ArrowLeft } from "lucide-react";
+import { RefreshCw, Pencil, ArrowLeft, Check } from "lucide-react";
 import { StatusChip } from "@/components/StatusChip";
 import { SummaryTree } from "@/components/SummaryTree";
+import { RichText } from "@/components/ui/RichText";
 import { parseOutline, type SummaryNodeRow } from "@/lib/summaryTree";
 import { createClient } from "@/lib/supabase/client";
 
@@ -26,6 +27,7 @@ export interface Recording {
   chunks_done: number;
   transcript: string;
   error: string | null;
+  notes?: string;
 }
 
 export function RecordingView({
@@ -45,6 +47,10 @@ export function RecordingView({
   const [editSummary, setEditSummary] = useState(false);
   const [summaryDraft, setSummaryDraft] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
+  const [editTitle, setEditTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(initialRecording.title);
+  const [notes, setNotes] = useState(initialRecording.notes || "");
+  const [notesStatus, setNotesStatus] = useState<"idle" | "saving" | "saved">("idle");
 
   const workerRef = useRef<Worker | null>(null);
   const startedRef = useRef(false);
@@ -181,6 +187,25 @@ export function RecordingView({
 
   const canReanalyze = !inProgress && !!recording.transcript;
 
+  async function saveTitle() {
+    const t = titleDraft.trim() || "Untitled recording";
+    setRecording((r) => ({ ...r, title: t }));
+    setEditTitle(false);
+    await supabase.from("recordings").update({ title: t }).eq("id", id);
+  }
+
+  // Debounced autosave for the recording's free-text notes.
+  useEffect(() => {
+    if (notes === (initialRecording.notes || "")) return;
+    setNotesStatus("saving");
+    const t = setTimeout(async () => {
+      await supabase.from("recordings").update({ notes }).eq("id", id);
+      setNotesStatus("saved");
+    }, 800);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notes]);
+
   async function saveTranscript() {
     setSavingEdit(true);
     await supabase
@@ -227,9 +252,38 @@ export function RecordingView({
           <ArrowLeft size={15} /> Back
         </button>
         <div className="mt-2 flex items-center justify-between gap-4">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {recording.title}
-          </h1>
+          {editTitle ? (
+            <div className="flex flex-1 items-center gap-2">
+              <input
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && saveTitle()}
+                autoFocus
+                className="flex-1 rounded-lg border border-border bg-surface px-3 py-1.5 text-2xl font-semibold tracking-tight outline-none focus:border-[var(--accent)]"
+              />
+              <button
+                onClick={saveTitle}
+                className="grid h-9 w-9 place-items-center rounded-lg border border-border text-[var(--accent)] hover:bg-canvas"
+                title="Save title"
+              >
+                <Check size={16} />
+              </button>
+            </div>
+          ) : (
+            <h1 className="group flex items-center gap-2 text-2xl font-semibold tracking-tight">
+              {recording.title}
+              <button
+                onClick={() => {
+                  setTitleDraft(recording.title);
+                  setEditTitle(true);
+                }}
+                className="text-muted opacity-0 transition group-hover:opacity-100 hover:text-[var(--accent)]"
+                title="Rename"
+              >
+                <Pencil size={15} />
+              </button>
+            </h1>
+          )}
           <div className="flex items-center gap-2">
             {canReanalyze && (
               <button
@@ -322,6 +376,25 @@ export function RecordingView({
           )}
         </section>
       )}
+
+      <section className="mt-6 rounded-xl border border-border bg-surface p-6 shadow-sm">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
+            Notes
+          </h2>
+          {notesStatus !== "idle" && (
+            <span className="text-xs text-muted">
+              {notesStatus === "saving" ? "Saving…" : "Saved"}
+            </span>
+          )}
+        </div>
+        <RichText
+          value={notes}
+          onChange={setNotes}
+          placeholder="Your notes on this interview — saves automatically…"
+          minHeight="min-h-32"
+        />
+      </section>
 
       {recording.transcript && (
         <section className="mt-6">

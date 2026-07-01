@@ -20,6 +20,8 @@ export async function POST(req: Request) {
   const ext = String(body.ext || "bin").toLowerCase().replace(/[^a-z0-9]/g, "");
   const candidateId =
     typeof body.candidateId === "string" && body.candidateId ? body.candidateId : null;
+  const interviewId =
+    typeof body.interviewId === "string" && body.interviewId ? body.interviewId : null;
   if (!ALLOWED_EXT.has(ext)) {
     return NextResponse.json({ error: "Unsupported file type" }, { status: 400 });
   }
@@ -27,7 +29,13 @@ export async function POST(req: Request) {
   // Create the record first so we can key the storage path by its id.
   const { data: rec, error: insErr } = await supabase
     .from("recordings")
-    .insert({ user_id: user.id, title, status: "uploading", candidate_id: candidateId })
+    .insert({
+      user_id: user.id,
+      title,
+      status: "uploading",
+      candidate_id: candidateId,
+      interview_id: interviewId,
+    })
     .select("id")
     .single();
   if (insErr || !rec) {

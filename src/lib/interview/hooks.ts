@@ -3,9 +3,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type {
+  AppNotification,
   Candidate,
   CandidateActivity,
   CandidateQuestion,
+  Interview,
   InterviewFeedback,
   InterviewNote,
   QuestionBankItem,
@@ -103,21 +105,27 @@ export interface CandidateRecording {
   created_at: string;
 }
 
-// Per-candidate planned/asked questions.
-export function useCandidateQuestions(candidateId: string) {
+// Per-candidate planned/asked questions. When `interviewId` is passed, only
+// questions attached to that interview are returned (and new ones are attached
+// to it); otherwise the candidate's general planned questions are returned.
+export function useCandidateQuestions(candidateId: string, interviewId?: string) {
   const [questions, setQuestions] = useState<CandidateQuestion[]>([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
-    const { data } = await supabase
+    let query = supabase
       .from("candidate_questions")
       .select("*")
-      .eq("candidate_id", candidateId)
+      .eq("candidate_id", candidateId);
+    query = interviewId
+      ? query.eq("interview_id", interviewId)
+      : query.is("interview_id", null);
+    const { data } = await query
       .order("sort_order", { ascending: true })
       .order("created_at", { ascending: true });
     setQuestions((data as CandidateQuestion[]) || []);
     setLoading(false);
-  }, [candidateId]);
+  }, [candidateId, interviewId]);
 
   useEffect(() => {
     void refresh();
@@ -127,26 +135,37 @@ export function useCandidateQuestions(candidateId: string) {
     async (partial: Partial<CandidateQuestion>) => {
       const { data } = await supabase
         .from("candidate_questions")
-        .insert({ ...partial, candidate_id: candidateId })
+        .insert({
+          ...partial,
+          candidate_id: candidateId,
+          interview_id: interviewId ?? null,
+          sort_order: questions.length,
+        })
         .select("*")
         .single();
       if (data) setQuestions((prev) => [...prev, data as CandidateQuestion]);
       return (data as CandidateQuestion) || null;
     },
-    [candidateId],
+    [candidateId, interviewId, questions.length],
   );
 
   const addMany = useCallback(
     async (items: Partial<CandidateQuestion>[]) => {
       if (items.length === 0) return;
-      const rows = items.map((p) => ({ ...p, candidate_id: candidateId }));
+      const base = questions.length;
+      const rows = items.map((p, i) => ({
+        ...p,
+        candidate_id: candidateId,
+        interview_id: interviewId ?? null,
+        sort_order: base + i,
+      }));
       const { data } = await supabase
         .from("candidate_questions")
         .insert(rows)
         .select("*");
       if (data) setQuestions((prev) => [...prev, ...(data as CandidateQuestion[])]);
     },
-    [candidateId],
+    [candidateId, interviewId, questions.length],
   );
 
   const update = useCallback(
@@ -164,7 +183,31 @@ export function useCandidateQuestions(candidateId: string) {
     await supabase.from("candidate_questions").delete().eq("id", id);
   }, []);
 
-  return { questions, loading, refresh, add, addMany, update, remove };
+  // Move a question up/down and persist the new order.
+  const move = useCallback(
+    async (id: string, dir: -1 | 1) => {
+      setQuestions((prev) => {
+        const idx = prev.findIndex((q) => q.id === id);
+        const swap = idx + dir;
+        if (idx < 0 || swap < 0 || swap >= prev.length) return prev;
+        const next = [...prev];
+        [next[idx], next[swap]] = [next[swap], next[idx]];
+        // Persist the two affected sort orders.
+        void supabase
+          .from("candidate_questions")
+          .update({ sort_order: swap })
+          .eq("id", next[swap].id);
+        void supabase
+          .from("candidate_questions")
+          .update({ sort_order: idx })
+          .eq("id", next[idx].id);
+        return next.map((q, i) => ({ ...q, sort_order: i }));
+      });
+    },
+    [],
+  );
+
+  return { questions, loading, refresh, add, addMany, update, remove, move };
 }
 
 // Reusable question bank (per owner).
@@ -451,4 +494,185 @@ export function useCandidateRecordings(candidateId: string) {
   }, [refresh]);
 
   return { recordings, loading, refresh };
+}
+
+// Recordings attached to a specific interview.
+export function useInterviewRecordings(interviewId: string) {
+  const [recordings, setRecordings] = useState<CandidateRecording[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    if (!interviewId) return;
+    const { data } = await supabase
+      .from("recordings")
+      .select("id, title, status, total_chunks, chunks_done, created_at")
+      .eq("interview_id", interviewId)
+      .order("created_at", { ascending: false });
+    setRecordings((data as CandidateRecording[]) || []);
+    setLoading(false);
+  }, [interviewId]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const rename = useCallback(async (id: string, title: string) => {
+    setRecordings((prev) => prev.map((r) => (r.id === id ? { ...r, title } : r)));
+    await supabase.from("recordings").update({ title }).eq("id", id);
+  }, []);
+
+  return { recordings, loading, refresh, rename };
+}
+
+// ------------------------------------------------------------------
+// Interviews (scheduled, assignable workspaces)
+// ------------------------------------------------------------------
+export function useInterviews(candidateId: string) {
+  const [interviews, setInterviews] = useState<Interview[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    const { data } = await supabase
+      .from("interviews")
+      .select("*")
+      .eq("candidate_id", candidateId)
+      .order("scheduled_at", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: false });
+    setInterviews((data as Interview[]) || []);
+    setLoading(false);
+  }, [candidateId]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const add = useCallback(
+    async (partial: Partial<Interview>, createdBy: string | null) => {
+      const { data, error } = await supabase
+        .from("interviews")
+        .insert({ ...partial, candidate_id: candidateId, created_by: createdBy })
+        .select("*")
+        .single();
+      if (error || !data) return null;
+      setInterviews((prev) => [data as Interview, ...prev]);
+      return data as Interview;
+    },
+    [candidateId],
+  );
+
+  const update = useCallback(async (id: string, partial: Partial<Interview>) => {
+    setInterviews((prev) =>
+      prev.map((i) => (i.id === id ? { ...i, ...partial } : i)),
+    );
+    await supabase.from("interviews").update(partial).eq("id", id);
+  }, []);
+
+  const remove = useCallback(async (id: string) => {
+    setInterviews((prev) => prev.filter((i) => i.id !== id));
+    await supabase.from("interviews").delete().eq("id", id);
+  }, []);
+
+  return { interviews, loading, refresh, add, update, remove };
+}
+
+export function useInterview(id: string) {
+  const [interview, setInterview] = useState<Interview | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    const { data } = await supabase
+      .from("interviews")
+      .select("*")
+      .eq("id", id)
+      .single();
+    setInterview((data as Interview) || null);
+    setLoading(false);
+  }, [id]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const update = useCallback(
+    async (partial: Partial<Interview>) => {
+      setInterview((prev) => (prev ? { ...prev, ...partial } : prev));
+      await supabase.from("interviews").update(partial).eq("id", id);
+    },
+    [id],
+  );
+
+  return { interview, loading, refresh, update };
+}
+
+// Interviews assigned to the current user (across candidates), with the
+// candidate's name for display.
+export interface AssignedInterview extends Interview {
+  candidate?: { first_name: string; last_name: string; role_title: string };
+}
+export function useMyAssignments(userId: string | null) {
+  const [items, setItems] = useState<AssignedInterview[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    if (!userId) return;
+    const { data } = await supabase
+      .from("interviews")
+      .select("*, candidate:candidates(first_name, last_name, role_title)")
+      .eq("assignee_id", userId)
+      .order("scheduled_at", { ascending: true, nullsFirst: false });
+    setItems((data as AssignedInterview[]) || []);
+    setLoading(false);
+  }, [userId]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  return { items, loading, refresh };
+}
+
+// ------------------------------------------------------------------
+// In-app notifications
+// ------------------------------------------------------------------
+export function useNotifications(userId: string | null) {
+  const [items, setItems] = useState<AppNotification[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    if (!userId) return;
+    const { data } = await supabase
+      .from("notifications")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(30);
+    setItems((data as AppNotification[]) || []);
+    setLoading(false);
+  }, [userId]);
+
+  useEffect(() => {
+    void refresh();
+    if (!userId) return;
+    const t = setInterval(refresh, 60000);
+    return () => clearInterval(t);
+  }, [refresh, userId]);
+
+  const unread = items.filter((n) => !n.read).length;
+
+  const markRead = useCallback(async (id: string) => {
+    setItems((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
+    await supabase.from("notifications").update({ read: true }).eq("id", id);
+  }, []);
+
+  const markAll = useCallback(async () => {
+    if (!userId) return;
+    setItems((prev) => prev.map((n) => ({ ...n, read: true })));
+    await supabase
+      .from("notifications")
+      .update({ read: true })
+      .eq("user_id", userId)
+      .eq("read", false);
+  }, [userId]);
+
+  return { items, loading, unread, refresh, markRead, markAll };
 }

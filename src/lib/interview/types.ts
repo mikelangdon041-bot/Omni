@@ -76,12 +76,78 @@ export interface QuestionBankItem {
 export interface CandidateQuestion {
   id: string;
   candidate_id: string;
+  interview_id: string | null;
   text: string;
   asked: boolean;
   answer_notes: string;
   sort_order: number;
   source: string;
   bank_id: string | null;
+  created_at: string;
+}
+
+// ------------------------------------------------------------------
+// Interviews (scheduled, assignable workspaces)
+// ------------------------------------------------------------------
+export type InterviewStatus =
+  | "scheduled"
+  | "in_progress"
+  | "complete"
+  | "canceled";
+
+export const INTERVIEW_STATUS_LABELS: Record<InterviewStatus, string> = {
+  scheduled: "Scheduled",
+  in_progress: "In progress",
+  complete: "Complete",
+  canceled: "Canceled",
+};
+
+export const INTERVIEW_STATUS_COLORS: Record<InterviewStatus, string> = {
+  scheduled: "bg-sky-100 text-sky-700",
+  in_progress: "bg-amber-100 text-amber-700",
+  complete: "bg-emerald-100 text-emerald-700",
+  canceled: "bg-slate-100 text-slate-500",
+};
+
+export const INTERVIEW_STAGES: { value: string; label: string }[] = [
+  { value: "phone_screen", label: "Phone screen" },
+  { value: "interview", label: "Interview" },
+  { value: "panel", label: "Panel" },
+  { value: "onsite", label: "Onsite" },
+  { value: "reference_check", label: "Reference check" },
+  { value: "other", label: "Other" },
+];
+
+export const INTERVIEW_STAGE_LABELS: Record<string, string> = Object.fromEntries(
+  INTERVIEW_STAGES.map((s) => [s.value, s.label]),
+);
+
+export interface Interview {
+  id: string;
+  candidate_id: string;
+  created_by: string | null;
+  assignee_id: string | null;
+  title: string;
+  stage: string;
+  scheduled_at: string | null;
+  duration_min: number | null;
+  location: string;
+  status: InterviewStatus;
+  notes: string;
+  next_steps: string;
+  follow_up_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AppNotification {
+  id: string;
+  user_id: string;
+  type: string;
+  title: string;
+  body: string;
+  link: string;
+  read: boolean;
   created_at: string;
 }
 

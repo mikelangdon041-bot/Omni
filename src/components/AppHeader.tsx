@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { LayoutGrid, Settings, LogOut, X, Shield } from "lucide-react";
 import { MODULES, moduleForPath } from "@/lib/modules";
+import { NotificationBell } from "@/components/NotificationBell";
 
 export function AppHeader({
   username,
@@ -69,8 +70,9 @@ export function AppHeader({
           </Link>
         )}
 
-        {/* Right: switch-app launcher + account menu */}
+        {/* Right: notifications + switch-app launcher + account menu */}
         <div className="ml-auto flex items-center gap-1.5">
+          <NotificationBell />
           <button
             onClick={() => setLauncher(true)}
             className="flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm text-muted transition hover:bg-canvas hover:text-ink"

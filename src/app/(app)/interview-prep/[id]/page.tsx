@@ -14,7 +14,7 @@ export default async function RecordingPage({
 
   const { data: recording } = await supabase
     .from("recordings")
-    .select("id, title, status, total_chunks, chunks_done, transcript, error")
+    .select("id, title, status, total_chunks, chunks_done, transcript, error, notes")
     .eq("id", id)
     .single();
 

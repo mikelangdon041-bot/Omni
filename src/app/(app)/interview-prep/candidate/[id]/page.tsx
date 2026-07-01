@@ -26,7 +26,7 @@ import { Button } from "@/components/ui/Button";
 import { Tabs } from "@/components/ui/Tabs";
 import { Input } from "@/components/ui/Input";
 import { AutoRichField } from "@/components/ui/AutoRichField";
-import { CandidateRecordings } from "@/components/interview/CandidateRecordings";
+import { InterviewsTab } from "@/components/interview/InterviewsTab";
 import { QuestionsTab } from "@/components/interview/QuestionsTab";
 import { ActivityTab } from "@/components/interview/ActivityTab";
 import { ResumeCard } from "@/components/interview/ResumeCard";
@@ -101,7 +101,7 @@ export default function CandidateDetailPage() {
         />
       )}
       {tab === "Interviews" && (
-        <CandidateRecordings candidateId={candidate.id} userId={userId} />
+        <InterviewsTab candidateId={candidate.id} userId={userId} />
       )}
       {tab === "Questions" && (
         <QuestionsTab candidate={candidate} userId={userId} />
