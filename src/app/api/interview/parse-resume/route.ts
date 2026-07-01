@@ -38,6 +38,10 @@ export async function POST(req: Request) {
   const lower = path.toLowerCase();
 
   let text = "";
+  // Formatted HTML for an in-app preview that keeps the document's structure
+  // (headings, bold, lists). PDFs/images are previewed from the file itself,
+  // so they don't need HTML here.
+  let html = "";
   try {
     if (lower.endsWith(".pdf")) {
       const { PDFParse } = await import("pdf-parse");
@@ -47,10 +51,18 @@ export async function POST(req: Request) {
       await parser.destroy();
     } else if (lower.endsWith(".docx") || lower.endsWith(".doc")) {
       const mammoth = (await import("mammoth")).default;
-      const result = await mammoth.extractRawText({ buffer });
-      text = result.value || "";
+      const [raw, rich] = await Promise.all([
+        mammoth.extractRawText({ buffer }),
+        mammoth.convertToHtml({ buffer }),
+      ]);
+      text = raw.value || "";
+      html = rich.value || "";
     } else {
       text = buffer.toString("utf-8");
+      html = `<pre style="white-space:pre-wrap;font-family:inherit;margin:0">${text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")}</pre>`;
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : "Could not parse file";
@@ -61,5 +73,5 @@ export async function POST(req: Request) {
   if (text) {
     await admin.from("candidates").update({ resume_text: text }).eq("id", candidateId);
   }
-  return NextResponse.json({ text });
+  return NextResponse.json({ text, html });
 }

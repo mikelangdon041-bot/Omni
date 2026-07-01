@@ -32,8 +32,10 @@ export function ResumeCard({
   );
   const savedText = useRef(candidate.resume_text || "");
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null);
   const [extractError, setExtractError] = useState<string | null>(null);
   const autoTried = useRef<string | null>(null);
+  const htmlTried = useRef<string | null>(null);
 
   // Sign the uploaded file for an inline preview.
   useEffect(() => {
@@ -55,6 +57,8 @@ export function ResumeCard({
 
   const isPdf = /\.pdf$/i.test(candidate.resume_url || "");
   const isImage = /\.(png|jpe?g|gif|webp)$/i.test(candidate.resume_url || "");
+  // Docs render as formatted HTML (mammoth) rather than the raw file.
+  const isDoc = /\.(docx?|txt|md|csv)$/i.test(candidate.resume_url || "");
 
   // Debounced autosave of the pasted resume text.
   useEffect(() => {
@@ -82,6 +86,7 @@ export function ResumeCard({
         body: JSON.stringify({ candidateId: candidate.id, path }),
       });
       const data = await res.json();
+      if (data.html) setPreviewHtml(data.html);
       if (res.ok && data.text) {
         setText(data.text);
         savedText.current = data.text;
@@ -112,6 +117,26 @@ export function ResumeCard({
     void runExtract(url);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candidate.resume_url, candidate.resume_text]);
+
+  // Load a formatted preview for document files (DOCX/TXT) which can't be shown
+  // as the raw file. PDFs/images preview from the file itself, so skip them.
+  useEffect(() => {
+    const url = candidate.resume_url;
+    if (!url) return;
+    const doc = /\.(docx?|txt|md|csv)$/i.test(url);
+    if (!doc || previewHtml || htmlTried.current === url) return;
+    htmlTried.current = url;
+    fetch("/api/interview/parse-resume", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ candidateId: candidate.id, path: url }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d?.html && setPreviewHtml(d.html))
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [candidate.resume_url]);
 
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -252,6 +277,17 @@ export function ResumeCard({
                   className="max-h-[28rem] w-full rounded-lg border border-border object-contain"
                 />
               )}
+              {isDoc && previewHtml && (
+                <div
+                  className="resume-doc max-h-[34rem] overflow-y-auto rounded-lg border border-border bg-white px-6 py-5 text-sm leading-relaxed text-ink/90 shadow-inner"
+                  dangerouslySetInnerHTML={{ __html: previewHtml }}
+                />
+              )}
+              {isDoc && !previewHtml && (
+                <p className="rounded-lg border border-border bg-canvas px-3 py-6 text-center text-xs text-muted">
+                  Loading preview…
+                </p>
+              )}
             </>
           ) : (
             <button
@@ -278,17 +314,11 @@ export function ResumeCard({
               </button>
             </div>
           )}
-          {!extracting && text && (
-            <div>
-              <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted">
-                {isPdf || isImage ? "Extracted text (used for AI)" : "Preview"}
-              </p>
-              <p
-                className={`${isPdf || isImage ? "max-h-40" : "max-h-[28rem]"} overflow-y-auto whitespace-pre-wrap rounded-lg border border-border bg-canvas px-3 py-2 text-sm text-ink/90`}
-              >
-                {text}
-              </p>
-            </div>
+          {candidate.resume_url && (
+            <p className="text-xs text-muted">
+              We read the text from this file in the background to power AI
+              features — you don&apos;t need to do anything.
+            </p>
           )}
         </div>
       )}

@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Lock, Check, UserPlus, Trash2 } from "lucide-react";
 import {
   SCORECARD_COMPETENCIES,
-  RATING_LABELS,
+  RATING_MAX,
+  ratingLabel,
   RECOMMENDATIONS,
   RECOMMENDATION_COLOR,
   RECOMMENDATION_LABEL,
@@ -117,29 +118,52 @@ function MyScorecard({
         )}
       </div>
 
-      <div className="space-y-4">
-        {SCORECARD_COMPETENCIES.map((c) => (
-          <div key={c} className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-sm font-medium">{c}</span>
-            <div className="flex gap-1.5">
-              {[1, 2, 3, 4].map((n) => (
-                <button
-                  key={n}
-                  onClick={() => setRatings((r) => ({ ...r, [c]: n }))}
-                  title={RATING_LABELS[n]}
-                  className={cn(
-                    "h-8 w-9 rounded-lg border text-sm font-medium transition",
-                    ratings[c] === n
-                      ? "border-[var(--accent)] bg-[var(--accent)] text-white"
-                      : "border-border text-muted hover:border-[var(--accent)]",
+      <div className="space-y-5">
+        {SCORECARD_COMPETENCIES.map((c) => {
+          const val = ratings[c] || 0;
+          return (
+            <div key={c}>
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <span className="text-sm font-medium">{c}</span>
+                <span className="text-sm text-muted">
+                  {val ? (
+                    <>
+                      <span className="font-semibold text-ink">{val}</span>
+                      <span className="text-muted">/{RATING_MAX}</span>{" "}
+                      · {ratingLabel(val)}
+                    </>
+                  ) : (
+                    <span className="text-muted">Not rated</span>
                   )}
-                >
-                  {n}
-                </button>
-              ))}
+                </span>
+              </div>
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min={1}
+                  max={RATING_MAX}
+                  step={1}
+                  value={val || 1}
+                  onChange={(e) => setRatings((r) => ({ ...r, [c]: Number(e.target.value) }))}
+                  className={cn(
+                    "h-2 w-full cursor-pointer appearance-none rounded-full bg-canvas accent-[var(--accent)]",
+                    !val && "opacity-60",
+                  )}
+                  style={
+                    val
+                      ? {
+                          background: `linear-gradient(to right, var(--accent) ${((val - 1) / (RATING_MAX - 1)) * 100}%, var(--color-canvas, #eef0f4) ${((val - 1) / (RATING_MAX - 1)) * 100}%)`,
+                        }
+                      : undefined
+                  }
+                />
+                <span className="w-6 shrink-0 text-right text-sm font-semibold text-ink">
+                  {val || "–"}
+                </span>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -193,7 +217,7 @@ function SubmittedCard({ f }: { f: InterviewFeedback }) {
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
         {f.ratings.map((r) => (
           <span key={r.competency} className="text-muted">
-            {r.competency}: <span className="font-medium text-ink">{r.rating}/4</span>
+            {r.competency}: <span className="font-medium text-ink">{r.rating}/{RATING_MAX}</span>
           </span>
         ))}
       </div>

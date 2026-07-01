@@ -119,9 +119,12 @@ export interface CandidateShare {
 // ------------------------------------------------------------------
 export interface FeedbackRating {
   competency: string;
-  rating: number; // 1–4
+  rating: number; // 1–10
   comment?: string;
 }
+
+// Scorecard ratings use a 1–10 sliding scale.
+export const RATING_MAX = 10;
 
 export interface InterviewFeedback {
   id: string;
@@ -144,12 +147,14 @@ export const SCORECARD_COMPETENCIES = [
   "Motivation",
 ];
 
-export const RATING_LABELS: Record<number, string> = {
-  1: "Poor",
-  2: "Mixed",
-  3: "Good",
-  4: "Excellent",
-};
+// Descriptor for a point on the 1–10 scale (used for slider tooltips/labels).
+export function ratingLabel(n: number): string {
+  if (n <= 2) return "Poor";
+  if (n <= 4) return "Below bar";
+  if (n <= 6) return "Adequate";
+  if (n <= 8) return "Strong";
+  return "Exceptional";
+}
 
 export const RECOMMENDATIONS = [
   { value: "strong_no", label: "Strong no", color: "bg-rose-100 text-rose-700" },
