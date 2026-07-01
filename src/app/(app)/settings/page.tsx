@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { PageHeader } from "@/components/PageHeader";
 import { SignOutButton } from "@/components/SignOutButton";
 import { SettingsForm } from "@/components/SettingsForm";
+import { EnablePush } from "@/components/EnablePush";
 
 export const dynamic = "force-dynamic";
 
@@ -74,6 +75,13 @@ export default async function SettingsPage() {
             </Link>
           </section>
         )}
+
+        <section className="rounded-xl border border-border bg-surface p-5 shadow-sm">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">
+            Notifications
+          </h2>
+          <EnablePush />
+        </section>
 
         <section className="rounded-xl border border-border bg-surface p-5 shadow-sm">
           <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-muted">

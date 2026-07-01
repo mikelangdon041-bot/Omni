@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getSessionProfile, isAdmin } from "@/lib/authz";
 import { isValidUsername, normalizeUsername, usernameToEmail } from "@/lib/auth";
 import { sendEmail, appUrl } from "@/lib/email";
+import { sendPushToUser } from "@/lib/push";
 
 export const runtime = "nodejs";
 
@@ -58,15 +59,19 @@ export async function POST(req: Request) {
   const link = `/interview-prep/interview/${interviewId}`;
 
   async function notify(recipientId: string, invite = false) {
+    const title = invite
+      ? `You're invited to interview ${candidateName}`
+      : `Interview assigned: ${candidateName}`;
+    const body = interview!.title || "Interview";
     await admin.from("notifications").insert({
       user_id: recipientId,
       type: "interview_assigned",
-      title: invite
-        ? `You're invited to interview ${candidateName}`
-        : `Interview assigned: ${candidateName}`,
-      body: interview!.title || "Interview",
+      title,
+      body,
       link,
     });
+    // Also push to their devices (no-op until VAPID is configured).
+    await sendPushToUser(recipientId, { title, body, link });
   }
 
   async function emailAssignee(email: string, extra = "") {
