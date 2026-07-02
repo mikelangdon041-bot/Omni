@@ -117,7 +117,12 @@ export function useKOLs(userId: string | null) {
   // primary, fill any empty fields on the primary from the duplicates, then
   // delete the duplicates.
   const merge = useCallback(
-    async (primaryId: string, duplicateIds: string[], all: KOL[]) => {
+    async (
+      primaryId: string,
+      duplicateIds: string[],
+      all: KOL[],
+      overrides?: Partial<KOL>,
+    ) => {
       const dups = duplicateIds.filter((id) => id !== primaryId);
       if (dups.length === 0) return;
 
@@ -126,7 +131,8 @@ export function useKOLs(userId: string | null) {
         await supabase.from(table).update({ kol_id: primaryId }).in("kol_id", dups);
       }
 
-      // Fill empty fields on the primary from the duplicates (first non-empty wins).
+      // Base: fill empty fields on the primary from the duplicates. Then apply
+      // any user-resolved conflicts (overrides) on top.
       const primary = all.find((k) => k.id === primaryId);
       const sources = all.filter((k) => dups.includes(k.id));
       if (primary) {
@@ -144,6 +150,7 @@ export function useKOLs(userId: string | null) {
             }
           }
         }
+        if (overrides) Object.assign(patch, overrides);
         if (Object.keys(patch).length) {
           await supabase.from("kols").update(patch).eq("id", primaryId);
         }

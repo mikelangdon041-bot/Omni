@@ -367,7 +367,7 @@ export default function TerritoryDashboard() {
         open={showMerge}
         onClose={() => setShowMerge(false)}
         kols={kols}
-        onMerge={(primaryId, dupIds) => merge(primaryId, dupIds, kols)}
+        onMerge={(primaryId, dupIds, overrides) => merge(primaryId, dupIds, kols, overrides)}
       />
 
       <TidyInstitutionsModal
