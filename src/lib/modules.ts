@@ -84,7 +84,7 @@ export const MODULES: ModuleDef[] = [
     label: "Conference Planning",
     icon: Presentation,
     blurb: "Plan and execute conference coverage.",
-    ready: false,
+    ready: true,
     theme: t("#e11d48", "#be123c", "#ffe4e6", "#f43f5e", "#ec4899", "#d946ef"),
   },
 ];
