@@ -46,6 +46,7 @@ export function AddKOLModal({
       last_name: last,
       title_position: String(f.get("title_position") || "").trim(),
       specialty: String(f.get("specialty") || "").trim(),
+      clinician_type: String(f.get("clinician_type") || "").trim(),
       institution: String(f.get("institution") || "").trim(),
       address: String(f.get("address") || "").trim(),
       phone: String(f.get("phone") || "").trim(),
@@ -75,12 +76,14 @@ export function AddKOLModal({
           <Input label="Last name" name="last_name" required />
           <Input label="Title / position" name="title_position" list="ac-title" />
           <Input label="Specialty" name="specialty" list="ac-specialty" />
+          <Input label="Clinician type" name="clinician_type" list="ac-clinician" placeholder="Physician, Nurse, NP…" />
           <Input label="Institution" name="institution" list="ac-institution" />
           <Input label="Phone" name="phone" />
           <Input label="Email" name="email" type="email" />
           <Input label="Address" name="address" placeholder="City, ST 12345" list="ac-address" />
           <datalist id="ac-title">{ac(suggestions.title_position)}</datalist>
           <datalist id="ac-specialty">{ac(suggestions.specialty)}</datalist>
+          <datalist id="ac-clinician">{ac(suggestions.clinician_type)}</datalist>
           <datalist id="ac-institution">{ac(suggestions.institution)}</datalist>
           <datalist id="ac-address">{ac(suggestions.address)}</datalist>
         </section>

@@ -50,6 +50,7 @@ export interface KOL {
   website_other: string;
   photo_url: string;
   title_position: string;
+  clinician_type: string;
   society_associations: string;
   leadership_appointments: string;
   publications: string;

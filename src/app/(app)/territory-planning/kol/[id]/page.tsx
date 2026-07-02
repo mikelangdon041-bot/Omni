@@ -240,12 +240,14 @@ function Header({
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Input label="Title / position" value={v("title_position")} onChange={(e) => set("title_position", e.target.value)} list="ac-title" />
             <Input label="Specialty" value={v("specialty")} onChange={(e) => set("specialty", e.target.value)} list="ac-specialty" />
+            <Input label="Clinician type" value={v("clinician_type")} onChange={(e) => set("clinician_type", e.target.value)} list="ac-clinician" />
             <Input label="Institution" value={v("institution")} onChange={(e) => set("institution", e.target.value)} list="ac-institution" />
             <Input label="Phone" value={v("phone")} onChange={(e) => set("phone", e.target.value)} />
             <Input label="Email" value={v("email")} onChange={(e) => set("email", e.target.value)} />
             <Input label="Address" value={v("address")} onChange={(e) => set("address", e.target.value)} list="ac-address" />
             <FieldSuggestions id="ac-title" options={suggestions.title_position} />
             <FieldSuggestions id="ac-specialty" options={suggestions.specialty} />
+            <FieldSuggestions id="ac-clinician" options={suggestions.clinician_type} />
             <FieldSuggestions id="ac-institution" options={suggestions.institution} />
             <FieldSuggestions id="ac-address" options={suggestions.address} />
           </div>

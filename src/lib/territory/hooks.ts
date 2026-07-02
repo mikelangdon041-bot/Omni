@@ -113,7 +113,50 @@ export function useKOLs(userId: string | null) {
     await supabase.from("kols").delete().eq("id", id);
   }, []);
 
-  return { kols, loading, refresh, add, addMany, update, remove };
+  // Combine duplicate KOLs into one profile: reassign their history to the
+  // primary, fill any empty fields on the primary from the duplicates, then
+  // delete the duplicates.
+  const merge = useCallback(
+    async (primaryId: string, duplicateIds: string[], all: KOL[]) => {
+      const dups = duplicateIds.filter((id) => id !== primaryId);
+      if (dups.length === 0) return;
+
+      // Move all history to the primary.
+      for (const table of ["activities", "meetings", "quarterly_goals", "reminders"]) {
+        await supabase.from(table).update({ kol_id: primaryId }).in("kol_id", dups);
+      }
+
+      // Fill empty fields on the primary from the duplicates (first non-empty wins).
+      const primary = all.find((k) => k.id === primaryId);
+      const sources = all.filter((k) => dups.includes(k.id));
+      if (primary) {
+        const patch: Record<string, unknown> = {};
+        for (const key of Object.keys(primary) as (keyof KOL)[]) {
+          if (key === "id" || key === "user_id" || key === "created_at") continue;
+          const cur = primary[key];
+          if (cur === "" || cur === null || cur === 0 || cur === false) {
+            for (const s of sources) {
+              const v = s[key];
+              if (v !== "" && v !== null && v !== 0 && v !== false) {
+                patch[key] = v;
+                break;
+              }
+            }
+          }
+        }
+        if (Object.keys(patch).length) {
+          await supabase.from("kols").update(patch).eq("id", primaryId);
+        }
+      }
+
+      await supabase.from("kols").delete().in("id", dups);
+      setKols((prev) => prev.filter((k) => !dups.includes(k.id)));
+      await refresh();
+    },
+    [refresh],
+  );
+
+  return { kols, loading, refresh, add, addMany, update, remove, merge };
 }
 
 export function useKOL(id: string) {
@@ -398,7 +441,7 @@ export function useFieldSuggestions(userId: string | null) {
     supabase
       .from("kols")
       .select(
-        "specialty, title_position, address, tier, institution, society_associations, leadership_appointments, publications",
+        "specialty, title_position, clinician_type, address, tier, institution, society_associations, leadership_appointments, publications",
       )
       .eq("user_id", userId)
       .then(({ data }) => {
@@ -406,6 +449,7 @@ export function useFieldSuggestions(userId: string | null) {
         const fields = [
           "specialty",
           "title_position",
+          "clinician_type",
           "address",
           "tier",
           "institution",

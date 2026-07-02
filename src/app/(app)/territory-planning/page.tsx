@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Search, ArrowUpDown, MapPin, List, CalendarDays } from "lucide-react";
+import { Plus, Search, ArrowUpDown, MapPin, List, CalendarDays, Wand2 } from "lucide-react";
 import { ModuleHero } from "@/components/ui/ModuleHero";
 import { Button } from "@/components/territory/ui/Button";
 import { KOLCard } from "@/components/territory/KOLCard";
@@ -9,13 +9,31 @@ import { AddKOLModal } from "@/components/territory/AddKOLModal";
 import { ImportExport } from "@/components/territory/ImportExport";
 import { KolMap } from "@/components/territory/KolMap";
 import { TerritoryCalendar } from "@/components/territory/TerritoryCalendar";
+import { MergeKolsModal } from "@/components/territory/MergeKolsModal";
+import { TidyInstitutionsModal } from "@/components/territory/TidyInstitutionsModal";
 import { useKOLs, useReminders, useUserId } from "@/lib/territory/hooks";
+import { createClient } from "@/lib/supabase/client";
 import {
   RELATIONSHIP_LABELS,
   cn,
   extractState,
 } from "@/lib/territory/utils";
-import type { RelationshipLevel } from "@/lib/territory/types";
+import type { KOL, RelationshipLevel } from "@/lib/territory/types";
+
+const supabase = createClient();
+
+// Everything searchable about a KOL, HTML stripped, lowercased.
+function kolHaystack(k: KOL): string {
+  const fields = [
+    k.first_name, k.last_name, k.specialty, k.clinician_type, k.title_position,
+    k.institution, k.address, k.email, k.phone, k.tier, k.list_name,
+    k.society_associations, k.leadership_appointments, k.publications,
+    k.areas_of_interest, k.potential_collaborations, k.primary_objective,
+    k.backup_questions, k.other_info, k.how_met_other,
+    RELATIONSHIP_LABELS[k.relationship_level],
+  ];
+  return fields.join(" ").replace(/<[^>]+>/g, " ").toLowerCase();
+}
 
 const ACTIVE_LIST_KEY = "omni_territory_active_list";
 const CUSTOM_LISTS_KEY = "omni_territory_custom_lists";
@@ -25,13 +43,17 @@ type SortKey = "name" | "priority" | "engagement";
 
 export default function TerritoryDashboard() {
   const { userId } = useUserId();
-  const { kols, loading, add, addMany, update } = useKOLs(userId);
+  const { kols, loading, add, addMany, update, merge, refresh } = useKOLs(userId);
   const { reminders } = useReminders(userId);
 
   const [showAdd, setShowAdd] = useState(false);
+  const [showMerge, setShowMerge] = useState(false);
+  const [showTidy, setShowTidy] = useState(false);
   const [search, setSearch] = useState("");
   const [relFilter, setRelFilter] = useState<"all" | RelationshipLevel>("all");
   const [stateFilter, setStateFilter] = useState("all");
+  const [instFilter, setInstFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [view, setView] = useState<"list" | "map" | "calendar">("list");
@@ -66,6 +88,18 @@ export default function TerritoryDashboard() {
     return [...set].sort();
   }, [kols]);
 
+  const institutions = useMemo(() => {
+    const set = new Set<string>();
+    for (const k of kols) if (k.institution?.trim()) set.add(k.institution.trim());
+    return [...set].sort();
+  }, [kols]);
+
+  const clinicianTypes = useMemo(() => {
+    const set = new Set<string>();
+    for (const k of kols) if (k.clinician_type?.trim()) set.add(k.clinician_type.trim());
+    return [...set].sort();
+  }, [kols]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     let out = kols.filter((k) => {
@@ -75,11 +109,12 @@ export default function TerritoryDashboard() {
       if (relFilter !== "all" && k.relationship_level !== relFilter) return false;
       if (stateFilter !== "all" && extractState(k.address) !== stateFilter)
         return false;
-      if (q) {
-        const hay =
-          `${k.first_name} ${k.last_name} ${k.specialty} ${k.institution} ${k.address}`.toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
+      if (instFilter !== "all" && (k.institution || "").trim() !== instFilter)
+        return false;
+      if (typeFilter !== "all" && (k.clinician_type || "").trim() !== typeFilter)
+        return false;
+      // Search across every field, not just the name.
+      if (q && !kolHaystack(k).includes(q)) return false;
       return true;
     });
 
@@ -94,7 +129,7 @@ export default function TerritoryDashboard() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return out;
-  }, [kols, activeList, relFilter, stateFilter, search, sortKey, sortDir]);
+  }, [kols, activeList, relFilter, stateFilter, instFilter, typeFilter, search, sortKey, sortDir]);
 
   const stats = useMemo(() => {
     const active = reminders.filter((r) => !r.completed_at);
@@ -163,7 +198,14 @@ export default function TerritoryDashboard() {
         >
           + New list
         </button>
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-1.5">
+          <button
+            onClick={() => setShowMerge(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2.5 text-sm text-muted transition hover:text-ink"
+            title="Find and combine duplicate profiles"
+          >
+            <Wand2 size={15} /> Combine duplicates
+          </button>
           <ImportExport
             kols={kols}
             onImport={async (rows) => {
@@ -183,7 +225,7 @@ export default function TerritoryDashboard() {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search name, specialty, institution, address…"
+            placeholder="Search anything — name, keyword, publication, note…"
             className="w-full rounded-lg border border-border bg-surface py-2.5 pl-9 pr-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
           />
         </div>
@@ -209,6 +251,43 @@ export default function TerritoryDashboard() {
             {states.map((s) => (
               <option key={s} value={s}>
                 {s}
+              </option>
+            ))}
+          </select>
+        )}
+        {institutions.length > 0 && (
+          <div className="flex items-center gap-1">
+            <select
+              value={instFilter}
+              onChange={(e) => setInstFilter(e.target.value)}
+              className="max-w-52 rounded-lg border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-primary"
+            >
+              <option value="all">All institutions</option>
+              {institutions.map((i) => (
+                <option key={i} value={i}>
+                  {i}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={() => setShowTidy(true)}
+              className="rounded-lg border border-border bg-surface p-2.5 text-muted transition hover:text-ink"
+              title="Tidy up similar institution names"
+            >
+              <Wand2 size={15} />
+            </button>
+          </div>
+        )}
+        {clinicianTypes.length > 0 && (
+          <select
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value)}
+            className="rounded-lg border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-primary"
+          >
+            <option value="all">All clinician types</option>
+            {clinicianTypes.map((t) => (
+              <option key={t} value={t}>
+                {t}
               </option>
             ))}
           </select>
@@ -282,6 +361,28 @@ export default function TerritoryDashboard() {
         onClose={() => setShowAdd(false)}
         onCreate={add}
         lists={lists}
+      />
+
+      <MergeKolsModal
+        open={showMerge}
+        onClose={() => setShowMerge(false)}
+        kols={kols}
+        onMerge={(primaryId, dupIds) => merge(primaryId, dupIds, kols)}
+      />
+
+      <TidyInstitutionsModal
+        open={showTidy}
+        onClose={() => setShowTidy(false)}
+        kols={kols}
+        onApply={async (values, canonical) => {
+          if (!userId) return;
+          await supabase
+            .from("kols")
+            .update({ institution: canonical })
+            .in("institution", values)
+            .eq("user_id", userId);
+          await refresh();
+        }}
       />
     </>
   );

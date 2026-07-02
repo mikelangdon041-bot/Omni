@@ -20,6 +20,7 @@ export const PROFILE_FIELDS: ProfileField[] = [
   { key: "first_name", label: "First Name" },
   { key: "last_name", label: "Last Name" },
   { key: "specialty", label: "Specialty", hint: "medical specialty" },
+  { key: "clinician_type", label: "Clinician Type", hint: "role type, e.g. Physician, Nurse, NP, PA, Pharmacist" },
   { key: "title_position", label: "Title / Position", hint: "job title or academic rank" },
   { key: "institution", label: "Institution", hint: "hospital, clinic, university or practice name" },
   { key: "email", label: "Email" },
