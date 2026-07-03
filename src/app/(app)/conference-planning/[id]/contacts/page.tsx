@@ -5,6 +5,7 @@
 // resolves a schedule contact-meeting to its contact page.
 
 import { useEffect, useMemo, useState } from "react";
+import { Loading } from "@/components/conference/Bits";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
@@ -142,7 +143,7 @@ export default function ContactsPage() {
       </div>
 
       {loading ? (
-        <p className="py-12 text-center text-sm text-muted">Loading…</p>
+        <Loading />
       ) : filtered.length === 0 ? (
         <EmptyState
           title={
@@ -166,11 +167,12 @@ export default function ContactsPage() {
           {filtered.map((c) => (
             <div
               key={c.id}
-              className="group relative rounded-xl border border-border bg-surface p-4 shadow-sm transition hover:shadow-md"
+              className="group relative overflow-hidden rounded-xl border border-border bg-surface shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
             >
+              <div className="h-1.5 w-full" style={{ background: TIERS[c.tier].color }} />
               <Link
                 href={`/conference-planning/${conference.id}/contacts/${c.id}`}
-                className="flex items-start gap-3"
+                className="flex items-start gap-3 p-4"
               >
                 <Avatar src={c.photo_url || null} initials={initials(c.name)} size={44} />
                 <div className="min-w-0 flex-1">

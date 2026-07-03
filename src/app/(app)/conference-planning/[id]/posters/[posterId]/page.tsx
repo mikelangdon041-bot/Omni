@@ -5,6 +5,7 @@
 // extraction, and — for poster sessions — the list of sub-posters.
 
 import { use, useMemo, useState } from "react";
+import { Loading } from "@/components/conference/Bits";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -71,7 +72,7 @@ export default function PosterDetailPage({
     [insightsApi.parents, posterId],
   );
 
-  if (loading) return <p className="py-12 text-center text-sm text-muted">Loading…</p>;
+  if (loading) return <Loading />;
   if (!poster) {
     return (
       <p className="py-12 text-center text-sm text-muted">

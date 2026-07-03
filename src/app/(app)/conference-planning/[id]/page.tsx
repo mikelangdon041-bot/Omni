@@ -8,10 +8,8 @@ import Link from "next/link";
 import {
   CalendarDays,
   ClipboardList,
-  Images,
   Landmark,
   Megaphone,
-  Presentation,
   Sparkles,
   Users,
   UtensilsCrossed,
@@ -21,9 +19,6 @@ import { createClient } from "@/lib/supabase/client";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
 import { useAnnouncements } from "@/lib/conference/hooks";
 import { Avatar } from "@/components/ui/Avatar";
-import { Button } from "@/components/ui/Button";
-import { DeckDialog } from "@/components/conference/DeckDialog";
-import { exportPhotosZip } from "@/lib/conference/exports";
 import { initials } from "@/lib/conference/utils";
 
 const supabase = createClient();
@@ -37,11 +32,9 @@ interface Counts {
 }
 
 export default function ConferenceDashboard() {
-  const { conference, attendees, canManage } = useConferenceCtx();
+  const { conference, attendees } = useConferenceCtx();
   const { announcements } = useAnnouncements(conference.id);
   const [counts, setCounts] = useState<Counts | null>(null);
-  const [deckOpen, setDeckOpen] = useState(false);
-  const [zipProgress, setZipProgress] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -76,65 +69,40 @@ export default function ConferenceDashboard() {
   }, [attendees]);
 
   const base = `/conference-planning/${conference.id}`;
-  const cards: { label: string; value: number | string; href: string; icon: LucideIcon }[] = [
-    { label: "Attendees", value: attendees.length, href: `${base}/team`, icon: Users },
-    { label: "KOLs", value: counts?.contacts ?? "…", href: `${base}/contacts`, icon: Landmark },
-    { label: "Schedule Events", value: counts?.events ?? "…", href: `${base}/schedule`, icon: CalendarDays },
-    { label: "Insights", value: counts?.insights ?? "…", href: `${base}/insights`, icon: Sparkles },
-    { label: "Posters", value: counts?.posters ?? "…", href: `${base}/posters`, icon: ClipboardList },
-    { label: "Open Food Orders", value: counts?.openOrders ?? "…", href: `${base}/food`, icon: UtensilsCrossed },
+  const cards: {
+    label: string;
+    value: number | string;
+    href: string;
+    icon: LucideIcon;
+    color: string;
+  }[] = [
+    { label: "Attendees", value: attendees.length, href: `${base}/team`, icon: Users, color: "#0d9488" },
+    { label: "KOLs", value: counts?.contacts ?? "…", href: `${base}/contacts`, icon: Landmark, color: "#7c3aed" },
+    { label: "Schedule Events", value: counts?.events ?? "…", href: `${base}/schedule`, icon: CalendarDays, color: "#0284c7" },
+    { label: "Insights", value: counts?.insights ?? "…", href: `${base}/insights`, icon: Sparkles, color: "#d97706" },
+    { label: "Posters", value: counts?.posters ?? "…", href: `${base}/posters`, icon: ClipboardList, color: "#be123c" },
+    { label: "Open Food Orders", value: counts?.openOrders ?? "…", href: `${base}/food`, icon: UtensilsCrossed, color: "#10b981" },
   ];
-
-  async function downloadPhotos() {
-    setZipProgress("Collecting photos…");
-    const [sn, pn] = await Promise.all([
-      supabase.from("conf_session_notes").select("images").eq("conference_id", conference.id),
-      supabase.from("conf_poster_notes").select("images").eq("conference_id", conference.id),
-    ]);
-    const urls = [
-      ...(sn.data || []).flatMap((r) => (r.images || []).map((url: string) => ({ url, folder: "sessions" }))),
-      ...(pn.data || []).flatMap((r) => (r.images || []).map((url: string) => ({ url, folder: "posters" }))),
-    ];
-    if (!urls.length) {
-      setZipProgress("");
-      alert("No photos have been uploaded yet.");
-      return;
-    }
-    await exportPhotosZip(urls, `${conference.name} — photos`, (done, total) =>
-      setZipProgress(`Zipping ${done}/${total}…`),
-    );
-    setZipProgress("");
-  }
 
   return (
     <div className="space-y-8">
-      {/* Post-event exports */}
-      <div className="flex flex-wrap gap-2">
-        <Button onClick={() => setDeckOpen(true)}>
-          <Presentation size={15} /> Post-Con Deck
-        </Button>
-        {canManage && (
-          <Button variant="secondary" onClick={downloadPhotos} disabled={!!zipProgress}>
-            <Images size={15} /> {zipProgress || "Post-Con Photos (.zip)"}
-          </Button>
-        )}
-      </div>
-
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
         {cards.map((c) => (
           <Link
             key={c.label}
             href={c.href}
-            className="group rounded-xl border border-border bg-surface p-4 shadow-sm transition hover:shadow-md"
+            className="group overflow-hidden rounded-xl border border-border bg-surface p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
           >
             <div className="flex items-center justify-between">
               <p className="text-2xl font-semibold tracking-tight">{c.value}</p>
-              <c.icon
-                size={20}
-                className="text-muted transition group-hover:text-[var(--accent)]"
-              />
+              <span
+                className="grid h-9 w-9 place-items-center rounded-xl text-white shadow-sm transition group-hover:scale-110"
+                style={{ background: c.color }}
+              >
+                <c.icon size={17} />
+              </span>
             </div>
-            <p className="mt-1 text-xs text-muted">{c.label}</p>
+            <p className="mt-1 text-xs font-medium text-muted">{c.label}</p>
           </Link>
         ))}
       </div>
@@ -176,8 +144,6 @@ export default function ConferenceDashboard() {
           </ul>
         )}
       </section>
-
-      <DeckDialog open={deckOpen} onClose={() => setDeckOpen(false)} />
     </div>
   );
 }

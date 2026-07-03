@@ -6,6 +6,7 @@
 // force-expands all days; the query mirrors into the URL so Back restores it.
 
 import { useMemo, useState } from "react";
+import { Loading } from "@/components/conference/Bits";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronDown, Plus, Search, Trash2 } from "lucide-react";
@@ -107,7 +108,7 @@ export default function SessionsPage() {
       </div>
 
       {loading ? (
-        <p className="py-12 text-center text-sm text-muted">Loading…</p>
+        <Loading />
       ) : groups.length === 0 ? (
         <EmptyState
           title={sessions.length === 0 ? "No sessions yet" : "No sessions match your search"}

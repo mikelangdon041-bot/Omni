@@ -75,6 +75,7 @@ export function ImportScheduleModal({
   const [step, setStep] = useState<Step>("source");
   const [workbook, setWorkbook] = useState<XLSX.WorkBook | null>(null);
   const [rawText, setRawText] = useState(""); // serialized grid or pasted doc
+  const [previewGrid, setPreviewGrid] = useState<string[][] | null>(null);
   const [pasted, setPasted] = useState("");
   const [sourceName, setSourceName] = useState("");
   const [guidance, setGuidance] = useState("");
@@ -90,6 +91,7 @@ export function ImportScheduleModal({
     setStep("source");
     setWorkbook(null);
     setRawText("");
+    setPreviewGrid(null);
     setPasted("");
     setSourceName("");
     setGuidance("");
@@ -116,6 +118,7 @@ export function ImportScheduleModal({
         setStep("sheet");
       } else {
         setRawText(serializeSheet(wb, wb.SheetNames[0]));
+        setPreviewGrid(gridPreview(wb, wb.SheetNames[0]));
         setStep("preview");
       }
     } catch {
@@ -127,6 +130,7 @@ export function ImportScheduleModal({
     if (!workbook) return;
     setSourceName((s) => `${s} · ${name}`);
     setRawText(serializeSheet(workbook, name));
+    setPreviewGrid(gridPreview(workbook, name));
     setStep("preview");
   }
 
@@ -134,6 +138,7 @@ export function ImportScheduleModal({
     if (!pasted.trim()) return;
     setSourceName("Pasted document");
     setRawText(pasted.trim());
+    setPreviewGrid(null);
     setStep("preview");
   }
 
@@ -335,27 +340,35 @@ export function ImportScheduleModal({
 
   return (
     <Modal open={open} onClose={close} title="Import schedule / posters" size="lg">
+      <Stepper step={step} />
+
       {/* ---- Source ---- */}
       {step === "source" && (
         <div className="space-y-5">
           <button
             onClick={() => fileRef.current?.click()}
-            className="grid w-full place-items-center gap-2 rounded-xl border-2 border-dashed border-border bg-canvas/50 px-6 py-10 text-center transition hover:border-[var(--accent)]"
+            className="group grid w-full place-items-center gap-2.5 rounded-2xl border-2 border-dashed border-[var(--accent)]/40 bg-gradient-to-br from-[var(--accent-soft)]/60 to-transparent px-6 py-10 text-center transition hover:border-[var(--accent)] hover:from-[var(--accent-soft)]"
           >
-            <FileSpreadsheet size={28} className="text-muted" />
-            <span className="text-sm font-medium">Upload a spreadsheet</span>
-            <span className="text-xs text-muted">.xlsx, .xls, or .csv — day sheets, booth-duty rosters, poster lists</span>
+            <span className="grid h-14 w-14 place-items-center rounded-2xl bg-[var(--accent)] text-white shadow-md transition group-hover:scale-105">
+              <FileSpreadsheet size={26} />
+            </span>
+            <span className="text-sm font-semibold">Upload a spreadsheet</span>
+            <span className="text-xs text-muted">
+              .xlsx · .xlsm · .xls · .csv — day sheets, booth-duty rosters, poster lists
+            </span>
           </button>
           <input
             ref={fileRef}
             type="file"
-            accept=".xlsx,.xls,.csv"
+            accept=".xlsx,.xlsm,.xlsb,.xls,.csv"
             className="hidden"
             onChange={(e) => onFile(e.target.files?.[0] || null)}
           />
           <div className="flex items-center gap-3">
             <span className="h-px flex-1 bg-border" />
-            <span className="text-xs text-muted">or paste any schedule text</span>
+            <span className="rounded-full bg-canvas px-3 py-1 text-xs font-medium text-muted">
+              or paste any schedule text
+            </span>
             <span className="h-px flex-1 bg-border" />
           </div>
           <Textarea
@@ -364,7 +377,7 @@ export function ImportScheduleModal({
             placeholder="Paste an agenda email, a program excerpt, a poster list…"
             className="min-h-32"
           />
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <ErrorNote text={error} />}
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={close}>
               Cancel
@@ -379,18 +392,26 @@ export function ImportScheduleModal({
       {/* ---- Sheet picker ---- */}
       {step === "sheet" && workbook && (
         <div className="space-y-3">
-          <p className="text-sm text-muted">
-            <b>{sourceName}</b> has {workbook.SheetNames.length} sheets — which
-            one holds the schedule?
+          <p className="text-sm">
+            <b>{sourceName}</b>{" "}
+            <span className="text-muted">
+              has {workbook.SheetNames.length} sheets — which one holds the schedule?
+            </span>
           </p>
-          <div className="space-y-1.5">
-            {workbook.SheetNames.map((name) => (
+          <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+            {workbook.SheetNames.map((name, i) => (
               <button
                 key={name}
                 onClick={() => pickSheet(name)}
-                className="flex w-full items-center gap-2 rounded-lg border border-border bg-surface px-4 py-3 text-left text-sm font-medium transition hover:border-[var(--accent)]"
+                className="flex w-full items-center gap-3 rounded-xl border border-border bg-surface px-4 py-3 text-left text-sm font-medium shadow-sm transition hover:-translate-y-0.5 hover:border-[var(--accent)] hover:shadow-md"
               >
-                <FileSpreadsheet size={15} className="text-muted" /> {name}
+                <span
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-white"
+                  style={{ background: SHEET_COLORS[i % SHEET_COLORS.length] }}
+                >
+                  <FileSpreadsheet size={15} />
+                </span>
+                <span className="truncate">{name}</span>
               </button>
             ))}
           </div>
@@ -404,21 +425,57 @@ export function ImportScheduleModal({
       {step === "preview" && (
         <div className="space-y-4">
           <p className="text-sm text-muted">
-            Raw data from <b>{sourceName}</b> — the AI will normalize it into
-            events, booth coverage, and posters for your review (nothing is
-            created yet).
+            Raw data from <b className="text-ink">{sourceName}</b> — the AI will
+            normalize it into events, booth coverage, and posters for your
+            review (nothing is created yet).
           </p>
-          <pre className="max-h-56 overflow-auto rounded-lg border border-border bg-canvas p-3 text-[11px] leading-relaxed">
-            {rawText.slice(0, 4000)}
-            {rawText.length > 4000 ? "\n…" : ""}
-          </pre>
+          {previewGrid ? (
+            <div className="max-h-56 overflow-auto rounded-xl border border-border">
+              <table className="w-full text-[11px]">
+                <tbody>
+                  {previewGrid.map((row, i) => (
+                    <tr
+                      key={i}
+                      className={cn(
+                        i === 0
+                          ? "bg-[var(--accent)] text-white"
+                          : i % 2
+                            ? "bg-canvas/60"
+                            : "bg-surface",
+                      )}
+                    >
+                      <td className="w-8 px-2 py-1.5 text-right font-mono text-[10px] opacity-50">
+                        {i + 1}
+                      </td>
+                      {row.map((cell, j) => (
+                        <td
+                          key={j}
+                          className={cn(
+                            "max-w-40 truncate px-2 py-1.5",
+                            i === 0 && "font-semibold",
+                          )}
+                        >
+                          {cell}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <pre className="max-h-56 overflow-auto rounded-xl border border-border bg-canvas p-3 text-[11px] leading-relaxed">
+              {rawText.slice(0, 4000)}
+              {rawText.length > 4000 ? "\n…" : ""}
+            </pre>
+          )}
           <Textarea
             label="Guidance for the AI (optional)"
             value={guidance}
             onChange={(e) => setGuidance(e.target.value)}
             placeholder='e.g. "Column F is the rep covering; times are Eastern; rows in red are competitor talks"'
           />
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <ErrorNote text={error} />}
           <div className="flex justify-between gap-2">
             <Button variant="ghost" onClick={reset}>
               ← Start over
@@ -518,9 +575,16 @@ export function ImportScheduleModal({
                     !valid
                       ? "border-red-300 bg-red-50/50"
                       : r.checked
-                        ? "border-border bg-surface"
+                        ? "border-border bg-surface shadow-sm"
                         : "border-border bg-canvas opacity-60",
                   )}
+                  style={{
+                    borderLeft: `4px solid ${
+                      r.kind === "poster"
+                        ? EVENT_TYPES.poster.color
+                        : EVENT_TYPES[r.event_type].color
+                    }`,
+                  }}
                 >
                   <div className="flex flex-wrap items-center gap-2">
                     <input
@@ -625,7 +689,7 @@ export function ImportScheduleModal({
             })}
           </div>
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <ErrorNote text={error} />}
           <div className="flex justify-between gap-2 border-t border-border pt-3">
             <Button variant="ghost" onClick={() => setStep("preview")}>
               ← Re-parse with guidance
@@ -641,19 +705,16 @@ export function ImportScheduleModal({
 
       {/* ---- Done ---- */}
       {step === "done" && (
-        <div className="space-y-4 py-4 text-center">
-          <p className="text-3xl">✅</p>
-          <p className="text-sm">
-            Imported <b>{result.events}</b> event{result.events === 1 ? "" : "s"} and{" "}
-            <b>{result.posters}</b> poster{result.posters === 1 ? "" : "s"}
-            {result.people > 0 && (
-              <>
-                , creating <b>{result.people}</b> new attendee
-                {result.people === 1 ? "" : "s"}
-              </>
-            )}
-            .
-          </p>
+        <div className="space-y-5 py-4 text-center">
+          <span className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-emerald-100 text-3xl">
+            🎉
+          </span>
+          <p className="text-base font-semibold">Import complete</p>
+          <div className="mx-auto flex max-w-sm justify-center gap-3">
+            <DoneStat value={result.events} label="events" color="#0284c7" />
+            <DoneStat value={result.posters} label="posters" color="#d97706" />
+            <DoneStat value={result.people} label="new attendees" color="#10b981" />
+          </div>
           <div className="flex justify-center gap-2">
             <Button variant="secondary" onClick={reset}>
               Import more
@@ -664,6 +725,93 @@ export function ImportScheduleModal({
       )}
     </Modal>
   );
+}
+
+// ------------------------------------------------------------------
+
+const SHEET_COLORS = ["#0d9488", "#7c3aed", "#d97706", "#0284c7", "#be123c", "#4f46e5"];
+
+const STEPS: { key: Step; label: string }[] = [
+  { key: "source", label: "Source" },
+  { key: "preview", label: "AI parse" },
+  { key: "review", label: "Review" },
+  { key: "done", label: "Done" },
+];
+
+function Stepper({ step }: { step: Step }) {
+  const norm = step === "sheet" ? "source" : step;
+  const activeIdx = STEPS.findIndex((s) => s.key === norm);
+  return (
+    <div className="mb-5 flex items-center gap-1.5">
+      {STEPS.map((s, i) => (
+        <div key={s.key} className="flex flex-1 items-center gap-1.5">
+          <span
+            className={cn(
+              "grid h-6 w-6 shrink-0 place-items-center rounded-full text-[11px] font-bold transition",
+              i < activeIdx
+                ? "bg-emerald-500 text-white"
+                : i === activeIdx
+                  ? "bg-[var(--accent)] text-white shadow-sm"
+                  : "bg-canvas text-muted",
+            )}
+          >
+            {i < activeIdx ? "✓" : i + 1}
+          </span>
+          <span
+            className={cn(
+              "hidden text-xs font-medium sm:block",
+              i === activeIdx ? "text-ink" : "text-muted",
+            )}
+          >
+            {s.label}
+          </span>
+          {i < STEPS.length - 1 && (
+            <span
+              className={cn(
+                "h-0.5 flex-1 rounded-full",
+                i < activeIdx ? "bg-emerald-400" : "bg-border",
+              )}
+            />
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ErrorNote({ text }: { text: string }) {
+  return (
+    <p className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+      <TriangleAlert size={15} className="mt-0.5 shrink-0" /> {text}
+    </p>
+  );
+}
+
+function DoneStat({ value, label, color }: { value: number; label: string; color: string }) {
+  return (
+    <div className="flex-1 rounded-xl border border-border bg-surface px-4 py-3 shadow-sm">
+      <p className="text-2xl font-bold" style={{ color }}>
+        {value}
+      </p>
+      <p className="text-[11px] font-medium uppercase tracking-wide text-muted">{label}</p>
+    </div>
+  );
+}
+
+// First rows × columns of a sheet for the visual preview table.
+function gridPreview(wb: XLSX.WorkBook, sheetName: string): string[][] {
+  const grid: unknown[][] = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], {
+    header: 1,
+    raw: false,
+    defval: "",
+  });
+  const out: string[][] = [];
+  for (const row of grid.slice(0, 12)) {
+    const cells = (row || []).slice(0, 8).map((c) => String(c ?? "").trim());
+    if (cells.every((c) => !c)) continue;
+    out.push(cells);
+  }
+  return out;
 }
 
 // ------------------------------------------------------------------

@@ -5,6 +5,7 @@
 // "skip" state, and a two-step create-order flow.
 
 import { useEffect, useMemo, useState } from "react";
+import { Loading } from "@/components/conference/Bits";
 import Link from "next/link";
 import { Plus, UserCheck } from "lucide-react";
 import { Button } from "@/components/ui/Button";
@@ -77,8 +78,10 @@ export default function FoodPage() {
       </div>
 
       {/* Coordinator strip */}
-      <div className="mb-5 flex flex-wrap items-center gap-2 rounded-xl border border-border bg-surface px-4 py-3">
-        <UserCheck size={16} className="text-muted" />
+      <div className="mb-5 flex flex-wrap items-center gap-2.5 rounded-xl border border-border bg-gradient-to-r from-emerald-50/80 to-transparent px-4 py-3">
+        <span className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-500 text-white shadow-sm">
+          <UserCheck size={15} />
+        </span>
         {assignment?.skipped ? (
           <p className="text-sm text-muted">No food coordinator today (skipped).</p>
         ) : coordinators.length ? (
@@ -107,7 +110,7 @@ export default function FoodPage() {
       </div>
 
       {loading ? (
-        <p className="py-12 text-center text-sm text-muted">Loading…</p>
+        <Loading />
       ) : dayOrders.length === 0 ? (
         <EmptyState
           title="No orders for this day"

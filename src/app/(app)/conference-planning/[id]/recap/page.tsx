@@ -7,8 +7,11 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
-import { Landmark, Mic2, NotebookPen, Sparkles } from "lucide-react";
+import { Images, Landmark, Mic2, NotebookPen, Presentation, Sparkles } from "lucide-react";
 import { cn } from "@/lib/ui";
+import { Button } from "@/components/ui/Button";
+import { DeckDialog } from "@/components/conference/DeckDialog";
+import { exportPhotosZip } from "@/lib/conference/exports";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
 import {
   useEvents,
@@ -35,7 +38,7 @@ import {
 const supabase = createClient();
 
 export default function RecapPage() {
-  const { conference, attendees, me } = useConferenceCtx();
+  const { conference, attendees, me, canManage } = useConferenceCtx();
   const { events } = useEvents(conference.id, me?.id);
   const { posters } = usePosters(conference.id);
   const { parents, childrenOf } = useInsights(conference.id);
@@ -49,6 +52,29 @@ export default function RecapPage() {
   const [meetings, setMeetings] = useState<ContactMeeting[]>([]);
   const [contactNames, setContactNames] = useState<Record<string, string>>({});
   const [summary, setSummary] = useState<DailySummary | null>(null);
+  const [deckOpen, setDeckOpen] = useState(false);
+  const [zipProgress, setZipProgress] = useState("");
+
+  async function downloadPhotos() {
+    setZipProgress("Collecting photos…");
+    const [sn, pn] = await Promise.all([
+      supabase.from("conf_session_notes").select("images").eq("conference_id", conference.id),
+      supabase.from("conf_poster_notes").select("images").eq("conference_id", conference.id),
+    ]);
+    const urls = [
+      ...(sn.data || []).flatMap((r) => (r.images || []).map((url: string) => ({ url, folder: "sessions" }))),
+      ...(pn.data || []).flatMap((r) => (r.images || []).map((url: string) => ({ url, folder: "posters" }))),
+    ];
+    if (!urls.length) {
+      setZipProgress("");
+      alert("No photos have been uploaded yet.");
+      return;
+    }
+    await exportPhotosZip(urls, `${conference.name} — photos`, (done, total) =>
+      setZipProgress(`Zipping ${done}/${total}…`),
+    );
+    setZipProgress("");
+  }
 
   // Contact meetings + names + stored daily summary for the chosen day.
   useEffect(() => {
@@ -156,6 +182,18 @@ export default function RecapPage() {
 
   return (
     <div className="space-y-5">
+      {/* Post-event exports */}
+      <div className="flex flex-wrap gap-2 rounded-xl border border-border bg-surface p-4">
+        <Button onClick={() => setDeckOpen(true)}>
+          <Presentation size={15} /> Post-Con Deck
+        </Button>
+        {canManage && (
+          <Button variant="secondary" onClick={downloadPhotos} disabled={!!zipProgress}>
+            <Images size={15} /> {zipProgress || "Post-Con Photos (.zip)"}
+          </Button>
+        )}
+      </div>
+
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex gap-1.5 overflow-x-auto">
           {days.map((d) => (
@@ -205,7 +243,8 @@ export default function RecapPage() {
       )}
 
       <RecapSection
-        icon={<Mic2 size={14} />}
+        icon={<Mic2 size={15} />}
+        color="#0284c7"
         title={`Sessions (${daySessions.length})`}
       >
         {daySessions.map((e) => (
@@ -228,7 +267,8 @@ export default function RecapPage() {
       </RecapSection>
 
       <RecapSection
-        icon={<Landmark size={14} />}
+        icon={<Landmark size={15} />}
+        color="#7c3aed"
         title={`KOL meetings (${meetings.length})`}
       >
         {meetings.map((m) => (
@@ -249,7 +289,8 @@ export default function RecapPage() {
       </RecapSection>
 
       <RecapSection
-        icon={<NotebookPen size={14} />}
+        icon={<NotebookPen size={15} />}
+        color="#be123c"
         title={`Posters (${dayPosters.length})`}
       >
         {dayPosters.map((p) => (
@@ -265,7 +306,8 @@ export default function RecapPage() {
       </RecapSection>
 
       <RecapSection
-        icon={<Sparkles size={14} />}
+        icon={<Sparkles size={15} />}
+        color="#d97706"
         title={`Insights (${dayInsights.length})`}
       >
         {dayInsights.map((i) => (
@@ -284,24 +326,37 @@ export default function RecapPage() {
           </div>
         ))}
       </RecapSection>
+
+      <DeckDialog open={deckOpen} onClose={() => setDeckOpen(false)} />
     </div>
   );
 }
 
 function RecapSection({
   icon,
+  color,
   title,
   children,
 }: {
   icon: React.ReactNode;
+  color: string;
   title: string;
   children: React.ReactNode;
 }) {
   const empty = !children || (Array.isArray(children) && children.length === 0);
   return (
-    <section className="rounded-xl border border-border bg-surface p-5">
-      <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wide text-muted">
-        {icon} {title}
+    <section
+      className="overflow-hidden rounded-xl border border-border bg-surface p-5"
+      style={{ borderTop: `3px solid ${color}` }}
+    >
+      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted">
+        <span
+          className="grid h-7 w-7 place-items-center rounded-lg text-white shadow-sm"
+          style={{ background: color }}
+        >
+          {icon}
+        </span>
+        {title}
       </h2>
       {empty ? (
         <p className="text-sm text-muted">Nothing captured.</p>

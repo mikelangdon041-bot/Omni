@@ -6,6 +6,7 @@
 // booth log.
 
 import { useMemo, useState } from "react";
+import { Loading } from "@/components/conference/Bits";
 import Link from "next/link";
 import {
   ChevronDown,
@@ -130,11 +131,23 @@ export default function InsightsPage() {
   );
   const days = listDays(conference.start_date, conference.end_date);
 
-  function sourceIcon(i: Insight) {
-    if (i.event_id) return <Mic2 size={12} />;
-    if (i.contact_id) return <Landmark size={12} />;
-    if (i.poster_id) return <NotebookPen size={12} />;
-    return <Plus size={12} />;
+  function sourceChip(i: Insight) {
+    const [icon, label, color, soft] = i.event_id
+      ? [<Mic2 key="i" size={11} />, "Session", "#0284c7", "#e0f2fe"]
+      : i.contact_id
+        ? [<Landmark key="i" size={11} />, "KOL", "#7c3aed", "#ede9fe"]
+        : i.poster_id
+          ? [<NotebookPen key="i" size={11} />, "Poster", "#d97706", "#fef3c7"]
+          : [<Plus key="i" size={11} />, "Manual", "#6c6982", "#eeedf5"];
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+        style={{ background: soft as string, color: color as string }}
+      >
+        {icon}
+        {label as string}
+      </span>
+    );
   }
   function sourceHref(i: Insight): string | null {
     const base = `/conference-planning/${conference.id}`;
@@ -252,7 +265,7 @@ export default function InsightsPage() {
       </div>
 
       {loading ? (
-        <p className="py-12 text-center text-sm text-muted">Loading…</p>
+        <Loading />
       ) : groups.length === 0 ? (
         <EmptyState
           title={parents.length === 0 ? "No insights yet" : "No insights match these filters"}
@@ -319,11 +332,9 @@ export default function InsightsPage() {
                               className="min-w-0 flex-1 text-left"
                             >
                               <p className="text-sm font-medium">{i.title}</p>
-                              <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted">
-                                <span className="inline-flex items-center gap-1">
-                                  {sourceIcon(i)}
-                                  {i.source_type || "Unspecified source"}
-                                </span>
+                              <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+                                {sourceChip(i)}
+                                <span>{i.source_type || "Unspecified source"}</span>
                                 {userName(i.user_id) && <span>· {userName(i.user_id)}</span>}
                                 {children.length > 0 && (
                                   <span>· {children.length} bullet{children.length === 1 ? "" : "s"}</span>

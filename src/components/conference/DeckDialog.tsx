@@ -29,6 +29,8 @@ import {
   type DeckTheme,
   type ParsedTemplate,
 } from "@/lib/conference/deck";
+import { generateClonedDeck } from "@/lib/conference/deckClone";
+import { saveBlob } from "@/lib/conference/exports";
 import { SESSION_TYPES } from "@/lib/conference/types";
 import {
   dateKeyInTz,
@@ -41,27 +43,24 @@ import {
 
 const supabase = createClient();
 
-interface TemplateRow {
-  id: string;
-  name: string;
-  storage_path: string;
-  theme: DeckTheme;
-  mapping: {
-    description?: string;
-    colors?: Partial<Record<"primary" | "secondary" | "text" | "bg", string>>;
-    fonts?: { head?: string; body?: string };
-    useLogo?: boolean;
-    recommendations?: string[];
-  };
-  guidance: string;
-}
-
 interface Proposal {
   description?: string;
+  titleSlideIndex?: number;
+  dividerSlideIndex?: number;
+  contentSlideIndex?: number;
   colors?: Partial<Record<"primary" | "secondary" | "text" | "bg", string>>;
   fonts?: { head?: string; body?: string };
   useLogo?: boolean;
   recommendations?: string[];
+}
+
+interface TemplateRow {
+  id: string;
+  name: string;
+  storage_path: string; // public URL of the uploaded .pptx (cloned at generate time)
+  theme: DeckTheme;
+  mapping: Proposal;
+  guidance: string;
 }
 
 export function DeckDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -251,7 +250,16 @@ export function DeckDialog({ open, onClose }: { open: boolean; onClose: () => vo
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Template analysis failed");
-      setProposal(json.proposal || {});
+      const p: Proposal = json.proposal || {};
+      // Clamp AI-chosen model slides into range.
+      const clamp = (n: unknown, fallback: number) => {
+        const v = Number(n);
+        return v >= 1 && v <= (tplParsed?.slideCount || 1) ? v : fallback;
+      };
+      p.titleSlideIndex = clamp(p.titleSlideIndex, 1);
+      p.dividerSlideIndex = clamp(p.dividerSlideIndex, Math.min(2, tplParsed?.slideCount || 1));
+      p.contentSlideIndex = clamp(p.contentSlideIndex, tplParsed?.slideCount || 1);
+      setProposal(p);
       setTplStep("proposal");
     } catch (e) {
       setError((e as Error).message);
@@ -317,21 +325,47 @@ export function DeckDialog({ open, onClose }: { open: boolean; onClose: () => vo
     setError("");
     cancelRef.current = false;
     try {
-      const ok = await generateDeck(
-        {
-          conferenceName: conference.name,
-          dateRange: fmtDateRange(conference),
-          location: conference.location,
-          boothByDay: booth.filter((b) => b.checked).map(({ day, text }) => ({ day, text })),
-          meetingLines: includeMeetings ? meetingLines : [],
-          sessions,
-          posters,
-        },
-        themeFor(templateId),
-        setProgress,
-        () => cancelRef.current,
-      );
-      if (ok) onClose();
+      const data = {
+        conferenceName: conference.name,
+        dateRange: fmtDateRange(conference),
+        location: conference.location,
+        boothByDay: booth.filter((b) => b.checked).map(({ day, text }) => ({ day, text })),
+        meetingLines: includeMeetings ? meetingLines : [],
+        sessions,
+        posters,
+      };
+      const template = templates.find((t) => t.id === templateId);
+
+      if (template?.storage_path) {
+        // TRUE cloning: the output file IS the uploaded template, refilled.
+        setProgress("Fetching your template…");
+        const res = await fetch(template.storage_path);
+        if (!res.ok) throw new Error("Couldn't fetch the template file from storage.");
+        const bytes = await res.arrayBuffer();
+        const blob = await generateClonedDeck(
+          bytes,
+          data,
+          {
+            titleSlideIndex: template.mapping?.titleSlideIndex,
+            dividerSlideIndex: template.mapping?.dividerSlideIndex,
+            contentSlideIndex: template.mapping?.contentSlideIndex,
+          },
+          setProgress,
+          () => cancelRef.current,
+        );
+        if (blob) {
+          saveBlob(blob, `${conference.name} — Post-Con.pptx`);
+          onClose();
+        }
+      } else {
+        const ok = await generateDeck(
+          data,
+          themeFor(templateId),
+          setProgress,
+          () => cancelRef.current,
+        );
+        if (ok) onClose();
+      }
     } catch (e) {
       setError((e as Error).message || "Deck generation failed");
     } finally {
@@ -438,6 +472,41 @@ export function DeckDialog({ open, onClose }: { open: boolean; onClose: () => vo
                     ))}
                   </ul>
                 )}
+                <div className="grid grid-cols-3 gap-2">
+                  {(
+                    [
+                      ["titleSlideIndex", "Title model"],
+                      ["dividerSlideIndex", "Divider model"],
+                      ["contentSlideIndex", "Content model"],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <label key={key} className="flex flex-col gap-1 text-xs font-medium">
+                      {label}
+                      <select
+                        value={proposal[key] || 1}
+                        onChange={(e) =>
+                          setProposal((prev) =>
+                            prev ? { ...prev, [key]: Number(e.target.value) } : prev,
+                          )
+                        }
+                        className="rounded-lg border border-border bg-surface px-2 py-1.5 text-sm outline-none focus:border-[var(--accent)]"
+                      >
+                        {Array.from({ length: tplParsed.slideCount }, (_, i) => (
+                          <option key={i + 1} value={i + 1}>
+                            Slide {i + 1}
+                            {tplParsed.slidesText[i]
+                              ? ` — ${tplParsed.slidesText[i].slice(0, 30)}`
+                              : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ))}
+                </div>
+                <p className="text-[11px] text-muted">
+                  The deck is generated by cloning these slides from your file —
+                  the output keeps the template&apos;s exact design.
+                </p>
                 <Input
                   label="Template name"
                   value={tplName}

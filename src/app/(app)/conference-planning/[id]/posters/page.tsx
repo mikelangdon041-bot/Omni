@@ -5,6 +5,7 @@
 // with poster sessions shown once (sub-posters live on the session's page).
 
 import { useMemo, useState } from "react";
+import { Loading } from "@/components/conference/Bits";
 import Link from "next/link";
 import { FileSpreadsheet, Layers, Plus, Search } from "lucide-react";
 import { Button } from "@/components/ui/Button";
@@ -90,7 +91,7 @@ export default function PostersPage() {
       </div>
 
       {loading ? (
-        <p className="py-12 text-center text-sm text-muted">Loading…</p>
+        <Loading />
       ) : groups.length === 0 ? (
         <EmptyState
           title={topLevel.length === 0 ? "No posters yet" : "No posters match"}

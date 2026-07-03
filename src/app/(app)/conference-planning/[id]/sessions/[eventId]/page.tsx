@@ -5,6 +5,7 @@
 // banner, and AI insight extraction with a review step before anything saves.
 
 import { use, useMemo, useState } from "react";
+import { Loading } from "@/components/conference/Bits";
 import Link from "next/link";
 import { Clock, ImagePlus, MapPin, Pencil, Sparkles, Trash2, Users } from "lucide-react";
 import { Button } from "@/components/ui/Button";
@@ -75,7 +76,7 @@ export default function SessionDetailPage({
   const nameForUser = (userId: string) =>
     attendees.find((a) => a.user_id === userId)?.name || "Teammate";
 
-  if (loading) return <p className="py-12 text-center text-sm text-muted">Loading…</p>;
+  if (loading) return <Loading />;
   if (!event) {
     return (
       <p className="py-12 text-center text-sm text-muted">

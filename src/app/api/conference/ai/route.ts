@@ -238,18 +238,21 @@ Rules:
         messages: [
           {
             role: "system",
-            content: `A team uploaded their branded PowerPoint template. We extracted its theme and the text of each slide. Decide how a generated post-conference deck (sections: title → booth activity per day → KOL meetings list → sessions by day → posters by day) should adopt this template.
+            content: `A team uploaded their branded PowerPoint template. We extracted its theme and the text of each slide. The generator will CLONE this template file directly: it picks one existing slide as the model for the title slide, one for section dividers, and one for content slides, then fills them with post-conference content (title → booth activity per day → KOL meetings list → sessions by day → posters by day).
 
-Return ONLY JSON:
+Decide which slides to use as models and describe the adoption. Return ONLY JSON:
 {
   "description": "1-2 sentences: what this template looks like / is for",
+  "titleSlideIndex": 1,        // 1-based slide number best suited as the title/cover model
+  "dividerSlideIndex": 2,      // best suited as a section-divider model (big heading, little body)
+  "contentSlideIndex": 3,      // best suited as a content model (heading + body text area)
   "colors": {"primary":"RRGGBB","secondary":"RRGGBB","text":"RRGGBB","bg":"RRGGBB"},
   "fonts": {"head":"...","body":"..."},
   "useLogo": true|false,
-  "recommendations": ["short, specific placement/styling suggestions the generator honors: e.g. which color for dividers, whether titles are uppercase, dense vs airy body text"]
+  "recommendations": ["short, specific observations about how content will sit in this template"]
 }
 
-Base colors/fonts on the extracted theme unless the slide text or user guidance implies otherwise. Be decisive — pick actual values, don't hedge.`,
+Pick indices from the actual slides listed (a cover usually comes first; an agenda/section slide makes a good divider; a bulleted content slide makes the content model). Be decisive — pick actual values, don't hedge.`,
           },
           {
             role: "user",

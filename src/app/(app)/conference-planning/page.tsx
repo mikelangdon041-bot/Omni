@@ -3,6 +3,7 @@
 // Conference Planning home — pick (or create) the conference to work in.
 
 import { useState } from "react";
+import { Loading } from "@/components/conference/Bits";
 import Link from "next/link";
 import { Plus, MapPin, CalendarDays, Pencil, Presentation } from "lucide-react";
 import { ModuleHero } from "@/components/ui/ModuleHero";
@@ -41,7 +42,7 @@ export default function ConferencePlanningHome() {
       />
 
       {loading ? (
-        <p className="py-12 text-center text-sm text-muted">Loading…</p>
+        <Loading />
       ) : conferences.length === 0 ? (
         <EmptyState
           title="No conferences yet"

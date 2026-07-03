@@ -5,6 +5,7 @@
 // toggle, and a scheduled-events safety check before removal.
 
 import { useEffect, useMemo, useState } from "react";
+import { Loading } from "@/components/conference/Bits";
 import { createClient } from "@/lib/supabase/client";
 import {
   Crown,
@@ -114,7 +115,7 @@ export default function TeamPage() {
       )}
 
       {attendeesLoading ? (
-        <p className="py-12 text-center text-sm text-muted">Loading…</p>
+        <Loading />
       ) : filtered.length === 0 ? (
         <EmptyState
           title="No attendees yet"

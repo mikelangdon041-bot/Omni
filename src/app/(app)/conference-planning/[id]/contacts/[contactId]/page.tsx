@@ -5,6 +5,7 @@
 // ?meeting= deep link from the schedule), AI meeting summary, and insights.
 
 import { use, useEffect, useMemo, useRef, useState } from "react";
+import { Loading } from "@/components/conference/Bits";
 import Link from "next/link";
 import {
   Camera,
@@ -70,7 +71,7 @@ export default function ContactDetailPage({
     [insightsApi.parents, contactId],
   );
 
-  if (loading) return <p className="py-12 text-center text-sm text-muted">Loading…</p>;
+  if (loading) return <Loading />;
   if (!contact) {
     return (
       <p className="py-12 text-center text-sm text-muted">

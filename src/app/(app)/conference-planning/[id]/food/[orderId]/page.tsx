@@ -5,6 +5,7 @@
 // (broadcast + DMs visible only to sender/recipient).
 
 import { use, useEffect, useMemo, useState } from "react";
+import { Loading } from "@/components/conference/Bits";
 import Link from "next/link";
 import {
   ExternalLink,
@@ -77,7 +78,7 @@ export default function FoodOrderPage({
   const nameForAttendee = (id: string | null) =>
     attendees.find((a) => a.id === id)?.name || "Unknown";
 
-  if (loading) return <p className="py-12 text-center text-sm text-muted">Loading…</p>;
+  if (loading) return <Loading />;
   if (!order) {
     return (
       <p className="py-12 text-center text-sm text-muted">

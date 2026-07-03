@@ -5,6 +5,7 @@
 // per-person calendar export, and event create/edit via the form sheet.
 
 import { useMemo, useState } from "react";
+import { Loading } from "@/components/conference/Bits";
 import {
   CalendarDays,
   Download,
@@ -202,7 +203,7 @@ export default function SchedulePage() {
       </div>
 
       {loading ? (
-        <p className="py-12 text-center text-sm text-muted">Loading schedule…</p>
+        <Loading />
       ) : view === "who" ? (
         <WhoIsWhere events={events} />
       ) : view === "list" ? (
