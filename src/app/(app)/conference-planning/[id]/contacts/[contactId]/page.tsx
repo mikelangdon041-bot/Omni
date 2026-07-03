@@ -8,11 +8,14 @@ import { use, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Camera,
+  Download,
   ExternalLink,
+  MapPin,
   Plus,
   Sparkles,
   Trash2,
 } from "lucide-react";
+import { exportKolDocx } from "@/lib/conference/exports";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { AutoRichField } from "@/components/ui/AutoRichField";
@@ -24,8 +27,10 @@ import {
   useContact,
   useContactMeetings,
   useInsights,
+  useRecordings,
   useCategories,
 } from "@/lib/conference/hooks";
+import { RecorderPanel, recordingsText } from "@/components/conference/RecorderPanel";
 import {
   CategoryChip,
   GenerateInsightsModal,
@@ -43,6 +48,7 @@ export default function ContactDetailPage({
   const { contact, loading, update } = useContact(contactId);
   const { meetings, add: addMeeting, update: updateMeeting, remove: removeMeeting } =
     useContactMeetings(conference.id, contactId);
+  const { recordings } = useRecordings(conference.id, { contactId });
   const insightsApi = useInsights(conference.id);
   const { categories } = useCategories(conference.id);
 
@@ -83,6 +89,7 @@ export default function ContactDetailPage({
     ...meetings.map(
       (m) => `Meeting on ${m.meeting_date}${m.location ? ` at ${m.location}` : ""}:\n${stripHtml(m.notes)}`,
     ),
+    recordingsText(recordings),
     ...contactInsights.map((i) => `Insight: ${i.title}`),
   ]
     .filter((t) => t.trim().length > 10)
@@ -180,6 +187,26 @@ export default function ContactDetailPage({
             onChange={(interests) => update({ interests })}
           />
         </div>
+
+        <div className="mt-4 flex flex-wrap gap-2 border-t border-border pt-4">
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() =>
+              exportKolDocx(contact, meetings, contactInsights, insightsApi.childrenOf)
+            }
+          >
+            <Download size={13} /> Export .docx
+          </Button>
+          {contact.kol_id && (
+            <Link
+              href={`/territory-planning/kol/${contact.kol_id}`}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs font-medium text-muted transition hover:text-ink"
+            >
+              <MapPin size={13} /> Open in Territory Planning
+            </Link>
+          )}
+        </div>
       </div>
 
       {/* Rich sections */}
@@ -227,6 +254,13 @@ export default function ContactDetailPage({
         updateMeeting={updateMeeting}
         removeMeeting={removeMeeting}
         meetingRefs={meetingRefs}
+      />
+
+      {/* Meeting recordings (consent-gated) */}
+      <RecorderPanel
+        contactId={contactId}
+        consentNotice
+        defaultTitle={`Meeting with ${contact.name}`}
       />
 
       {/* AI summary */}

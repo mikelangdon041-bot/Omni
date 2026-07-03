@@ -110,6 +110,7 @@ export interface QuickLink {
 export interface Contact {
   id: string;
   conference_id: string;
+  kol_id: string | null; // link into the shared territory `kols` directory
   name: string;
   tier: Tier;
   institution: string;

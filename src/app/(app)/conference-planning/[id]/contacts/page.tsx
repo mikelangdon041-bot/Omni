@@ -213,6 +213,17 @@ export default function ContactsPage() {
   );
 }
 
+interface TerritoryKol {
+  id: string;
+  first_name: string;
+  last_name: string;
+  institution: string;
+  email: string;
+  phone: string;
+  title_position: string;
+  photo_url: string;
+}
+
 function AddContactModal({
   open,
   onClose,
@@ -222,6 +233,8 @@ function AddContactModal({
   onClose: () => void;
   onCreate: (partial: Partial<Contact>) => Promise<void>;
 }) {
+  const { conference, me } = useConferenceCtx();
+  const [tab, setTab] = useState<"new" | "territory" | "past">("new");
   const [name, setName] = useState("");
   const [tier, setTier] = useState<Tier>("medium");
   const [institution, setInstitution] = useState("");
@@ -229,6 +242,38 @@ function AddContactModal({
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [saving, setSaving] = useState(false);
+  const [territoryKols, setTerritoryKols] = useState<TerritoryKol[]>([]);
+  const [pastContacts, setPastContacts] = useState<Contact[]>([]);
+  const [importSearch, setImportSearch] = useState("");
+
+  // Load import sources when the modal opens: my shared-KOL directory
+  // (territory) and this org's KOLs from past conferences (deduped by name,
+  // best-populated record wins).
+  useEffect(() => {
+    if (!open || !me) return;
+    supabase
+      .from("kols")
+      .select("id, first_name, last_name, institution, email, phone, title_position, photo_url")
+      .eq("user_id", me.id)
+      .order("last_name")
+      .then(({ data }) => setTerritoryKols((data as TerritoryKol[]) || []));
+    supabase
+      .from("conf_contacts")
+      .select("*")
+      .neq("conference_id", conference.id)
+      .eq("archived", false)
+      .then(({ data }) => {
+        const byName = new Map<string, Contact>();
+        for (const c of (data as Contact[]) || []) {
+          const key = c.name.trim().toLowerCase();
+          const existing = byName.get(key);
+          const filled = (x: Contact) =>
+            [x.institution, x.title, x.email, x.phone, x.background].filter(Boolean).length;
+          if (!existing || filled(c) > filled(existing)) byName.set(key, c);
+        }
+        setPastContacts([...byName.values()].sort((a, b) => a.name.localeCompare(b.name)));
+      });
+  }, [open, me, conference.id]);
 
   async function save() {
     if (!name.trim()) return;
@@ -250,39 +295,181 @@ function AddContactModal({
     onClose();
   }
 
+  async function importTerritory(k: TerritoryKol) {
+    setSaving(true);
+    await onCreate({
+      kol_id: k.id,
+      name: `${k.first_name} ${k.last_name}`.trim(),
+      institution: k.institution || "",
+      title: k.title_position || "",
+      email: k.email || "",
+      phone: k.phone || "",
+      photo_url: k.photo_url || "",
+    });
+    setSaving(false);
+    onClose();
+  }
+
+  async function importPast(c: Contact) {
+    setSaving(true);
+    await onCreate({
+      kol_id: c.kol_id,
+      name: c.name,
+      tier: c.tier,
+      institution: c.institution,
+      title: c.title,
+      email: c.email,
+      phone: c.phone,
+      photo_url: c.photo_url,
+      interests: c.interests,
+      background: c.background,
+      engagement_activities: c.engagement_activities,
+      meeting_objectives: c.meeting_objectives,
+      links: c.links,
+      custom_fields: c.custom_fields,
+    });
+    setSaving(false);
+    onClose();
+  }
+
+  const q = importSearch.trim().toLowerCase();
+  const filteredTerritory = q
+    ? territoryKols.filter((k) =>
+        `${k.first_name} ${k.last_name} ${k.institution}`.toLowerCase().includes(q),
+      )
+    : territoryKols;
+  const filteredPast = q
+    ? pastContacts.filter((c) => `${c.name} ${c.institution}`.toLowerCase().includes(q))
+    : pastContacts;
+
   return (
     <Modal open={open} onClose={onClose} title="Add KOL">
       <div className="space-y-4">
-        <Input label="Name *" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
-        <div className="grid grid-cols-2 gap-3">
-          <Select
-            label="Engagement tier"
-            value={tier}
-            onChange={(e) => setTier(e.target.value as Tier)}
-          >
-            <option value="high">High</option>
-            <option value="medium">Medium</option>
-            <option value="low">Low</option>
-          </Select>
-          <Input label="Title" value={title} onChange={(e) => setTitle(e.target.value)} />
+        <div className="flex gap-1 border-b border-border">
+          {(
+            [
+              ["new", "New"],
+              ["territory", `My Territory KOLs (${territoryKols.length})`],
+              ["past", `Past conferences (${pastContacts.length})`],
+            ] as const
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className={cn(
+                "-mb-px border-b-2 px-3 py-2 text-sm font-medium transition",
+                tab === key
+                  ? "border-[var(--accent)] text-[var(--accent)]"
+                  : "border-transparent text-muted hover:text-ink",
+              )}
+            >
+              {label}
+            </button>
+          ))}
         </div>
-        <Input
-          label="Institution / affiliation"
-          value={institution}
-          onChange={(e) => setInstitution(e.target.value)}
-        />
-        <div className="grid grid-cols-2 gap-3">
-          <Input label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-          <Input label="Phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
-        </div>
-        <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button onClick={save} disabled={saving || !name.trim()}>
-            {saving ? "Adding…" : "Add KOL"}
-          </Button>
-        </div>
+
+        {tab === "new" ? (
+          <>
+            <Input label="Name *" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+            <div className="grid grid-cols-2 gap-3">
+              <Select
+                label="Engagement tier"
+                value={tier}
+                onChange={(e) => setTier(e.target.value as Tier)}
+              >
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+              </Select>
+              <Input label="Title" value={title} onChange={(e) => setTitle(e.target.value)} />
+            </div>
+            <Input
+              label="Institution / affiliation"
+              value={institution}
+              onChange={(e) => setInstitution(e.target.value)}
+            />
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+              <Input label="Phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button onClick={save} disabled={saving || !name.trim()}>
+                {saving ? "Adding…" : "Add KOL"}
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            <Input
+              value={importSearch}
+              onChange={(e) => setImportSearch(e.target.value)}
+              placeholder="Search…"
+            />
+            <div className="max-h-72 space-y-1 overflow-y-auto">
+              {tab === "territory" &&
+                (filteredTerritory.length === 0 ? (
+                  <p className="py-6 text-center text-sm text-muted">
+                    No Territory Planning KOLs yet — they import here automatically once you add them there.
+                  </p>
+                ) : (
+                  filteredTerritory.map((k) => (
+                    <button
+                      key={k.id}
+                      onClick={() => importTerritory(k)}
+                      disabled={saving}
+                      className="flex w-full items-center gap-3 rounded-lg border border-border px-3 py-2 text-left text-sm transition hover:border-[var(--accent)]"
+                    >
+                      <Avatar
+                        src={k.photo_url || null}
+                        initials={initials(`${k.first_name} ${k.last_name}`)}
+                        size={32}
+                      />
+                      <span className="min-w-0">
+                        <span className="block truncate font-medium">
+                          {k.first_name} {k.last_name}
+                        </span>
+                        {k.institution && (
+                          <span className="block truncate text-xs text-muted">{k.institution}</span>
+                        )}
+                      </span>
+                    </button>
+                  ))
+                ))}
+              {tab === "past" &&
+                (filteredPast.length === 0 ? (
+                  <p className="py-6 text-center text-sm text-muted">
+                    No KOLs from previous conferences yet.
+                  </p>
+                ) : (
+                  filteredPast.map((c) => (
+                    <button
+                      key={c.id}
+                      onClick={() => importPast(c)}
+                      disabled={saving}
+                      className="flex w-full items-center gap-3 rounded-lg border border-border px-3 py-2 text-left text-sm transition hover:border-[var(--accent)]"
+                    >
+                      <Avatar src={c.photo_url || null} initials={initials(c.name)} size={32} />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium">{c.name}</span>
+                        {c.institution && (
+                          <span className="block truncate text-xs text-muted">{c.institution}</span>
+                        )}
+                      </span>
+                      <span
+                        className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold"
+                        style={{ background: TIERS[c.tier].soft, color: TIERS[c.tier].color }}
+                      >
+                        {TIERS[c.tier].label}
+                      </span>
+                    </button>
+                  ))
+                ))}
+            </div>
+          </>
+        )}
       </div>
     </Modal>
   );

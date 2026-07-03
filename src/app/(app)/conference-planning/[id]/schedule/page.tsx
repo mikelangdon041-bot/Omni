@@ -71,6 +71,7 @@ export default function SchedulePage() {
   const [editing, setEditing] = useState<EventWithPeople | null>(null);
   const [createDay, setCreateDay] = useState<string | undefined>();
   const [createMin, setCreateMin] = useState<number | undefined>();
+  const [createEndMin, setCreateEndMin] = useState<number | undefined>();
 
   const filtered = useMemo(() => {
     return events.filter((e) => {
@@ -223,6 +224,14 @@ export default function SchedulePage() {
             setEditing(null);
             setCreateDay(day);
             setCreateMin(minutes);
+            setCreateEndMin(undefined);
+            setFormOpen(true);
+          }}
+          onRangeSelect={(day, startMin, endMin) => {
+            setEditing(null);
+            setCreateDay(day);
+            setCreateMin(startMin);
+            setCreateEndMin(endMin);
             setFormOpen(true);
           }}
           onEventTap={(e) => setPeek(e)}
@@ -252,6 +261,7 @@ export default function SchedulePage() {
         event={editing}
         initialDay={createDay}
         initialMinutes={createMin}
+        initialEndMinutes={createEndMin}
         onSave={save}
       />
 

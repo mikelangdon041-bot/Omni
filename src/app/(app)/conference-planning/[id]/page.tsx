@@ -8,8 +8,10 @@ import Link from "next/link";
 import {
   CalendarDays,
   ClipboardList,
+  Images,
   Landmark,
   Megaphone,
+  Presentation,
   Sparkles,
   Users,
   UtensilsCrossed,
@@ -19,6 +21,9 @@ import { createClient } from "@/lib/supabase/client";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
 import { useAnnouncements } from "@/lib/conference/hooks";
 import { Avatar } from "@/components/ui/Avatar";
+import { Button } from "@/components/ui/Button";
+import { DeckDialog } from "@/components/conference/DeckDialog";
+import { exportPhotosZip } from "@/lib/conference/exports";
 import { initials } from "@/lib/conference/utils";
 
 const supabase = createClient();
@@ -32,9 +37,11 @@ interface Counts {
 }
 
 export default function ConferenceDashboard() {
-  const { conference, attendees } = useConferenceCtx();
+  const { conference, attendees, canManage } = useConferenceCtx();
   const { announcements } = useAnnouncements(conference.id);
   const [counts, setCounts] = useState<Counts | null>(null);
+  const [deckOpen, setDeckOpen] = useState(false);
+  const [zipProgress, setZipProgress] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -78,8 +85,41 @@ export default function ConferenceDashboard() {
     { label: "Open Food Orders", value: counts?.openOrders ?? "…", href: `${base}/food`, icon: UtensilsCrossed },
   ];
 
+  async function downloadPhotos() {
+    setZipProgress("Collecting photos…");
+    const [sn, pn] = await Promise.all([
+      supabase.from("conf_session_notes").select("images").eq("conference_id", conference.id),
+      supabase.from("conf_poster_notes").select("images").eq("conference_id", conference.id),
+    ]);
+    const urls = [
+      ...(sn.data || []).flatMap((r) => (r.images || []).map((url: string) => ({ url, folder: "sessions" }))),
+      ...(pn.data || []).flatMap((r) => (r.images || []).map((url: string) => ({ url, folder: "posters" }))),
+    ];
+    if (!urls.length) {
+      setZipProgress("");
+      alert("No photos have been uploaded yet.");
+      return;
+    }
+    await exportPhotosZip(urls, `${conference.name} — photos`, (done, total) =>
+      setZipProgress(`Zipping ${done}/${total}…`),
+    );
+    setZipProgress("");
+  }
+
   return (
     <div className="space-y-8">
+      {/* Post-event exports */}
+      <div className="flex flex-wrap gap-2">
+        <Button onClick={() => setDeckOpen(true)}>
+          <Presentation size={15} /> Post-Con Deck
+        </Button>
+        {canManage && (
+          <Button variant="secondary" onClick={downloadPhotos} disabled={!!zipProgress}>
+            <Images size={15} /> {zipProgress || "Post-Con Photos (.zip)"}
+          </Button>
+        )}
+      </div>
+
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
         {cards.map((c) => (
           <Link
@@ -136,6 +176,8 @@ export default function ConferenceDashboard() {
           </ul>
         )}
       </section>
+
+      <DeckDialog open={deckOpen} onClose={() => setDeckOpen(false)} />
     </div>
   );
 }

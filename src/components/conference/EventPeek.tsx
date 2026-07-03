@@ -20,6 +20,7 @@ import {
 import { Button } from "@/components/ui/Button";
 import { PriorityPill } from "@/components/conference/Priority";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
+import { buildOutlookInvite } from "@/lib/conference/exports";
 import type { EventWithPeople } from "@/lib/conference/hooks";
 import {
   EVENT_TYPES,
@@ -39,7 +40,7 @@ export function EventPeek({
   onEdit: (e: EventWithPeople) => void;
   onDelete: (e: EventWithPeople) => void;
 }) {
-  const { conference, attendees } = useConferenceCtx();
+  const { conference, attendees, me, myAttendee, canManage } = useConferenceCtx();
   if (!event) return null;
 
   const tz = conference.timezone;
@@ -134,6 +135,31 @@ export function EventPeek({
             >
               <ExternalLink size={13} /> Google Calendar
             </a>
+            {canManage && (
+              <Button
+                size="sm"
+                variant="secondary"
+                title="Outlook meeting request: assignees with emails become attendees; you're the organizer"
+                onClick={() => {
+                  const invitees = event.assignments
+                    .map((a) => attendees.find((x) => x.id === a.attendee_id))
+                    .filter(Boolean)
+                    .map((a) => ({ name: a!.name, email: a!.email }));
+                  const { ics, count } = buildOutlookInvite(event, conference, invitees, {
+                    name: myAttendee?.name || me?.displayName || "Organizer",
+                    email: me?.email || myAttendee?.email || "organizer@omni.local",
+                  });
+                  if (count === 0) {
+                    alert("None of the assigned people have an email on the roster — nothing to invite.");
+                    return;
+                  }
+                  downloadICS(`Invite — ${event.title}`, ics);
+                  alert(`Meeting request created with ${count} attendee${count === 1 ? "" : "s"}. Open it in Outlook to review and send.`);
+                }}
+              >
+                <CalendarPlus size={13} /> Send invite
+              </Button>
+            )}
             <Button
               size="sm"
               variant="ghost"

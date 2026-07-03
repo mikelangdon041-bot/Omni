@@ -9,6 +9,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
   ChevronDown,
+  Download,
   Landmark,
   Mic2,
   NotebookPen,
@@ -17,6 +18,11 @@ import {
   Store,
   Trash2,
 } from "lucide-react";
+import {
+  exportInsightsDocx,
+  exportInsightsPdf,
+  exportInsightsXlsx,
+} from "@/lib/conference/exports";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { Input, Select, Textarea } from "@/components/ui/Input";
@@ -25,13 +31,14 @@ import { RichText, RichTextView } from "@/components/ui/RichText";
 import { cn } from "@/lib/ui";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
 import {
+  uploadConferenceFile,
   useCategories,
   useDailyRow,
   useEvents,
   useInsights,
   usePosters,
 } from "@/lib/conference/hooks";
-import { CategoryChip } from "@/components/conference/InsightAI";
+import { CategoryChip, GenerateInsightsModal } from "@/components/conference/InsightAI";
 import { PriorityPill, PriorityEditorModal } from "@/components/conference/Priority";
 import {
   SOURCE_TYPES,
@@ -61,6 +68,8 @@ export default function InsightsPage() {
   const confYear = Number(conference.start_date.slice(0, 4)) || new Date().getFullYear();
 
   const [showAdd, setShowAdd] = useState(false);
+  const [photoUrls, setPhotoUrls] = useState<string[] | null>(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
   const [catFilter, setCatFilter] = useState<string[]>([]);
   const [personFilter, setPersonFilter] = useState("all");
   const [dayFilter, setDayFilter] = useState("all");
@@ -187,6 +196,56 @@ export default function InsightsPage() {
           ))}
         </div>
         <span className="flex-1" />
+        <div className="relative">
+          <select
+            value=""
+            onChange={(e) => {
+              const fmt = e.target.value;
+              if (!fmt) return;
+              const ctx = { dayOf, childrenOf, nameOf: userName };
+              const name = `${conference.name} — insights${dayFilter !== "all" ? ` ${dayFilter}` : ""}`;
+              if (fmt === "xlsx") exportInsightsXlsx(filtered, ctx, name);
+              if (fmt === "docx") void exportInsightsDocx(filtered, ctx, name, name);
+              if (fmt === "pdf") exportInsightsPdf(filtered, ctx, name, name);
+            }}
+            className="w-9 cursor-pointer appearance-none rounded-full border border-border bg-surface py-1.5 pl-2.5 text-transparent outline-none"
+            title="Export the filtered insights"
+          >
+            <option value="">Export…</option>
+            <option value="xlsx" className="text-ink">Excel (.xlsx)</option>
+            <option value="docx" className="text-ink">Word (.docx)</option>
+            <option value="pdf" className="text-ink">PDF</option>
+          </select>
+          <Download
+            size={15}
+            className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted"
+          />
+        </div>
+        <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-muted transition hover:text-ink">
+          <Sparkles size={15} />
+          {photoBusy ? "Uploading…" : "From photo"}
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={async (e) => {
+              const files = Array.from(e.target.files || []);
+              if (!files.length) return;
+              setPhotoBusy(true);
+              try {
+                const urls: string[] = [];
+                for (const f of files) {
+                  const url = await uploadConferenceFile(conference.id, "insight-photos", f);
+                  if (url) urls.push(url);
+                }
+                if (urls.length) setPhotoUrls(urls);
+              } finally {
+                setPhotoBusy(false);
+              }
+            }}
+          />
+        </label>
         <Button onClick={() => setShowAdd(true)}>
           <Plus size={16} /> Add insight
         </Button>
@@ -330,6 +389,17 @@ export default function InsightsPage() {
         defaultDay={todayKey(tz)}
         onAdd={add}
       />
+
+      {photoUrls && (
+        <GenerateInsightsModal
+          open
+          onClose={() => setPhotoUrls(null)}
+          sourceText=""
+          imageUrls={photoUrls}
+          insightDate={todayKey(tz)}
+          addWithChildren={insightsApi.addWithChildren}
+        />
+      )}
 
       {priorityFor && (
         <PriorityEditorModal
@@ -577,9 +647,34 @@ function DailyRollupModal({
         </div>
 
         {summaryRow.row?.content && (
-          <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-lg border border-border bg-surface p-4 font-sans text-sm leading-relaxed">
-            {summaryRow.row.content}
-          </pre>
+          <>
+            <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-lg border border-border bg-surface p-4 font-sans text-sm leading-relaxed">
+              {summaryRow.row.content}
+            </pre>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={async () => {
+                  const subject = `${conference.name} — daily insights, ${fmtDayKeyLong(day)}`;
+                  await navigator.clipboard.writeText(
+                    `${subject}\n\n${summaryRow.row!.content}`,
+                  );
+                  alert("Digest copied — paste it into an email.");
+                }}
+              >
+                Copy email digest
+              </Button>
+              <a
+                href={`mailto:?subject=${encodeURIComponent(
+                  `${conference.name} — daily insights, ${fmtDayKeyLong(day)}`,
+                )}&body=${encodeURIComponent(summaryRow.row.content.slice(0, 1800))}`}
+                className="inline-flex items-center rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs font-medium text-ink transition hover:bg-canvas"
+              >
+                Open in email app
+              </a>
+            </div>
+          </>
         )}
       </div>
     </Modal>

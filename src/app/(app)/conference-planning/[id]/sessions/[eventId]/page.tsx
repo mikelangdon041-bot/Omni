@@ -15,12 +15,15 @@ import {
   uploadConferenceFile,
   useEvents,
   useInsights,
+  useRecordings,
   useSessionNotes,
   useCategories,
   type EventWithPeople,
 } from "@/lib/conference/hooks";
 import { EventFormModal } from "@/components/conference/EventFormModal";
 import { PriorityBanner } from "@/components/conference/Priority";
+import { PresenceAvatars } from "@/components/conference/PresenceAvatars";
+import { RecorderPanel, recordingsText } from "@/components/conference/RecorderPanel";
 import {
   CategoryChip,
   GenerateInsightsModal,
@@ -46,6 +49,7 @@ export default function SessionDetailPage({
     [events, eventId],
   );
   const { notes, upsertMine } = useSessionNotes(conference.id, eventId);
+  const { recordings } = useRecordings(conference.id, { eventId });
   const insightsApi = useInsights(conference.id);
   const { categories } = useCategories(conference.id);
   const tz = conference.timezone;
@@ -142,9 +146,12 @@ export default function SessionDetailPage({
               </p>
             )}
           </div>
-          <Button size="sm" variant="secondary" onClick={() => setEditOpen(true)}>
-            <Pencil size={13} /> Edit
-          </Button>
+          <div className="flex shrink-0 flex-col items-end gap-2">
+            <Button size="sm" variant="secondary" onClick={() => setEditOpen(true)}>
+              <Pencil size={13} /> Edit
+            </Button>
+            <PresenceAvatars channelKey={`session-${eventId}`} />
+          </div>
         </div>
         <div className="mt-4">
           <PriorityBanner
@@ -247,6 +254,9 @@ export default function SessionDetailPage({
         </section>
       )}
 
+      {/* Lecture recordings */}
+      <RecorderPanel eventId={eventId} defaultTitle={`${event.title} — recording`} />
+
       {/* Post-event notes */}
       <section className="space-y-4 rounded-xl border border-border bg-surface p-5">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
@@ -331,10 +341,15 @@ export default function SessionDetailPage({
       <GenerateInsightsModal
         open={aiOpen}
         onClose={() => setAiOpen(false)}
-        sourceText={notes
-          .filter((n) => n.notes.trim())
-          .map((n) => `Notes from ${nameForUser(n.user_id)}:\n${stripHtml(n.notes)}`)
+        sourceText={[
+          ...notes
+            .filter((n) => n.notes.trim())
+            .map((n) => `Notes from ${nameForUser(n.user_id)}:\n${stripHtml(n.notes)}`),
+          recordingsText(recordings),
+        ]
+          .filter(Boolean)
           .join("\n\n")}
+        imageUrls={notes.flatMap((n) => n.images || [])}
         eventId={eventId}
         insightDate={dateKeyInTz(event.starts_at, tz)}
         addWithChildren={insightsApi.addWithChildren}

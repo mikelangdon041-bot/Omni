@@ -90,6 +90,9 @@ export function useRealtime(
   useEffect(() => {
     cb.current = onChange;
   });
+  // Unique topic per hook instance — supabase allows one subscription per
+  // topic, and two components may watch the same tables on the same page.
+  const [uid] = useState(() => Math.random().toString(36).slice(2, 9));
   const key = tables.join(",");
   useEffect(() => {
     if (!conferenceId) return;
@@ -98,7 +101,7 @@ export function useRealtime(
       if (t) clearTimeout(t);
       t = setTimeout(() => cb.current(), 250);
     };
-    const channel = supabase.channel(`conf-${conferenceId}-${key}`);
+    const channel = supabase.channel(`conf-${conferenceId}-${key}-${uid}`);
     for (const table of key.split(",")) {
       channel.on(
         "postgres_changes",
@@ -116,7 +119,7 @@ export function useRealtime(
       if (t) clearTimeout(t);
       void supabase.removeChannel(channel);
     };
-  }, [conferenceId, key]);
+  }, [conferenceId, key, uid]);
 }
 
 // ------------------------------------------------------------------
@@ -1100,6 +1103,124 @@ export function useFoodOrder(conferenceId: string | null, orderId: string) {
   );
 
   return { order, items, messages, loading, refresh, updateOrder, addItem, removeItem, sendMessage };
+}
+
+// ------------------------------------------------------------------
+// Recordings (session lectures / KOL meetings → transcript → summary)
+// ------------------------------------------------------------------
+export interface ConfRecording {
+  id: string;
+  conference_id: string;
+  event_id: string | null;
+  contact_id: string | null;
+  user_id: string | null;
+  title: string;
+  status: "recording" | "transcribing" | "summarizing" | "complete" | "error";
+  transcript: string;
+  summary: string;
+  error: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export function useRecordings(
+  conferenceId: string | null,
+  filter: { eventId?: string; contactId?: string },
+) {
+  const [recordings, setRecordings] = useState<ConfRecording[]>([]);
+  const { eventId, contactId } = filter;
+
+  const refresh = useCallback(async () => {
+    if (!conferenceId) return;
+    let q = supabase
+      .from("conf_recordings")
+      .select("*")
+      .eq("conference_id", conferenceId)
+      .order("created_at", { ascending: false });
+    if (eventId) q = q.eq("event_id", eventId);
+    if (contactId) q = q.eq("contact_id", contactId);
+    const { data } = await q;
+    setRecordings((data as ConfRecording[]) || []);
+  }, [conferenceId, eventId, contactId]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+  useRealtime(conferenceId, ["conf_recordings"], refresh);
+
+  const add = useCallback(
+    async (partial: Partial<ConfRecording>) => {
+      if (!conferenceId) return null;
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      const { data } = await supabase
+        .from("conf_recordings")
+        .insert({
+          ...partial,
+          conference_id: conferenceId,
+          event_id: eventId || null,
+          contact_id: contactId || null,
+          user_id: user?.id,
+        })
+        .select("*")
+        .single();
+      if (data) setRecordings((prev) => [data as ConfRecording, ...prev]);
+      return (data as ConfRecording) || null;
+    },
+    [conferenceId, eventId, contactId],
+  );
+
+  const update = useCallback(async (id: string, partial: Partial<ConfRecording>) => {
+    setRecordings((prev) => prev.map((r) => (r.id === id ? { ...r, ...partial } : r)));
+    await supabase.from("conf_recordings").update(partial).eq("id", id);
+  }, []);
+
+  const remove = useCallback(async (id: string) => {
+    setRecordings((prev) => prev.filter((r) => r.id !== id));
+    await supabase.from("conf_recordings").delete().eq("id", id);
+  }, []);
+
+  return { recordings, refresh, add, update, remove };
+}
+
+// ------------------------------------------------------------------
+// Presence: who else is viewing this surface right now.
+// ------------------------------------------------------------------
+export function usePresence(
+  channelKey: string | null,
+  me: { id: string; name: string } | null,
+) {
+  const [viewers, setViewers] = useState<{ id: string; name: string }[]>([]);
+
+  useEffect(() => {
+    // Only announce once the full identity is known.
+    if (!channelKey || !me) return;
+    const channel = supabase.channel(`presence-${channelKey}`, {
+      config: { presence: { key: me.id } },
+    });
+    channel
+      .on("presence", { event: "sync" }, () => {
+        const state = channel.presenceState<{ id: string; name: string }>();
+        const others: { id: string; name: string }[] = [];
+        for (const key of Object.keys(state)) {
+          if (key === me.id) continue;
+          const first = state[key][0];
+          if (first) others.push({ id: first.id, name: first.name });
+        }
+        setViewers(others);
+      })
+      .subscribe(async (status) => {
+        if (status === "SUBSCRIBED") {
+          await channel.track({ id: me.id, name: me.name });
+        }
+      });
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [channelKey, me]);
+
+  return viewers;
 }
 
 // ------------------------------------------------------------------

@@ -46,6 +46,7 @@ export function EventFormModal({
   event,
   initialDay,
   initialMinutes,
+  initialEndMinutes,
   onSave,
 }: {
   open: boolean;
@@ -53,6 +54,7 @@ export function EventFormModal({
   event: EventWithPeople | null; // null = create
   initialDay?: string;
   initialMinutes?: number;
+  initialEndMinutes?: number; // from long-press drag
   onSave: (
     eventId: string | null,
     partial: Partial<ConfEvent>,
@@ -132,7 +134,8 @@ export function EventFormModal({
       setDate(initialDay || (days.includes(today) ? today : days[0]) || today);
       const m = initialMinutes ?? 9 * 60;
       setStart(minToInput(m));
-      setEnd(minToInput(Math.min(m + 60, 23 * 60 + 59)));
+      const endM = initialEndMinutes && initialEndMinutes > m ? initialEndMinutes : m + 60;
+      setEnd(minToInput(Math.min(endM, 23 * 60 + 59)));
       setLocation("");
       setDescription("");
       setIsPrivate(false);
@@ -146,7 +149,7 @@ export function EventFormModal({
     }
     setPersonSearch("");
     setContactSearch("");
-  }, [open, event, initialDay, initialMinutes, tz, days]);
+  }, [open, event, initialDay, initialMinutes, initialEndMinutes, tz, days]);
 
   // Smart nudge: a PM start with an earlier end bumps the end (spec §7.8).
   function onStartChange(v: string) {

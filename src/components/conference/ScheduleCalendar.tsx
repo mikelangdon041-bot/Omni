@@ -51,6 +51,7 @@ export function ScheduleCalendar({
   showPriorityBar = true,
   dayFilter,
   onSlotTap,
+  onRangeSelect,
   onEventTap,
   onPosterTap,
 }: {
@@ -61,6 +62,7 @@ export function ScheduleCalendar({
   showPriorityBar?: boolean;
   dayFilter: string | null; // pin to one day
   onSlotTap: (dayKey: string, minutes: number) => void;
+  onRangeSelect?: (dayKey: string, startMin: number, endMin: number) => void;
   onEventTap: (event: EventWithPeople) => void;
   onPosterTap: (poster: Poster) => void;
 }) {
@@ -130,6 +132,47 @@ export function ScheduleCalendar({
     if (idx >= 0) setPage(Math.floor(idx / windowSize));
     landed.current = true;
   }, [shownDays, today, windowSize, dayFilter]);
+
+  // Long-press (~400ms) + drag across slots creates an event spanning the
+  // dragged range (spec §7.7). A short tap just opens the slot create.
+  const [drag, setDrag] = useState<{ day: string; anchor: number; current: number } | null>(null);
+  const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pressed = useRef<{ day: string; slot: number } | null>(null);
+
+  function slotPointerDown(day: string, slot: number) {
+    pressed.current = { day, slot };
+    pressTimer.current = setTimeout(() => {
+      setDrag({ day, anchor: slot, current: slot });
+      if (navigator.vibrate) navigator.vibrate(25);
+    }, 400);
+  }
+  function columnPointerMove(day: string, e: React.PointerEvent<HTMLDivElement>) {
+    if (!drag || drag.day !== day) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const slot = Math.max(0, Math.min(47, Math.floor((e.clientY - rect.top) / (30 * pxPerMin))));
+    if (slot !== drag.current) setDrag({ ...drag, current: slot });
+  }
+  function endPress(day: string) {
+    if (pressTimer.current) clearTimeout(pressTimer.current);
+    if (drag && drag.day === day) {
+      const lo = Math.min(drag.anchor, drag.current);
+      const hi = Math.max(drag.anchor, drag.current);
+      setDrag(null);
+      pressed.current = null;
+      if (onRangeSelect) onRangeSelect(day, lo * 30, (hi + 1) * 30);
+      else onSlotTap(day, lo * 30);
+      return;
+    }
+    if (pressed.current && pressed.current.day === day) {
+      onSlotTap(day, pressed.current.slot * 30);
+    }
+    pressed.current = null;
+  }
+  function cancelPress() {
+    if (pressTimer.current) clearTimeout(pressTimer.current);
+    pressed.current = null;
+    setDrag(null);
+  }
 
   // Now line ticks every minute (event-timezone minutes).
   const [nowMin, setNowMin] = useState(() => minutesInTz(new Date(), tz));
@@ -250,12 +293,18 @@ export function ScheduleCalendar({
             const dayPosters = postersByDay.get(dayKey) || [];
 
             return (
-              <div key={dayKey} className="relative flex-1 border-l border-border">
-                {/* Slot lines + tap targets */}
+              <div
+                key={dayKey}
+                className="relative flex-1 border-l border-border"
+                onPointerMove={(e) => columnPointerMove(dayKey, e)}
+                onPointerUp={() => endPress(dayKey)}
+                onPointerLeave={cancelPress}
+              >
+                {/* Slot lines + tap/long-press-drag targets */}
                 {Array.from({ length: 48 }, (_, i) => (
                   <div
                     key={i}
-                    onClick={() => onSlotTap(dayKey, i * 30)}
+                    onPointerDown={() => slotPointerDown(dayKey, i)}
                     className={cn(
                       "absolute inset-x-0 cursor-pointer transition hover:bg-[var(--accent-soft)]/40",
                       i % 2 === 0 ? "border-t border-border/70" : "border-t border-border/30",
@@ -263,6 +312,18 @@ export function ScheduleCalendar({
                     style={{ top: i * 30 * pxPerMin, height: 30 * pxPerMin }}
                   />
                 ))}
+
+                {/* Drag-create highlight */}
+                {drag && drag.day === dayKey && (
+                  <div
+                    className="pointer-events-none absolute inset-x-0.5 z-20 rounded-md border-2 border-dashed border-[var(--accent)] bg-[var(--accent-soft)]/50"
+                    style={{
+                      top: Math.min(drag.anchor, drag.current) * 30 * pxPerMin,
+                      height:
+                        (Math.abs(drag.current - drag.anchor) + 1) * 30 * pxPerMin,
+                    }}
+                  />
+                )}
 
                 {/* Today shading + now line */}
                 {dayKey === today && (

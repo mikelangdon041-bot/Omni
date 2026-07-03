@@ -43,6 +43,7 @@ export function GenerateInsightsModal({
   open,
   onClose,
   sourceText,
+  imageUrls = [],
   eventId,
   contactId,
   posterId,
@@ -52,6 +53,7 @@ export function GenerateInsightsModal({
   open: boolean;
   onClose: () => void;
   sourceText: string;
+  imageUrls?: string[]; // photos (posters/slides) the AI can also read
   eventId?: string;
   contactId?: string;
   posterId?: string;
@@ -70,39 +72,70 @@ export function GenerateInsightsModal({
   const [sourceType, setSourceType] = useState("");
   const [sourceOther, setSourceOther] = useState("");
   const [manualText, setManualText] = useState("");
+  const [useImages, setUseImages] = useState(true);
   const [saving, setSaving] = useState(false);
 
   async function run() {
-    if (!sourceText.trim()) {
-      setError("Nothing to analyze yet — capture some notes first.");
+    const withImages = useImages && imageUrls.length > 0;
+    if (!sourceText.trim() && !withImages) {
+      setError("Nothing to analyze yet — capture some notes or photos first.");
       return;
     }
     setRunning(true);
     setError("");
     try {
-      const res = await fetch("/api/conference/ai", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({
-          action: "extract_insights",
-          text: sourceText,
-          guidance,
-          categories: categories.map((c) => c.name),
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "AI request failed");
-      setCandidates(
-        (json.insights || []).map(
-          (i: { title?: string; bullets?: string[]; categories?: string[] }) => ({
-            title: String(i.title || "").trim(),
-            bullets: Array.isArray(i.bullets) ? i.bullets.map(String) : [],
-            categories: Array.isArray(i.categories) ? i.categories.map(String) : [],
-            checked: true,
+      const catNames = categories.map((c) => c.name);
+      const toCandidates = (
+        arr: { title?: string; bullets?: string[]; categories?: string[] }[],
+      ): Candidate[] =>
+        arr.map((i) => ({
+          title: String(i.title || "").trim(),
+          bullets: Array.isArray(i.bullets) ? i.bullets.map(String) : [],
+          categories: Array.isArray(i.categories) ? i.categories.map(String) : [],
+          checked: true,
+        }));
+
+      const calls: Promise<Candidate[]>[] = [];
+      if (sourceText.trim()) {
+        calls.push(
+          fetch("/api/conference/ai", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({
+              action: "extract_insights",
+              text: sourceText,
+              guidance,
+              categories: catNames,
+            }),
+          }).then(async (res) => {
+            const json = await res.json();
+            if (!res.ok) throw new Error(json.error || "AI request failed");
+            return toCandidates(json.insights || []);
           }),
-        ),
-      );
+        );
+      }
+      if (withImages) {
+        calls.push(
+          fetch("/api/conference/ai", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({
+              action: "extract_insights_image",
+              imageUrls,
+              guidance,
+              categories: catNames,
+            }),
+          }).then(async (res) => {
+            const json = await res.json();
+            if (!res.ok) throw new Error(json.error || "Image analysis failed");
+            return toCandidates(json.insights || []);
+          }),
+        );
+      }
+      const results = await Promise.all(calls);
+      setCandidates(results.flat());
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -181,6 +214,16 @@ export function GenerateInsightsModal({
             onChange={(e) => setGuidance(e.target.value)}
             placeholder='e.g. "Focus on treatment-sequencing opinions; ignore booth logistics"'
           />
+          {imageUrls.length > 0 && (
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={useImages}
+                onChange={(e) => setUseImages(e.target.checked)}
+              />
+              Also read the {imageUrls.length} uploaded photo{imageUrls.length === 1 ? "" : "s"}
+            </label>
+          )}
           {error && <p className="text-sm text-red-600">{error}</p>}
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={onClose}>

@@ -18,6 +18,8 @@ const MODEL = process.env.OPENAI_SUMMARY_MODEL || "gpt-4o";
 //   poster_summary    { title, abstract?, notes? }       → { background, data, conclusion }
 //   meeting_summary   { text, guidance? }                → { content }
 //   parse_schedule    { text, guidance?, days, attendees } → { rows: ImportRow[] }
+//   map_deck_template { slidesText, theme, guidance? }     → { proposal }
+//   extract_insights_image { imageUrls, guidance?, categories? } → { insights }
 export async function POST(req: Request) {
   const supabase = await createClient();
   const {
@@ -178,6 +180,90 @@ Rules:
       const parsed = JSON.parse(res.choices[0]?.message?.content || "{}");
       const rows = Array.isArray(parsed.rows) ? parsed.rows : [];
       return NextResponse.json({ rows });
+    }
+
+    if (action === "extract_insights_image") {
+      const imageUrls: string[] = (Array.isArray(body?.imageUrls) ? body.imageUrls : []).slice(0, 6);
+      const guidance: string = body?.guidance || "";
+      const categories: string[] = Array.isArray(body?.categories) ? body.categories : [];
+      if (!imageUrls.length) return NextResponse.json({ insights: [] });
+
+      const res = await openai().chat.completions.create({
+        model: MODEL,
+        temperature: 0.3,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content: `You read photos of research posters and presentation slides and extract discrete pieces of field intelligence ("insights") for a field-medical team.
+
+Return ONLY JSON: {"insights":[{"title":"...","bullets":["..."],"categories":["..."]}]}.
+
+Rules:
+- Each insight is one distinct, meaningful finding, data point, or conclusion visible in the image(s).
+- "bullets" carry the supporting specifics — endpoints, effect sizes, populations, p-values, author conclusions. Preserve every legible figure exactly.
+- If text is illegible, skip it — NEVER guess or invent values.
+- "categories": zero or more from this exact list (never force a fit): ${categories.join("; ") || "(none configured)"}.`,
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "text" as const,
+                text: `${guidance ? `Reviewer guidance: ${guidance}\n\n` : ""}Extract insights from these photos:`,
+              },
+              ...imageUrls.map((url) => ({
+                type: "image_url" as const,
+                image_url: { url, detail: "high" as const },
+              })),
+            ],
+          },
+        ],
+      });
+      const parsed = JSON.parse(res.choices[0]?.message?.content || "{}");
+      return NextResponse.json({
+        insights: Array.isArray(parsed.insights) ? parsed.insights : [],
+      });
+    }
+
+    if (action === "map_deck_template") {
+      const slidesText: string[] = Array.isArray(body?.slidesText) ? body.slidesText : [];
+      const theme = body?.theme || {};
+      const guidance: string = body?.guidance || "";
+
+      const res = await openai().chat.completions.create({
+        model: MODEL,
+        temperature: 0.3,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content: `A team uploaded their branded PowerPoint template. We extracted its theme and the text of each slide. Decide how a generated post-conference deck (sections: title → booth activity per day → KOL meetings list → sessions by day → posters by day) should adopt this template.
+
+Return ONLY JSON:
+{
+  "description": "1-2 sentences: what this template looks like / is for",
+  "colors": {"primary":"RRGGBB","secondary":"RRGGBB","text":"RRGGBB","bg":"RRGGBB"},
+  "fonts": {"head":"...","body":"..."},
+  "useLogo": true|false,
+  "recommendations": ["short, specific placement/styling suggestions the generator honors: e.g. which color for dividers, whether titles are uppercase, dense vs airy body text"]
+}
+
+Base colors/fonts on the extracted theme unless the slide text or user guidance implies otherwise. Be decisive — pick actual values, don't hedge.`,
+          },
+          {
+            role: "user",
+            content: `Extracted theme: ${JSON.stringify(theme)}
+
+Slide-by-slide text:
+${slidesText.map((t, i) => `Slide ${i + 1}: ${t || "(no text)"}`).join("\n")}
+
+${guidance ? `User guidance: ${guidance}` : "No user guidance given."}`,
+          },
+        ],
+      });
+      const parsed = JSON.parse(res.choices[0]?.message?.content || "{}");
+      return NextResponse.json({ proposal: parsed });
     }
 
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });

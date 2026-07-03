@@ -6,17 +6,19 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
 } from "react";
+import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   ArrowLeftRight,
   CalendarDays,
   ClipboardList,
-  Home,
   Landmark,
   Map as MapIcon,
   MapPin,
@@ -36,6 +38,7 @@ import {
   useConference,
   useEnsureAttendee,
   useMe,
+  useRealtime,
   type Me,
 } from "@/lib/conference/hooks";
 import type { Attendee, Conference } from "@/lib/conference/types";
@@ -63,8 +66,8 @@ export function useConferenceCtx(): ConferenceCtx {
   return ctx;
 }
 
+// No Overview tab — tapping the conference name in the header opens it.
 const TABS = [
-  { seg: "", label: "Overview", icon: Home },
   { seg: "team", label: "Team", icon: Users },
   { seg: "schedule", label: "Schedule", icon: CalendarDays },
   { seg: "sessions", label: "Sessions", icon: Mic2 },
@@ -97,6 +100,40 @@ export function ConferenceProvider({
   useEnsureAttendee(conference, me, attendees, attendeesLoading, refreshAttendees);
 
   const [showAnnounce, setShowAnnounce] = useState(false);
+
+  // Food-tab unread badge: count messages since this device last opened Food.
+  const [foodUnread, setFoodUnread] = useState(0);
+  const seenKey = `omni_conf_food_seen_${conferenceId}`;
+  const onFoodTab = pathname.includes(`/${conferenceId}/food`);
+  const recountFood = useCallback(async () => {
+    if (!me) return;
+    const since =
+      localStorage.getItem(seenKey) || new Date(Date.now() - 86400000).toISOString();
+    const { data } = await createClient()
+      .from("conf_food_messages")
+      .select("sender_id, recipient_id")
+      .eq("conference_id", conferenceId)
+      .gt("created_at", since)
+      .limit(150);
+    const count = (data || []).filter(
+      (m) =>
+        m.sender_id !== me.id &&
+        (!m.recipient_id || m.recipient_id === me.id),
+    ).length;
+    setFoodUnread(count);
+  }, [conferenceId, me, seenKey]);
+  useEffect(() => {
+    if (onFoodTab) {
+      localStorage.setItem(seenKey, new Date().toISOString());
+      setFoodUnread(0);
+    } else {
+      void recountFood();
+    }
+  }, [onFoodTab, seenKey, recountFood]);
+  useRealtime(conferenceId, ["conf_food_messages"], () => {
+    if (onFoodTab) localStorage.setItem(seenKey, new Date().toISOString());
+    else void recountFood();
+  });
 
   const myAttendee = useMemo(
     () => attendees.find((a) => a.user_id === me?.id) || null,
@@ -222,6 +259,11 @@ export function ConferenceProvider({
             >
               <t.icon size={15} />
               {t.label}
+              {t.seg === "food" && foodUnread > 0 && (
+                <span className="grid h-4 min-w-4 place-items-center rounded-full bg-red-500 px-1 text-[10px] font-bold leading-none text-white">
+                  {foodUnread > 99 ? "99+" : foodUnread}
+                </span>
+              )}
             </Link>
           );
         })}

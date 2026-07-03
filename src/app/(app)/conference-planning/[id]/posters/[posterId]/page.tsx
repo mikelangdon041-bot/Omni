@@ -29,6 +29,7 @@ import {
 } from "@/lib/conference/hooks";
 import { PosterModal } from "@/components/conference/PosterModal";
 import { PriorityBanner } from "@/components/conference/Priority";
+import { PresenceAvatars } from "@/components/conference/PresenceAvatars";
 import {
   CategoryChip,
   GenerateInsightsModal,
@@ -170,7 +171,8 @@ export default function PosterDetailPage({
               </p>
             )}
           </div>
-          <div className="flex shrink-0 gap-1.5">
+          <div className="flex shrink-0 items-center gap-1.5">
+            <PresenceAvatars channelKey={`poster-${posterId}`} />
             <Button size="sm" variant="secondary" onClick={() => setEditOpen(true)}>
               <Pencil size={13} /> Edit
             </Button>
@@ -395,6 +397,7 @@ export default function PosterDetailPage({
         open={aiOpen}
         onClose={() => setAiOpen(false)}
         sourceText={[poster.abstract, poster.ai_summary, notesText].filter(Boolean).join("\n\n")}
+        imageUrls={notes.flatMap((n) => n.images || [])}
         posterId={posterId}
         insightDate={normalizeFreeDate(poster.date, confYear || new Date().getFullYear()) || undefined}
         addWithChildren={insightsApi.addWithChildren}
