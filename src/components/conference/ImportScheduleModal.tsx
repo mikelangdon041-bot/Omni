@@ -18,6 +18,7 @@ import {
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Textarea } from "@/components/ui/Input";
+import { ProgressBar } from "@/components/conference/Bits";
 import { cn } from "@/lib/ui";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
 import {
@@ -84,6 +85,7 @@ export function ImportScheduleModal({
   const [rows, setRows] = useState<ImportRow[]>([]);
   const [resolution, setResolution] = useState<Resolution>({});
   const [importing, setImporting] = useState(false);
+  const [importPct, setImportPct] = useState(0);
   const [result, setResult] = useState({ events: 0, posters: 0, people: 0 });
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -223,12 +225,17 @@ export function ImportScheduleModal({
   // ---- Step 5: import ----------------------------------------------------
   async function runImport() {
     setImporting(true);
+    setImportPct(0);
     setError("");
+    const totalSteps = distinctNames.length + selected.length || 1;
+    let doneSteps = 0;
+    const bump = () => setImportPct((++doneSteps / totalSteps) * 100);
     try {
       // Resolve names → attendee ids, creating new attendees where chosen.
       const nameToId: Record<string, string> = {};
       let created = 0;
       for (const name of distinctNames) {
+        bump();
         const r = resolution[name];
         if (!r || r === "__skip__") continue;
         if (r === "__create__") {
@@ -249,6 +256,7 @@ export function ImportScheduleModal({
       let events = 0;
       let posters = 0;
       for (const r of selected) {
+        bump();
         const peopleIds = r.people
           .map((p) => nameToId[p])
           .filter(Boolean) as string[];
@@ -476,8 +484,14 @@ export function ImportScheduleModal({
             placeholder='e.g. "Column F is the rep covering; times are Eastern; rows in red are competitor talks"'
           />
           {error && <ErrorNote text={error} />}
+          {parsing && (
+            <ProgressBar
+              percent={null}
+              label="AI is reading the schedule and normalizing rows — this can take up to a minute…"
+            />
+          )}
           <div className="flex justify-between gap-2">
-            <Button variant="ghost" onClick={reset}>
+            <Button variant="ghost" onClick={reset} disabled={parsing}>
               ← Start over
             </Button>
             <Button onClick={parse} disabled={parsing}>
@@ -690,8 +704,11 @@ export function ImportScheduleModal({
           </div>
 
           {error && <ErrorNote text={error} />}
+          {importing && (
+            <ProgressBar percent={importPct} label="Creating events, shifts, and posters…" />
+          )}
           <div className="flex justify-between gap-2 border-t border-border pt-3">
-            <Button variant="ghost" onClick={() => setStep("preview")}>
+            <Button variant="ghost" onClick={() => setStep("preview")} disabled={importing}>
               ← Re-parse with guidance
             </Button>
             <Button onClick={runImport} disabled={importing || selected.length === 0}>

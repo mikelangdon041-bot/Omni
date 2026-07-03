@@ -31,6 +31,7 @@ import {
 } from "@/lib/conference/deck";
 import { generateClonedDeck } from "@/lib/conference/deckClone";
 import { saveBlob } from "@/lib/conference/exports";
+import { ProgressBar } from "@/components/conference/Bits";
 import { SESSION_TYPES } from "@/lib/conference/types";
 import {
   dateKeyInTz,
@@ -87,7 +88,8 @@ export function DeckDialog({ open, onClose }: { open: boolean; onClose: () => vo
 
   // Generation.
   const [generating, setGenerating] = useState(false);
-  const [progress, setProgress] = useState("");
+  const [progress, setProgress] = useState<{ label: string; pct: number | null } | null>(null);
+  const report = (label: string, pct?: number) => setProgress({ label, pct: pct ?? null });
   const [error, setError] = useState("");
   const cancelRef = useRef(false);
 
@@ -338,7 +340,7 @@ export function DeckDialog({ open, onClose }: { open: boolean; onClose: () => vo
 
       if (template?.storage_path) {
         // TRUE cloning: the output file IS the uploaded template, refilled.
-        setProgress("Fetching your template…");
+        report("Fetching your template…");
         const res = await fetch(template.storage_path);
         if (!res.ok) throw new Error("Couldn't fetch the template file from storage.");
         const bytes = await res.arrayBuffer();
@@ -350,7 +352,7 @@ export function DeckDialog({ open, onClose }: { open: boolean; onClose: () => vo
             dividerSlideIndex: template.mapping?.dividerSlideIndex,
             contentSlideIndex: template.mapping?.contentSlideIndex,
           },
-          setProgress,
+          report,
           () => cancelRef.current,
         );
         if (blob) {
@@ -361,7 +363,7 @@ export function DeckDialog({ open, onClose }: { open: boolean; onClose: () => vo
         const ok = await generateDeck(
           data,
           themeFor(templateId),
-          setProgress,
+          report,
           () => cancelRef.current,
         );
         if (ok) onClose();
@@ -370,7 +372,7 @@ export function DeckDialog({ open, onClose }: { open: boolean; onClose: () => vo
       setError((e as Error).message || "Deck generation failed");
     } finally {
       setGenerating(false);
-      setProgress("");
+      setProgress(null);
     }
   }
 
@@ -445,6 +447,9 @@ export function DeckDialog({ open, onClose }: { open: boolean; onClose: () => vo
                   onChange={(e) => setTplGuidance(e.target.value)}
                   placeholder='e.g. "Use the dark blue, not the red; the logo goes top-left; titles are uppercase"'
                 />
+                {tplBusy && (
+                  <ProgressBar percent={null} label="AI is reviewing the template's slides…" />
+                )}
                 <div className="flex justify-end gap-2">
                   <Button size="sm" variant="ghost" onClick={() => setTplStep("none")}>
                     Cancel
@@ -576,7 +581,9 @@ export function DeckDialog({ open, onClose }: { open: boolean; onClose: () => vo
           <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
             {generating ? (
               <>
-                <p className="min-w-0 flex-1 truncate text-sm text-muted">{progress}</p>
+                <div className="min-w-0 flex-1">
+                  <ProgressBar percent={progress?.pct ?? null} label={progress?.label || "Working…"} />
+                </div>
                 <Button variant="secondary" onClick={() => (cancelRef.current = true)}>
                   Cancel
                 </Button>

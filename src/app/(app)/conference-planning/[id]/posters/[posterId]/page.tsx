@@ -5,7 +5,7 @@
 // extraction, and — for poster sessions — the list of sub-posters.
 
 import { use, useMemo, useState } from "react";
-import { Loading } from "@/components/conference/Bits";
+import { Loading, ProgressBar } from "@/components/conference/Bits";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -61,6 +61,7 @@ export default function PosterDetailPage({
   const [aiOpen, setAiOpen] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadPct, setUploadPct] = useState(0);
 
   const myNote = useMemo(() => notes.find((n) => n.user_id === me?.id) || null, [notes, me]);
   const otherNotes = useMemo(
@@ -126,11 +127,14 @@ export default function PosterDetailPage({
   async function uploadImages(files: FileList | null) {
     if (!files || !me) return;
     setUploading(true);
+    setUploadPct(0);
     try {
+      const list = Array.from(files);
       const urls: string[] = [];
-      for (const f of Array.from(files)) {
-        const url = await uploadConferenceFile(conference.id, `posters/${posterId}`, f);
+      for (let i = 0; i < list.length; i++) {
+        const url = await uploadConferenceFile(conference.id, `posters/${posterId}`, list[i]);
         if (url) urls.push(url);
+        setUploadPct(((i + 1) / list.length) * 100);
       }
       if (urls.length) {
         await upsertMine(me.id, { images: [...(myNote?.images || []), ...urls] });
@@ -275,6 +279,9 @@ export default function PosterDetailPage({
             />
           </label>
         </div>
+        {uploading && (
+          <ProgressBar percent={uploadPct} label="Uploading photos…" className="mt-3" />
+        )}
         {(myNote?.images || []).length > 0 && (
           <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
             {(myNote?.images || []).map((url) => (
@@ -344,6 +351,13 @@ export default function PosterDetailPage({
             {summarizing ? "Summarizing…" : poster.ai_summary ? "Reanalyze" : "Summarize"}
           </Button>
         </div>
+        {summarizing && (
+          <ProgressBar
+            percent={null}
+            label="AI is summarizing the poster…"
+            className="mt-3"
+          />
+        )}
         {poster.ai_summary && (
           <pre className="mt-3 whitespace-pre-wrap font-sans text-sm leading-relaxed text-ink/90">
             {poster.ai_summary}

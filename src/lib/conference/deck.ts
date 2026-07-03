@@ -142,12 +142,23 @@ const H = 5.625;
 export async function generateDeck(
   data: DeckData,
   theme: DeckTheme,
-  onProgress: (label: string) => void,
+  onProgress: (label: string, percent?: number) => void,
   cancelled: () => boolean,
 ): Promise<boolean> {
   const pptx = new PptxGenJS();
   pptx.defineLayout({ name: "WIDE", width: W, height: H });
   pptx.layout = "WIDE";
+
+  // Rough slide total for the progress percentage.
+  const totalSlides =
+    1 +
+    data.boothByDay.filter((b) => b.text.trim()).length +
+    (data.meetingLines.length ? 1 : 0) +
+    data.sessions.filter((s) => s.checked).length +
+    data.posters.filter((p) => p.checked).length +
+    2;
+  let doneSlides = 0;
+  const tick = (label: string) => onProgress(label, (++doneSlides / totalSlides) * 95);
 
   const head = { fontFace: theme.headFont, color: theme.text };
   const body = { fontFace: theme.bodyFont, color: theme.text };
@@ -159,7 +170,7 @@ export async function generateDeck(
   };
 
   // Title slide.
-  onProgress("Title slide…");
+  tick("Title slide…");
   {
     const s = pptx.addSlide();
     s.background = { color: theme.bg };
@@ -181,7 +192,7 @@ export async function generateDeck(
   for (const b of data.boothByDay) {
     if (cancelled()) return false;
     if (!b.text.trim()) continue;
-    onProgress(`Booth — ${fmtDayKeyLong(b.day)}…`);
+    tick(`Booth — ${fmtDayKeyLong(b.day)}…`);
     const s = pptx.addSlide();
     s.background = { color: theme.bg };
     header(s, `Booth activity — ${fmtDayKeyLong(b.day)}`, theme);
@@ -194,7 +205,7 @@ export async function generateDeck(
   // KOL meetings — a single names-list slide.
   if (data.meetingLines.length) {
     if (cancelled()) return false;
-    onProgress("KOL meetings…");
+    tick("KOL meetings…");
     const s = pptx.addSlide();
     s.background = { color: theme.bg };
     header(s, "KOL meetings", theme);
@@ -222,7 +233,7 @@ export async function generateDeck(
 
     for (const item of g.items) {
       if (cancelled()) return false;
-      onProgress(`${item.title.slice(0, 40)}…`);
+      tick(`${item.title.slice(0, 40)}…`);
       const s = pptx.addSlide();
       s.background = { color: theme.bg };
       header(s, item.title, theme);
@@ -265,7 +276,7 @@ export async function generateDeck(
   }
 
   if (cancelled()) return false;
-  onProgress("Saving file…");
+  onProgress("Saving file…", 97);
   await pptx.writeFile({ fileName: `${data.conferenceName} — Post-Con.pptx` });
   return true;
 }

@@ -6,7 +6,7 @@
 // booth log.
 
 import { useMemo, useState } from "react";
-import { Loading } from "@/components/conference/Bits";
+import { Loading, ProgressBar } from "@/components/conference/Bits";
 import Link from "next/link";
 import {
   ChevronDown,
@@ -71,6 +71,7 @@ export default function InsightsPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [photoUrls, setPhotoUrls] = useState<string[] | null>(null);
   const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoPct, setPhotoPct] = useState(0);
   const [catFilter, setCatFilter] = useState<string[]>([]);
   const [personFilter, setPersonFilter] = useState("all");
   const [dayFilter, setDayFilter] = useState("all");
@@ -246,11 +247,13 @@ export default function InsightsPage() {
               const files = Array.from(e.target.files || []);
               if (!files.length) return;
               setPhotoBusy(true);
+              setPhotoPct(0);
               try {
                 const urls: string[] = [];
-                for (const f of files) {
-                  const url = await uploadConferenceFile(conference.id, "insight-photos", f);
+                for (let i = 0; i < files.length; i++) {
+                  const url = await uploadConferenceFile(conference.id, "insight-photos", files[i]);
                   if (url) urls.push(url);
+                  setPhotoPct(((i + 1) / files.length) * 100);
                 }
                 if (urls.length) setPhotoUrls(urls);
               } finally {
@@ -263,6 +266,10 @@ export default function InsightsPage() {
           <Plus size={16} /> Add insight
         </Button>
       </div>
+
+      {photoBusy && (
+        <ProgressBar percent={photoPct} label="Uploading photos…" className="mb-4" />
+      )}
 
       {loading ? (
         <Loading />
@@ -647,6 +654,9 @@ function DailyRollupModal({
           placeholder='e.g. "Lead with competitive intel"'
         />
         {error && <p className="text-sm text-red-600">{error}</p>}
+        {running && (
+          <ProgressBar percent={null} label="AI is distilling the day into an executive summary…" />
+        )}
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={onClose}>
             Close

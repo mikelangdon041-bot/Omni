@@ -10,6 +10,7 @@ import { createClient } from "@/lib/supabase/client";
 import { Images, Landmark, Mic2, NotebookPen, Presentation, Sparkles } from "lucide-react";
 import { cn } from "@/lib/ui";
 import { Button } from "@/components/ui/Button";
+import { ProgressBar } from "@/components/conference/Bits";
 import { DeckDialog } from "@/components/conference/DeckDialog";
 import { exportPhotosZip } from "@/lib/conference/exports";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
@@ -54,9 +55,11 @@ export default function RecapPage() {
   const [summary, setSummary] = useState<DailySummary | null>(null);
   const [deckOpen, setDeckOpen] = useState(false);
   const [zipProgress, setZipProgress] = useState("");
+  const [zipPct, setZipPct] = useState<number | null>(null);
 
   async function downloadPhotos() {
     setZipProgress("Collecting photos…");
+    setZipPct(null);
     const [sn, pn] = await Promise.all([
       supabase.from("conf_session_notes").select("images").eq("conference_id", conference.id),
       supabase.from("conf_poster_notes").select("images").eq("conference_id", conference.id),
@@ -70,10 +73,12 @@ export default function RecapPage() {
       alert("No photos have been uploaded yet.");
       return;
     }
-    await exportPhotosZip(urls, `${conference.name} — photos`, (done, total) =>
-      setZipProgress(`Zipping ${done}/${total}…`),
-    );
+    await exportPhotosZip(urls, `${conference.name} — photos`, (done, total) => {
+      setZipProgress(`Zipping photo ${done}/${total}…`);
+      setZipPct((done / total) * 100);
+    });
     setZipProgress("");
+    setZipPct(null);
   }
 
   // Contact meetings + names + stored daily summary for the chosen day.
@@ -183,14 +188,19 @@ export default function RecapPage() {
   return (
     <div className="space-y-5">
       {/* Post-event exports */}
-      <div className="flex flex-wrap gap-2 rounded-xl border border-border bg-surface p-4">
-        <Button onClick={() => setDeckOpen(true)}>
-          <Presentation size={15} /> Post-Con Deck
-        </Button>
-        {canManage && (
-          <Button variant="secondary" onClick={downloadPhotos} disabled={!!zipProgress}>
-            <Images size={15} /> {zipProgress || "Post-Con Photos (.zip)"}
+      <div className="rounded-xl border border-border bg-surface p-4">
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={() => setDeckOpen(true)}>
+            <Presentation size={15} /> Post-Con Deck
           </Button>
+          {canManage && (
+            <Button variant="secondary" onClick={downloadPhotos} disabled={!!zipProgress}>
+              <Images size={15} /> Post-Con Photos (.zip)
+            </Button>
+          )}
+        </div>
+        {zipProgress && (
+          <ProgressBar percent={zipPct} label={zipProgress} className="mt-3" />
         )}
       </div>
 

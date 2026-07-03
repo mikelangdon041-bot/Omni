@@ -5,7 +5,7 @@
 // ?meeting= deep link from the schedule), AI meeting summary, and insights.
 
 import { use, useEffect, useMemo, useRef, useState } from "react";
-import { Loading } from "@/components/conference/Bits";
+import { Loading, ProgressBar } from "@/components/conference/Bits";
 import Link from "next/link";
 import {
   Camera,
@@ -275,6 +275,13 @@ export default function ContactDetailPage({
             {summaryRunning ? "Generating…" : contact.ai_summary ? "Reanalyze with AI" : "Generate with AI"}
           </Button>
         </div>
+        {summaryRunning && (
+          <ProgressBar
+            percent={null}
+            label="AI is distilling everything captured about this KOL…"
+            className="mt-3"
+          />
+        )}
         {contact.ai_summary && (
           <pre className="mt-3 whitespace-pre-wrap font-sans text-sm leading-relaxed text-ink/90">
             {contact.ai_summary}

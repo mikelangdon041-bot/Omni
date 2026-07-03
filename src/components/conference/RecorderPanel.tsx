@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Input";
+import { ProgressBar } from "@/components/conference/Bits";
 import { cn } from "@/lib/ui";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
 import { useRecordings, type ConfRecording } from "@/lib/conference/hooks";
@@ -304,10 +305,17 @@ export function RecorderPanel({
       )}
 
       {(phase === "transcribing" || phase === "summarizing") && (
-        <div className="mt-3 rounded-lg bg-canvas px-4 py-3 text-sm text-muted">
-          {phase === "transcribing"
-            ? `Transcribing… ${segmentsDone}/${Math.max(segmentsTotal, 1)} segments`
-            : "Summarizing into nested bullets…"}
+        <div className="mt-3 rounded-lg bg-canvas px-4 py-3">
+          {phase === "transcribing" ? (
+            <ProgressBar
+              percent={
+                segmentsTotal > 0 ? (segmentsDone / segmentsTotal) * 100 : null
+              }
+              label={`Transcribing… ${segmentsDone}/${Math.max(segmentsTotal, 1)} segments`}
+            />
+          ) : (
+            <ProgressBar percent={null} label="Summarizing into nested bullets…" />
+          )}
         </div>
       )}
 

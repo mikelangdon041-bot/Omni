@@ -50,7 +50,7 @@ export async function generateClonedDeck(
   templateBytes: ArrayBuffer,
   data: DeckData,
   mapping: CloneMapping,
-  onProgress: (label: string) => void,
+  onProgress: (label: string, percent?: number) => void,
   cancelled: () => boolean,
 ): Promise<Blob | null> {
   const zip = await JSZip.loadAsync(templateBytes);
@@ -168,7 +168,10 @@ export async function generateClonedDeck(
   for (let i = 0; i < specs.length; i++) {
     if (cancelled()) return null;
     const spec = specs[i];
-    onProgress(`Slide ${i + 1}/${specs.length}: ${spec.title.slice(0, 40)}…`);
+    onProgress(
+      `Slide ${i + 1}/${specs.length}: ${spec.title.slice(0, 40)}…`,
+      (i / specs.length) * 95,
+    );
     const src = modelSrc.get(models[spec.model])!;
     const path = `ppt/slides/slideOmni${i + 1}.xml`;
     await cloneSlide(ctx, src, path, spec);
@@ -241,7 +244,7 @@ export async function generateClonedDeck(
   zip.file("ppt/_rels/presentation.xml.rels", serializer.serializeToString(presRelsDoc));
   zip.file("[Content_Types].xml", serializer.serializeToString(ctDoc));
 
-  onProgress("Packaging…");
+  onProgress("Packaging…", 97);
   return await zip.generateAsync({
     type: "blob",
     mimeType:

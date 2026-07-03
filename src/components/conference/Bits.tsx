@@ -13,6 +13,43 @@ export function Loading({ label = "Loading…" }: { label?: string }) {
   );
 }
 
+// Progress bar for anything that takes time. percent = 0..100, or null for
+// an indeterminate sweep while we wait on an AI/network call.
+export function ProgressBar({
+  percent,
+  label,
+  className,
+}: {
+  percent: number | null;
+  label?: string;
+  className?: string;
+}) {
+  return (
+    <div className={cn("space-y-1.5", className)}>
+      {(label || percent !== null) && (
+        <div className="flex items-center justify-between text-xs">
+          <span className="min-w-0 flex-1 truncate font-medium text-muted">{label}</span>
+          {percent !== null && (
+            <span className="ml-2 shrink-0 font-bold text-[var(--accent)]">
+              {Math.round(percent)}%
+            </span>
+          )}
+        </div>
+      )}
+      <div className="h-2 overflow-hidden rounded-full bg-[var(--accent-soft)]">
+        {percent === null ? (
+          <div className="omni-indeterminate h-full w-2/5 rounded-full bg-[var(--accent)]" />
+        ) : (
+          <div
+            className="h-full rounded-full bg-[var(--accent)] transition-[width] duration-300"
+            style={{ width: `${Math.max(3, Math.min(100, percent))}%` }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
 // Colored icon badge used in section headers and stat cards.
 export function IconBadge({
   color,

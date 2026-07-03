@@ -5,7 +5,7 @@
 // banner, and AI insight extraction with a review step before anything saves.
 
 import { use, useMemo, useState } from "react";
-import { Loading } from "@/components/conference/Bits";
+import { Loading, ProgressBar } from "@/components/conference/Bits";
 import Link from "next/link";
 import { Clock, ImagePlus, MapPin, Pencil, Sparkles, Trash2, Users } from "lucide-react";
 import { Button } from "@/components/ui/Button";
@@ -59,6 +59,7 @@ export default function SessionDetailPage({
   const [aiOpen, setAiOpen] = useState(false);
   const [slidesOpen, setSlidesOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadPct, setUploadPct] = useState(0);
 
   const myNote = useMemo(
     () => notes.find((n) => n.user_id === me?.id) || null,
@@ -100,11 +101,14 @@ export default function SessionDetailPage({
   async function uploadSlides(files: FileList | null) {
     if (!files || !me) return;
     setUploading(true);
+    setUploadPct(0);
     try {
+      const list = Array.from(files);
       const urls: string[] = [];
-      for (const f of Array.from(files)) {
-        const url = await uploadConferenceFile(conference.id, `sessions/${eventId}`, f);
+      for (let i = 0; i < list.length; i++) {
+        const url = await uploadConferenceFile(conference.id, `sessions/${eventId}`, list[i]);
         if (url) urls.push(url);
+        setUploadPct(((i + 1) / list.length) * 100);
       }
       if (urls.length) {
         await upsertMine(me.id, { images: [...allImages, ...urls] });
@@ -198,6 +202,9 @@ export default function SessionDetailPage({
               />
             </label>
           </div>
+          {uploading && (
+            <ProgressBar percent={uploadPct} label="Uploading photos…" className="mt-3" />
+          )}
           {slidesOpen && allImages.length > 0 && (
             <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
               {allImages.map((url) => (

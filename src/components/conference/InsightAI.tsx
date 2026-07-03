@@ -9,6 +9,7 @@ import { Sparkles } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea } from "@/components/ui/Input";
+import { ProgressBar } from "@/components/conference/Bits";
 import { cn } from "@/lib/ui";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
 import { useCategories } from "@/lib/conference/hooks";
@@ -225,6 +226,12 @@ export function GenerateInsightsModal({
             </label>
           )}
           {error && <p className="text-sm text-red-600">{error}</p>}
+          {running && (
+            <ProgressBar
+              percent={null}
+              label="AI is reading everything captured and drafting insights…"
+            />
+          )}
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={onClose}>
               Cancel
