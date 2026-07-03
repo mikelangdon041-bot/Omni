@@ -68,7 +68,7 @@ const TABS = [
   { seg: "team", label: "Team", icon: Users },
   { seg: "schedule", label: "Schedule", icon: CalendarDays },
   { seg: "sessions", label: "Sessions", icon: Mic2 },
-  { seg: "contacts", label: "Contacts", icon: Landmark },
+  { seg: "contacts", label: "KOLs", icon: Landmark },
   { seg: "posters", label: "Posters", icon: ClipboardList },
   { seg: "insights", label: "Insights", icon: Sparkles },
   { seg: "food", label: "Food", icon: UtensilsCrossed },

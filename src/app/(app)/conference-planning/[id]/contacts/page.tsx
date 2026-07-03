@@ -100,7 +100,7 @@ export default function ContactsPage() {
               setSearch(e.target.value);
               syncUrl(e.target.value, tier);
             }}
-            placeholder="Search contacts…"
+            placeholder="Search KOLs…"
             className="w-full rounded-lg border border-border bg-surface py-2.5 pl-9 pr-3 text-sm outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20"
           />
         </div>
@@ -137,7 +137,7 @@ export default function ContactsPage() {
           </button>
         )}
         <Button onClick={() => setShowAdd(true)}>
-          <Plus size={16} /> Add contact
+          <Plus size={16} /> Add KOL
         </Button>
       </div>
 
@@ -147,16 +147,16 @@ export default function ContactsPage() {
         <EmptyState
           title={
             showArchived
-              ? "No removed contacts"
+              ? "No removed KOLs"
               : contacts.length === 0
-                ? "No key contacts yet"
-                : "No contacts match"
+                ? "No KOLs yet"
+                : "No KOLs match"
           }
-          hint="Track the external stakeholders your team wants to meet at this conference."
+          hint="Track the KOLs your team wants to meet at this conference."
           action={
             !showArchived ? (
               <Button onClick={() => setShowAdd(true)}>
-                <Plus size={16} /> Add contact
+                <Plus size={16} /> Add KOL
               </Button>
             ) : undefined
           }
@@ -251,7 +251,7 @@ function AddContactModal({
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Add key contact">
+    <Modal open={open} onClose={onClose} title="Add KOL">
       <div className="space-y-4">
         <Input label="Name *" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
         <div className="grid grid-cols-2 gap-3">
@@ -280,7 +280,7 @@ function AddContactModal({
             Cancel
           </Button>
           <Button onClick={save} disabled={saving || !name.trim()}>
-            {saving ? "Adding…" : "Add contact"}
+            {saving ? "Adding…" : "Add KOL"}
           </Button>
         </div>
       </div>

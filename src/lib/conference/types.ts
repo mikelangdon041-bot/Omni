@@ -321,7 +321,7 @@ export const EVENT_TYPES: Record<
   booth: { label: "Booth", color: "#0d9488", soft: "#ccfbf1" },
   educational: { label: "Educational Session", color: "#4f46e5", soft: "#e0e7ff" },
   competitor: { label: "Competitor Session", color: "#dc2626", soft: "#fee2e2" },
-  contact_meeting: { label: "Contact Meeting", color: "#7c3aed", soft: "#ede9fe" },
+  contact_meeting: { label: "KOL Meeting", color: "#7c3aed", soft: "#ede9fe" },
   session: { label: "Session", color: "#0284c7", soft: "#e0f2fe" },
   poster: { label: "Poster", color: "#d97706", soft: "#fef3c7" },
   custom: { label: "Custom", color: "#475569", soft: "#e2e8f0" },

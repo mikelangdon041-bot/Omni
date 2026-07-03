@@ -71,7 +71,7 @@ export default function ConferenceDashboard() {
   const base = `/conference-planning/${conference.id}`;
   const cards: { label: string; value: number | string; href: string; icon: LucideIcon }[] = [
     { label: "Attendees", value: attendees.length, href: `${base}/team`, icon: Users },
-    { label: "Key Contacts", value: counts?.contacts ?? "…", href: `${base}/contacts`, icon: Landmark },
+    { label: "KOLs", value: counts?.contacts ?? "…", href: `${base}/contacts`, icon: Landmark },
     { label: "Schedule Events", value: counts?.events ?? "…", href: `${base}/schedule`, icon: CalendarDays },
     { label: "Insights", value: counts?.insights ?? "…", href: `${base}/insights`, icon: Sparkles },
     { label: "Posters", value: counts?.posters ?? "…", href: `${base}/posters`, icon: ClipboardList },

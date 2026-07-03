@@ -1,0 +1,724 @@
+"use client";
+
+// AI-assisted schedule / poster import (spec §7.16, §10.3).
+// Upload a workbook (or paste any schedule text) → pick a sheet → preview the
+// raw grid with optional free-text guidance → AI normalizes it into rows →
+// review wizard (edit, select/deselect, validate, resolve names against the
+// roster) → events, booth shifts, and posters are created on confirm.
+
+import { useMemo, useRef, useState } from "react";
+import * as XLSX from "xlsx";
+import { createClient } from "@/lib/supabase/client";
+import {
+  FileSpreadsheet,
+  Sparkles,
+  TriangleAlert,
+  Upload,
+} from "lucide-react";
+import { Modal } from "@/components/ui/Modal";
+import { Button } from "@/components/ui/Button";
+import { Textarea } from "@/components/ui/Input";
+import { cn } from "@/lib/ui";
+import { useConferenceCtx } from "@/components/conference/ConferenceContext";
+import {
+  EVENT_TYPES,
+  type EventType,
+  type Priority,
+} from "@/lib/conference/types";
+import {
+  fmtDayKey,
+  listDays,
+  localToUtcISO,
+} from "@/lib/conference/utils";
+
+const supabase = createClient();
+
+type ImportEventType = Exclude<EventType, "poster">;
+
+interface ImportRow {
+  key: string;
+  checked: boolean;
+  kind: "event" | "poster";
+  event_type: ImportEventType;
+  title: string;
+  description: string;
+  location: string;
+  date: string; // YYYY-MM-DD
+  start_time: string; // HH:MM
+  end_time: string;
+  people: string[];
+  authors: string;
+  abstract: string;
+  session_label: string;
+  priority: Priority | null;
+}
+
+type Step = "source" | "sheet" | "preview" | "review" | "done";
+
+// name → attendee id, "__create__", or "__skip__"
+type Resolution = Record<string, string>;
+
+export function ImportScheduleModal({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  const { conference, attendees, me } = useConferenceCtx();
+  const tz = conference.timezone;
+  const days = useMemo(
+    () => listDays(conference.start_date, conference.end_date),
+    [conference.start_date, conference.end_date],
+  );
+
+  const [step, setStep] = useState<Step>("source");
+  const [workbook, setWorkbook] = useState<XLSX.WorkBook | null>(null);
+  const [rawText, setRawText] = useState(""); // serialized grid or pasted doc
+  const [pasted, setPasted] = useState("");
+  const [sourceName, setSourceName] = useState("");
+  const [guidance, setGuidance] = useState("");
+  const [parsing, setParsing] = useState(false);
+  const [error, setError] = useState("");
+  const [rows, setRows] = useState<ImportRow[]>([]);
+  const [resolution, setResolution] = useState<Resolution>({});
+  const [importing, setImporting] = useState(false);
+  const [result, setResult] = useState({ events: 0, posters: 0, people: 0 });
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  function reset() {
+    setStep("source");
+    setWorkbook(null);
+    setRawText("");
+    setPasted("");
+    setSourceName("");
+    setGuidance("");
+    setRows([]);
+    setResolution({});
+    setError("");
+  }
+
+  function close() {
+    reset();
+    onClose();
+  }
+
+  // ---- Step 1: source --------------------------------------------------
+  async function onFile(file: File | null) {
+    if (!file) return;
+    setError("");
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { cellDates: false });
+      setSourceName(file.name);
+      if (wb.SheetNames.length > 1) {
+        setWorkbook(wb);
+        setStep("sheet");
+      } else {
+        setRawText(serializeSheet(wb, wb.SheetNames[0]));
+        setStep("preview");
+      }
+    } catch {
+      setError("Couldn't read that file — is it a valid Excel/CSV workbook?");
+    }
+  }
+
+  function pickSheet(name: string) {
+    if (!workbook) return;
+    setSourceName((s) => `${s} · ${name}`);
+    setRawText(serializeSheet(workbook, name));
+    setStep("preview");
+  }
+
+  function useDocument() {
+    if (!pasted.trim()) return;
+    setSourceName("Pasted document");
+    setRawText(pasted.trim());
+    setStep("preview");
+  }
+
+  // ---- Step 3: AI parse --------------------------------------------------
+  async function parse() {
+    setParsing(true);
+    setError("");
+    try {
+      const res = await fetch("/api/conference/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          action: "parse_schedule",
+          text: rawText,
+          guidance,
+          days,
+          attendees: attendees.map((a) => a.name),
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "AI parse failed");
+      const parsed: ImportRow[] = (json.rows || []).map(
+        (r: Partial<ImportRow>, i: number) => ({
+          key: `row-${i}`,
+          checked: true,
+          kind: r.kind === "poster" ? "poster" : "event",
+          event_type: isImportEventType(r.event_type) ? r.event_type : "session",
+          title: String(r.title || "").trim(),
+          description: String(r.description || ""),
+          location: String(r.location || ""),
+          date: /^\d{4}-\d{2}-\d{2}$/.test(String(r.date || "")) ? String(r.date) : "",
+          start_time: /^\d{2}:\d{2}$/.test(String(r.start_time || ""))
+            ? String(r.start_time)
+            : "",
+          end_time: /^\d{2}:\d{2}$/.test(String(r.end_time || "")) ? String(r.end_time) : "",
+          people: Array.isArray(r.people) ? r.people.map(String).filter(Boolean) : [],
+          authors: String(r.authors || ""),
+          abstract: String(r.abstract || ""),
+          session_label: String(r.session_label || ""),
+          priority:
+            r.priority === "high" || r.priority === "medium" || r.priority === "low"
+              ? r.priority
+              : null,
+        }),
+      );
+      if (parsed.length === 0) {
+        setError("The AI found no importable rows. Try adding guidance below and re-run.");
+        return;
+      }
+      setRows(parsed);
+      setResolution(autoResolve(parsed, attendees));
+      setStep("review");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setParsing(false);
+    }
+  }
+
+  // ---- Step 4: review helpers -------------------------------------------
+  const distinctNames = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of rows) for (const p of r.people) set.add(p);
+    return [...set].sort();
+  }, [rows]);
+
+  const unresolved = distinctNames.filter((n) => !resolution[n]);
+
+  function rowValid(r: ImportRow): boolean {
+    if (!r.title) return false;
+    if (r.kind === "event") return !!r.date && !!r.start_time;
+    return true;
+  }
+
+  function updateRow(key: string, partial: Partial<ImportRow>) {
+    setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...partial } : r)));
+  }
+
+  const selected = rows.filter((r) => r.checked && rowValid(r));
+
+  // ---- Step 5: import ----------------------------------------------------
+  async function runImport() {
+    setImporting(true);
+    setError("");
+    try {
+      // Resolve names → attendee ids, creating new attendees where chosen.
+      const nameToId: Record<string, string> = {};
+      let created = 0;
+      for (const name of distinctNames) {
+        const r = resolution[name];
+        if (!r || r === "__skip__") continue;
+        if (r === "__create__") {
+          const { data } = await supabase
+            .from("conference_attendees")
+            .insert({ conference_id: conference.id, name })
+            .select("id")
+            .single();
+          if (data) {
+            nameToId[name] = data.id;
+            created++;
+          }
+        } else {
+          nameToId[name] = r;
+        }
+      }
+
+      let events = 0;
+      let posters = 0;
+      for (const r of selected) {
+        const peopleIds = r.people
+          .map((p) => nameToId[p])
+          .filter(Boolean) as string[];
+
+        if (r.kind === "poster") {
+          const { data: poster } = await supabase
+            .from("conf_posters")
+            .insert({
+              conference_id: conference.id,
+              title: r.title,
+              date: r.date ? fmtDayKey(r.date, { weekday: true }) : "",
+              time: r.start_time,
+              location: r.location,
+              authors: r.authors,
+              abstract: r.abstract,
+              session_label: r.session_label,
+              suspected_priority: r.priority,
+            })
+            .select("id")
+            .single();
+          if (poster && peopleIds.length) {
+            await supabase.from("conf_poster_reps").insert(
+              peopleIds.map((attendee_id) => ({
+                conference_id: conference.id,
+                poster_id: poster.id,
+                attendee_id,
+              })),
+            );
+          }
+          posters++;
+          continue;
+        }
+
+        const starts_at = localToUtcISO(r.date, r.start_time, tz);
+        const ends_at = localToUtcISO(
+          r.date,
+          r.end_time && r.end_time > r.start_time ? r.end_time : addHour(r.start_time),
+          tz,
+        );
+        const { data: ev } = await supabase
+          .from("conf_events")
+          .insert({
+            conference_id: conference.id,
+            title: r.title,
+            event_type: r.event_type,
+            description: r.description,
+            location: r.location,
+            starts_at,
+            ends_at,
+            suspected_priority: r.priority,
+            created_by: me?.id,
+          })
+          .select("id")
+          .single();
+        if (ev) {
+          if (peopleIds.length) {
+            await supabase.from("conf_event_assignments").insert(
+              peopleIds.map((attendee_id) => ({
+                conference_id: conference.id,
+                event_id: ev.id,
+                attendee_id,
+              })),
+            );
+            // Booth-duty rows also get coverage shifts spanning the event.
+            if (r.event_type === "booth") {
+              await supabase.from("conf_event_shifts").insert(
+                peopleIds.map((attendee_id, i) => ({
+                  conference_id: conference.id,
+                  event_id: ev.id,
+                  attendee_id,
+                  starts_at,
+                  ends_at,
+                  sort_order: i,
+                })),
+              );
+            }
+          }
+          events++;
+        }
+      }
+      setResult({ events, posters, people: created });
+      setStep("done");
+    } catch (e) {
+      setError((e as Error).message || "Import failed part-way — check the schedule tab.");
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={close} title="Import schedule / posters" size="lg">
+      {/* ---- Source ---- */}
+      {step === "source" && (
+        <div className="space-y-5">
+          <button
+            onClick={() => fileRef.current?.click()}
+            className="grid w-full place-items-center gap-2 rounded-xl border-2 border-dashed border-border bg-canvas/50 px-6 py-10 text-center transition hover:border-[var(--accent)]"
+          >
+            <FileSpreadsheet size={28} className="text-muted" />
+            <span className="text-sm font-medium">Upload a spreadsheet</span>
+            <span className="text-xs text-muted">.xlsx, .xls, or .csv — day sheets, booth-duty rosters, poster lists</span>
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            className="hidden"
+            onChange={(e) => onFile(e.target.files?.[0] || null)}
+          />
+          <div className="flex items-center gap-3">
+            <span className="h-px flex-1 bg-border" />
+            <span className="text-xs text-muted">or paste any schedule text</span>
+            <span className="h-px flex-1 bg-border" />
+          </div>
+          <Textarea
+            value={pasted}
+            onChange={(e) => setPasted(e.target.value)}
+            placeholder="Paste an agenda email, a program excerpt, a poster list…"
+            className="min-h-32"
+          />
+          {error && <p className="text-sm text-red-600">{error}</p>}
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={close}>
+              Cancel
+            </Button>
+            <Button onClick={useDocument} disabled={!pasted.trim()}>
+              <Upload size={15} /> Use pasted text
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ---- Sheet picker ---- */}
+      {step === "sheet" && workbook && (
+        <div className="space-y-3">
+          <p className="text-sm text-muted">
+            <b>{sourceName}</b> has {workbook.SheetNames.length} sheets — which
+            one holds the schedule?
+          </p>
+          <div className="space-y-1.5">
+            {workbook.SheetNames.map((name) => (
+              <button
+                key={name}
+                onClick={() => pickSheet(name)}
+                className="flex w-full items-center gap-2 rounded-lg border border-border bg-surface px-4 py-3 text-left text-sm font-medium transition hover:border-[var(--accent)]"
+              >
+                <FileSpreadsheet size={15} className="text-muted" /> {name}
+              </button>
+            ))}
+          </div>
+          <Button variant="ghost" onClick={reset}>
+            ← Different file
+          </Button>
+        </div>
+      )}
+
+      {/* ---- Preview + guidance ---- */}
+      {step === "preview" && (
+        <div className="space-y-4">
+          <p className="text-sm text-muted">
+            Raw data from <b>{sourceName}</b> — the AI will normalize it into
+            events, booth coverage, and posters for your review (nothing is
+            created yet).
+          </p>
+          <pre className="max-h-56 overflow-auto rounded-lg border border-border bg-canvas p-3 text-[11px] leading-relaxed">
+            {rawText.slice(0, 4000)}
+            {rawText.length > 4000 ? "\n…" : ""}
+          </pre>
+          <Textarea
+            label="Guidance for the AI (optional)"
+            value={guidance}
+            onChange={(e) => setGuidance(e.target.value)}
+            placeholder='e.g. "Column F is the rep covering; times are Eastern; rows in red are competitor talks"'
+          />
+          {error && <p className="text-sm text-red-600">{error}</p>}
+          <div className="flex justify-between gap-2">
+            <Button variant="ghost" onClick={reset}>
+              ← Start over
+            </Button>
+            <Button onClick={parse} disabled={parsing}>
+              <Sparkles size={15} /> {parsing ? "Parsing…" : "Parse with AI"}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ---- Review wizard ---- */}
+      {step === "review" && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="font-medium">
+              {selected.length} of {rows.length} rows will import
+            </span>
+            <span className="flex-1" />
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() =>
+                setRows((prev) => {
+                  const all = prev.every((r) => r.checked);
+                  return prev.map((r) => ({ ...r, checked: !all }));
+                })
+              }
+            >
+              Toggle all
+            </Button>
+          </div>
+
+          {/* Name resolution */}
+          {distinctNames.length > 0 && (
+            <div className="space-y-2 rounded-lg bg-canvas p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                People found in the source
+              </p>
+              <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                {distinctNames.map((name) => {
+                  const matched = attendees.find((a) => a.id === resolution[name]);
+                  return (
+                    <div key={name} className="flex items-center gap-2 text-sm">
+                      <span
+                        className={cn(
+                          "min-w-0 flex-1 truncate",
+                          !resolution[name] && "font-medium text-amber-600",
+                        )}
+                      >
+                        {name}
+                      </span>
+                      <select
+                        value={resolution[name] || ""}
+                        onChange={(e) =>
+                          setResolution((prev) => ({ ...prev, [name]: e.target.value }))
+                        }
+                        className={cn(
+                          "rounded-md border bg-surface px-2 py-1 text-xs outline-none",
+                          resolution[name] ? "border-border" : "border-amber-400",
+                        )}
+                      >
+                        <option value="">Resolve…</option>
+                        {matched && <option value={matched.id}>→ {matched.name}</option>}
+                        {attendees
+                          .filter((a) => a.id !== resolution[name])
+                          .map((a) => (
+                            <option key={a.id} value={a.id}>
+                              → {a.name}
+                            </option>
+                          ))}
+                        <option value="__create__">＋ Create new attendee</option>
+                        <option value="__skip__">Skip this name</option>
+                      </select>
+                    </div>
+                  );
+                })}
+              </div>
+              {unresolved.length > 0 && (
+                <p className="flex items-center gap-1 text-xs text-amber-600">
+                  <TriangleAlert size={12} /> Unresolved names import without an
+                  assignment unless you map or create them.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Rows */}
+          <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
+            {rows.map((r) => {
+              const valid = rowValid(r);
+              return (
+                <div
+                  key={r.key}
+                  className={cn(
+                    "rounded-lg border p-2.5",
+                    !valid
+                      ? "border-red-300 bg-red-50/50"
+                      : r.checked
+                        ? "border-border bg-surface"
+                        : "border-border bg-canvas opacity-60",
+                  )}
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={r.checked}
+                      onChange={(e) => updateRow(r.key, { checked: e.target.checked })}
+                    />
+                    <select
+                      value={r.kind === "poster" ? "poster" : r.event_type}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v === "poster") updateRow(r.key, { kind: "poster" });
+                        else
+                          updateRow(r.key, {
+                            kind: "event",
+                            event_type: v as ImportEventType,
+                          });
+                      }}
+                      className="rounded-md border border-border bg-surface px-1.5 py-1 text-xs font-medium outline-none"
+                      style={{
+                        color:
+                          r.kind === "poster"
+                            ? EVENT_TYPES.poster.color
+                            : EVENT_TYPES[r.event_type].color,
+                      }}
+                    >
+                      {(Object.keys(EVENT_TYPES) as EventType[])
+                        .filter((t) => t !== "poster")
+                        .map((t) => (
+                          <option key={t} value={t}>
+                            {EVENT_TYPES[t].label}
+                          </option>
+                        ))}
+                      <option value="poster">Poster</option>
+                    </select>
+                    <input
+                      value={r.title}
+                      onChange={(e) => updateRow(r.key, { title: e.target.value })}
+                      placeholder="Title *"
+                      className="min-w-32 flex-1 rounded-md border border-border bg-surface px-2 py-1 text-sm outline-none focus:border-[var(--accent)]"
+                    />
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
+                    <select
+                      value={days.includes(r.date) ? r.date : r.date ? "__other__" : ""}
+                      onChange={(e) => {
+                        if (e.target.value !== "__other__")
+                          updateRow(r.key, { date: e.target.value });
+                      }}
+                      className={cn(
+                        "rounded-md border bg-surface px-1.5 py-1 outline-none",
+                        r.kind === "event" && !r.date ? "border-red-400" : "border-border",
+                      )}
+                    >
+                      <option value="">No date</option>
+                      {days.map((d) => (
+                        <option key={d} value={d}>
+                          {fmtDayKey(d)}
+                        </option>
+                      ))}
+                      {r.date && !days.includes(r.date) && (
+                        <option value="__other__">{r.date}</option>
+                      )}
+                    </select>
+                    <input
+                      type="time"
+                      value={r.start_time}
+                      onChange={(e) => updateRow(r.key, { start_time: e.target.value })}
+                      className={cn(
+                        "rounded-md border bg-surface px-1.5 py-1 outline-none",
+                        r.kind === "event" && !r.start_time
+                          ? "border-red-400"
+                          : "border-border",
+                      )}
+                    />
+                    <span className="text-muted">–</span>
+                    <input
+                      type="time"
+                      value={r.end_time}
+                      onChange={(e) => updateRow(r.key, { end_time: e.target.value })}
+                      className="rounded-md border border-border bg-surface px-1.5 py-1 outline-none"
+                    />
+                    <input
+                      value={r.location}
+                      onChange={(e) => updateRow(r.key, { location: e.target.value })}
+                      placeholder="Location"
+                      className="min-w-24 flex-1 rounded-md border border-border bg-surface px-2 py-1 outline-none"
+                    />
+                    {r.people.length > 0 && (
+                      <span className="text-muted">
+                        👤 {r.people.join(", ")}
+                      </span>
+                    )}
+                  </div>
+                  {!valid && (
+                    <p className="mt-1 text-[11px] font-medium text-red-600">
+                      Needs a title{r.kind === "event" ? ", date, and start time" : ""} to import.
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {error && <p className="text-sm text-red-600">{error}</p>}
+          <div className="flex justify-between gap-2 border-t border-border pt-3">
+            <Button variant="ghost" onClick={() => setStep("preview")}>
+              ← Re-parse with guidance
+            </Button>
+            <Button onClick={runImport} disabled={importing || selected.length === 0}>
+              {importing
+                ? "Importing…"
+                : `Import ${selected.length} row${selected.length === 1 ? "" : "s"}`}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ---- Done ---- */}
+      {step === "done" && (
+        <div className="space-y-4 py-4 text-center">
+          <p className="text-3xl">✅</p>
+          <p className="text-sm">
+            Imported <b>{result.events}</b> event{result.events === 1 ? "" : "s"} and{" "}
+            <b>{result.posters}</b> poster{result.posters === 1 ? "" : "s"}
+            {result.people > 0 && (
+              <>
+                , creating <b>{result.people}</b> new attendee
+                {result.people === 1 ? "" : "s"}
+              </>
+            )}
+            .
+          </p>
+          <div className="flex justify-center gap-2">
+            <Button variant="secondary" onClick={reset}>
+              Import more
+            </Button>
+            <Button onClick={close}>Done</Button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// ------------------------------------------------------------------
+
+function isImportEventType(v: unknown): v is ImportEventType {
+  return (
+    typeof v === "string" &&
+    ["booth", "educational", "competitor", "contact_meeting", "session", "custom"].includes(v)
+  );
+}
+
+function addHour(t: string): string {
+  const [h, m] = t.split(":").map(Number);
+  const min = Math.min(h * 60 + m + 60, 23 * 60 + 59);
+  return `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
+}
+
+// Serialize a sheet to compact pipe-separated text for the AI (caps size).
+function serializeSheet(wb: XLSX.WorkBook, sheetName: string): string {
+  const sheet = wb.Sheets[sheetName];
+  const grid: unknown[][] = XLSX.utils.sheet_to_json(sheet, {
+    header: 1,
+    raw: false,
+    defval: "",
+  });
+  const lines: string[] = [];
+  for (let i = 0; i < Math.min(grid.length, 400); i++) {
+    const cells = (grid[i] || []).map((c) => String(c ?? "").trim());
+    if (cells.every((c) => !c)) continue;
+    lines.push(`Row ${i + 1}: ${cells.join(" | ")}`);
+  }
+  return lines.join("\n");
+}
+
+// Match source names to the roster: exact (case-insensitive), then unique
+// first-name match. Unmatched names stay unresolved for manual mapping.
+function autoResolve(
+  rows: ImportRow[],
+  attendees: { id: string; name: string }[],
+): Resolution {
+  const out: Resolution = {};
+  const names = new Set<string>();
+  for (const r of rows) for (const p of r.people) names.add(p);
+  for (const name of names) {
+    const lower = name.trim().toLowerCase();
+    const exact = attendees.find((a) => a.name.trim().toLowerCase() === lower);
+    if (exact) {
+      out[name] = exact.id;
+      continue;
+    }
+    const first = lower.split(/\s+/)[0];
+    const firstMatches = attendees.filter(
+      (a) => a.name.trim().toLowerCase().split(/\s+/)[0] === first,
+    );
+    if (firstMatches.length === 1) out[name] = firstMatches[0].id;
+  }
+  return out;
+}

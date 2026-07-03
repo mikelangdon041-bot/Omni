@@ -68,12 +68,12 @@ export default function ContactDetailPage({
   if (!contact) {
     return (
       <p className="py-12 text-center text-sm text-muted">
-        Contact not found.{" "}
+        KOL not found.{" "}
         <Link
           href={`/conference-planning/${conference.id}/contacts`}
           className="text-[var(--accent)] hover:underline"
         >
-          Back to contacts
+          Back to KOLs
         </Link>
       </p>
     );
@@ -615,7 +615,7 @@ function MeetingsSection({
         ))}
         {meetings.length === 0 && !showAdd && (
           <p className="text-sm text-muted">
-            No meetings yet. Meetings created from the Schedule (contact-meeting
+            No meetings yet. Meetings created from the Schedule (KOL-meeting
             events) appear here automatically.
           </p>
         )}

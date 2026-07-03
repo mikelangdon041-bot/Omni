@@ -6,12 +6,13 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Layers, Plus, Search } from "lucide-react";
+import { FileSpreadsheet, Layers, Plus, Search } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
 import { usePosters, type PosterWithReps } from "@/lib/conference/hooks";
 import { PosterModal } from "@/components/conference/PosterModal";
+import { ImportScheduleModal } from "@/components/conference/ImportScheduleModal";
 import { PriorityPill } from "@/components/conference/Priority";
 import { normalizeFreeDate } from "@/lib/conference/utils";
 
@@ -22,6 +23,7 @@ export default function PostersPage() {
   const { posters, loading, save } = usePosters(conference.id);
   const [search, setSearch] = useState("");
   const [showAdd, setShowAdd] = useState(false);
+  const [showImport, setShowImport] = useState(false);
 
   const confYear = Number(conference.start_date.slice(0, 4)) || new Date().getFullYear();
 
@@ -79,6 +81,9 @@ export default function PostersPage() {
             className="w-full rounded-lg border border-border bg-surface py-2.5 pl-9 pr-3 text-sm outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20"
           />
         </div>
+        <Button variant="secondary" onClick={() => setShowImport(true)}>
+          <FileSpreadsheet size={15} /> Import
+        </Button>
         <Button onClick={() => setShowAdd(true)}>
           <Plus size={16} /> Add poster
         </Button>
@@ -161,6 +166,8 @@ export default function PostersPage() {
         poster={null}
         onSave={save}
       />
+
+      <ImportScheduleModal open={showImport} onClose={() => setShowImport(false)} />
     </div>
   );
 }

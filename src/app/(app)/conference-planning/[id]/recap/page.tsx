@@ -229,7 +229,7 @@ export default function RecapPage() {
 
       <RecapSection
         icon={<Landmark size={14} />}
-        title={`Contact meetings (${meetings.length})`}
+        title={`KOL meetings (${meetings.length})`}
       >
         {meetings.map((m) => (
           <Link

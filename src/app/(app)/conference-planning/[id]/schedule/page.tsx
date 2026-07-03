@@ -8,6 +8,7 @@ import { useMemo, useState } from "react";
 import {
   CalendarDays,
   Download,
+  FileSpreadsheet,
   List,
   Plus,
   UserRound,
@@ -26,6 +27,7 @@ import {
 } from "@/components/conference/ScheduleCalendar";
 import { EventFormModal } from "@/components/conference/EventFormModal";
 import { EventPeek } from "@/components/conference/EventPeek";
+import { ImportScheduleModal } from "@/components/conference/ImportScheduleModal";
 import { PriorityPill } from "@/components/conference/Priority";
 import {
   EVENT_TYPES,
@@ -65,6 +67,7 @@ export default function SchedulePage() {
   // Editing state.
   const [peek, setPeek] = useState<EventWithPeople | null>(null);
   const [formOpen, setFormOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [editing, setEditing] = useState<EventWithPeople | null>(null);
   const [createDay, setCreateDay] = useState<string | undefined>();
   const [createMin, setCreateMin] = useState<number | undefined>();
@@ -181,6 +184,9 @@ export default function SchedulePage() {
           </ViewBtn>
         </div>
         <ExportMenu attendees={attendees} onExport={exportPerson} />
+        <Button size="sm" variant="secondary" onClick={() => setImportOpen(true)}>
+          <FileSpreadsheet size={15} /> Import
+        </Button>
         <Button
           size="sm"
           onClick={() => {
@@ -248,6 +254,8 @@ export default function SchedulePage() {
         initialMinutes={createMin}
         onSave={save}
       />
+
+      <ImportScheduleModal open={importOpen} onClose={() => setImportOpen(false)} />
     </div>
   );
 }

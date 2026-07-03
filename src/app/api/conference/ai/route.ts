@@ -17,6 +17,7 @@ const MODEL = process.env.OPENAI_SUMMARY_MODEL || "gpt-4o";
 //   daily_summary     { text, guidance? }                → { content }
 //   poster_summary    { title, abstract?, notes? }       → { background, data, conclusion }
 //   meeting_summary   { text, guidance? }                → { content }
+//   parse_schedule    { text, guidance?, days, attendees } → { rows: ImportRow[] }
 export async function POST(req: Request) {
   const supabase = await createClient();
   const {
@@ -124,6 +125,59 @@ Rules:
         data: parsed.data || "",
         conclusion: parsed.conclusion || "",
       });
+    }
+
+    if (action === "parse_schedule") {
+      const text: string = (body?.text || "").slice(0, 80000);
+      const guidance: string = body?.guidance || "";
+      const days: string[] = Array.isArray(body?.days) ? body.days : [];
+      const attendees: string[] = Array.isArray(body?.attendees) ? body.attendees : [];
+      if (!text.trim()) return NextResponse.json({ rows: [] });
+
+      const res = await openai().chat.completions.create({
+        model: MODEL,
+        temperature: 0.1,
+        response_format: { type: "json_object" },
+        max_tokens: 8000,
+        messages: [
+          {
+            role: "system",
+            content: `You convert a conference schedule (a spreadsheet grid or unstructured document) into normalized rows for import.
+
+Return ONLY JSON: {"rows":[{...}]} where each row is:
+{
+  "kind": "event" | "poster",
+  "event_type": "booth" | "educational" | "competitor" | "contact_meeting" | "session" | "custom",   // events only
+  "title": "...",                       // required
+  "description": "...",
+  "location": "...",
+  "date": "YYYY-MM-DD",                 // events: required; posters: use it when known, else ""
+  "start_time": "HH:MM",               // 24h; events: required (default 09:00 only if truly absent)
+  "end_time": "HH:MM",                 // 24h; if absent, one hour after start
+  "people": ["Full Name", ...],        // reps assigned/covering, exactly as written in the source
+  "authors": "...",                    // posters only
+  "abstract": "...",                   // posters only
+  "session_label": "...",              // posters only
+  "priority": "high" | "medium" | "low" | null
+}
+
+Rules:
+- The conference days are: ${days.join(", ") || "(unknown)"}. When the source has a day without a year (e.g. "April 22" or "Day 2" or "Wednesday"), resolve it to one of those dates. Never invent dates outside them unless the source is explicit.
+- Booth-duty/staffing rows become ONE booth event per contiguous date+location block, with all covering people in "people" (do not emit one row per shift person unless times differ — separate time ranges may be separate rows).
+- Research posters (poster numbers, abstract titles, presenter lists) → kind "poster".
+- Talks/lectures/presentations → "session" (or "educational"/"competitor" when the source clearly says so). Meetings with named external clinicians/VIPs → "contact_meeting".
+- Team member names in the source should match this roster when possible (copy the source spelling; do NOT substitute): ${attendees.join(", ") || "(none)"}.
+- Copy titles/locations/names exactly as written. Never fabricate rows, times, or people not in the source. Skip header/legend/blank rows.`,
+          },
+          {
+            role: "user",
+            content: `${guidance ? `Importer guidance: ${guidance}\n\n` : ""}Source schedule:\n\n${text}`,
+          },
+        ],
+      });
+      const parsed = JSON.parse(res.choices[0]?.message?.content || "{}");
+      const rows = Array.isArray(parsed.rows) ? parsed.rows : [];
+      return NextResponse.json({ rows });
     }
 
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
