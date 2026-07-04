@@ -186,7 +186,7 @@ export default function InsightsPage() {
             </option>
           ))}
         </select>
-        <div className="flex flex-wrap gap-1">
+        <div className="-mx-1 flex w-full flex-nowrap gap-1 overflow-x-auto px-1 pb-1 md:mx-0 md:w-auto md:flex-wrap md:overflow-visible md:px-0 md:pb-0">
           {categories.map((c) => (
             <button
               key={c.id}
@@ -198,7 +198,7 @@ export default function InsightsPage() {
                 )
               }
               className={cn(
-                "rounded-full border px-2 py-1 text-[10px] font-semibold transition",
+                "shrink-0 rounded-full border px-2 py-1 text-[10px] font-semibold transition",
                 catFilter.includes(c.name)
                   ? "border-transparent text-white"
                   : "border-border bg-surface text-muted hover:text-ink",

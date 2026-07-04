@@ -12,6 +12,7 @@ import {
   FileSpreadsheet,
   List,
   Plus,
+  SlidersHorizontal,
   UserRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
@@ -64,6 +65,7 @@ export default function SchedulePage() {
   const [personFilter, setPersonFilter] = useState<string>("all");
   const [dayFilter, setDayFilter] = useState<string | null>(null);
   const [view, setView] = useState<"calendar" | "list" | "who">("calendar");
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   // Editing state.
   const [peek, setPeek] = useState<EventWithPeople | null>(null);
@@ -114,10 +116,72 @@ export default function SchedulePage() {
     downloadICS(`${a?.name || "schedule"} — ${conference.name}`, buildICS(theirs, conference));
   }
 
+  const activeFilterCount =
+    (myOnly ? 1 : 0) +
+    (personFilter !== "all" ? 1 : 0) +
+    (dayFilter ? 1 : 0) +
+    (showPosters ? 1 : 0) +
+    hiddenTypes.length;
+
   return (
     <div>
-      {/* Filter row */}
-      <div className="mb-4 flex flex-wrap items-center gap-2">
+      {/* Primary toolbar — always visible, one row on phones */}
+      <div className="mb-3 flex items-center gap-2">
+        <button
+          onClick={() => setFiltersOpen((v) => !v)}
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition sm:hidden",
+            filtersOpen || activeFilterCount > 0
+              ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
+              : "border-border bg-surface text-muted",
+          )}
+        >
+          <SlidersHorizontal size={14} />
+          Filters
+          {activeFilterCount > 0 && (
+            <span className="grid h-4 min-w-4 place-items-center rounded-full bg-[var(--accent)] px-1 text-[10px] font-bold text-white">
+              {activeFilterCount}
+            </span>
+          )}
+        </button>
+        <div className="flex overflow-hidden rounded-lg border border-border">
+          <ViewBtn active={view === "calendar"} onClick={() => setView("calendar")} title="Calendar">
+            <CalendarDays size={15} />
+          </ViewBtn>
+          <ViewBtn active={view === "list"} onClick={() => setView("list")} title="List">
+            <List size={15} />
+          </ViewBtn>
+          <ViewBtn active={view === "who"} onClick={() => setView("who")} title="Who is where">
+            <UserRound size={15} />
+          </ViewBtn>
+        </div>
+        <span className="flex-1" />
+        <div className="hidden items-center gap-2 sm:flex">
+          <ExportMenu attendees={attendees} onExport={exportPerson} />
+          <Button size="sm" variant="secondary" onClick={() => setImportOpen(true)}>
+            <FileSpreadsheet size={15} /> Import
+          </Button>
+        </div>
+        <Button
+          size="sm"
+          onClick={() => {
+            setEditing(null);
+            setCreateDay(dayFilter || undefined);
+            setCreateMin(undefined);
+            setFormOpen(true);
+          }}
+        >
+          <Plus size={15} /> Event
+        </Button>
+      </div>
+
+      {/* Filters — collapsible on phones, always visible from sm up */}
+      <div
+        className={cn(
+          "mb-4 flex-wrap items-center gap-2",
+          filtersOpen ? "flex" : "hidden sm:flex",
+        )}
+      >
         <FilterPill active={myOnly} onClick={() => setMyOnly(!myOnly)}>
           My events
         </FilterPill>
@@ -172,34 +236,12 @@ export default function SchedulePage() {
             {EVENT_TYPES[t].label}
           </button>
         ))}
-
-        <span className="flex-1" />
-        <div className="flex overflow-hidden rounded-lg border border-border">
-          <ViewBtn active={view === "calendar"} onClick={() => setView("calendar")} title="Calendar">
-            <CalendarDays size={15} />
-          </ViewBtn>
-          <ViewBtn active={view === "list"} onClick={() => setView("list")} title="List">
-            <List size={15} />
-          </ViewBtn>
-          <ViewBtn active={view === "who"} onClick={() => setView("who")} title="Who is where">
-            <UserRound size={15} />
-          </ViewBtn>
+        <div className="flex items-center gap-2 sm:hidden">
+          <ExportMenu attendees={attendees} onExport={exportPerson} />
+          <Button size="sm" variant="secondary" onClick={() => setImportOpen(true)}>
+            <FileSpreadsheet size={15} /> Import
+          </Button>
         </div>
-        <ExportMenu attendees={attendees} onExport={exportPerson} />
-        <Button size="sm" variant="secondary" onClick={() => setImportOpen(true)}>
-          <FileSpreadsheet size={15} /> Import
-        </Button>
-        <Button
-          size="sm"
-          onClick={() => {
-            setEditing(null);
-            setCreateDay(dayFilter || undefined);
-            setCreateMin(undefined);
-            setFormOpen(true);
-          }}
-        >
-          <Plus size={15} /> Event
-        </Button>
       </div>
 
       {loading ? (

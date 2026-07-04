@@ -40,7 +40,7 @@ export default async function AppLayout({
         )}
         <AppHeader username={username} isAdmin={isAdmin} />
         <main className="flex-1">
-          <div className="mx-auto max-w-5xl px-4 py-8 sm:px-8">{children}</div>
+          <div className="mx-auto max-w-5xl px-3 py-5 sm:px-8 sm:py-8">{children}</div>
         </main>
       </div>
     </FeedbackProvider>

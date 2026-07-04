@@ -34,13 +34,15 @@ export function Modal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-ink/40 p-4 sm:p-8"
+      className="fixed inset-0 z-50 flex items-end justify-center bg-ink/40 sm:items-start sm:overflow-y-auto sm:p-8"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
+      {/* Bottom sheet on phones (full-width, capped height, internal scroll);
+          centered card from sm up. */}
       <div
-        className={`w-full ${width} rounded-2xl border border-border bg-surface shadow-xl`}
+        className={`flex max-h-[92dvh] w-full ${width} flex-col rounded-t-2xl border border-border bg-surface shadow-xl sm:max-h-none sm:rounded-2xl`}
       >
-        <div className="flex items-center justify-between border-b border-border px-5 py-4">
+        <div className="flex shrink-0 items-center justify-between border-b border-border px-5 py-4">
           <h2 className="font-semibold tracking-tight">{title}</h2>
           <button
             onClick={onClose}
@@ -50,7 +52,9 @@ export function Modal({
             <X size={18} />
           </button>
         </div>
-        <div className="px-5 py-5">{children}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5 sm:py-5">
+          {children}
+        </div>
       </div>
     </div>
   );

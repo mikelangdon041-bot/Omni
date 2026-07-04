@@ -216,7 +216,7 @@ export function ScheduleCalendar({
     <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
       {/* Header: paging + day labels + zoom */}
       <div className="flex items-center border-b border-border bg-canvas/60">
-        <div className="flex w-12 shrink-0 flex-col items-center gap-0.5 py-1.5">
+        <div className="flex w-9 shrink-0 flex-col items-center gap-0.5 py-1.5 sm:w-12">
           <button
             onClick={() => zoom(1)}
             className="rounded p-0.5 text-muted hover:bg-surface hover:text-ink"
@@ -245,7 +245,7 @@ export function ScheduleCalendar({
             <div
               key={d}
               className={cn(
-                "border-l border-border px-1 py-2 text-center text-xs font-semibold",
+                "truncate border-l border-border px-0.5 py-2 text-center text-[11px] font-semibold sm:px-1 sm:text-xs",
                 d === today ? "bg-[var(--accent-soft)] text-[var(--accent)]" : "text-ink",
               )}
             >
@@ -267,11 +267,11 @@ export function ScheduleCalendar({
       <div className="max-h-[70vh] overflow-y-auto">
         <div className="flex" style={{ height: gridHeight }}>
           {/* Time axis */}
-          <div className="relative w-12 shrink-0">
+          <div className="relative w-9 shrink-0 sm:w-12">
             {Array.from({ length: 24 }, (_, h) => (
               <div
                 key={h}
-                className="absolute right-1.5 -translate-y-1/2 text-[10px] text-muted"
+                className="absolute right-1 -translate-y-1/2 text-[9px] text-muted sm:right-1.5 sm:text-[10px]"
                 style={{ top: h * 60 * pxPerMin }}
               >
                 {h === 0 ? "" : `${((h + 11) % 12) + 1}${h < 12 ? "am" : "pm"}`}

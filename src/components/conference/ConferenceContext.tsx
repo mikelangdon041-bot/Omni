@@ -241,8 +241,9 @@ export function ConferenceProvider({
         </div>
       </div>
 
-      {/* Tab bar */}
-      <div className="mb-6 flex gap-1 overflow-x-auto border-b border-border pb-px">
+      {/* Tab bar — icons-only on phones (all tabs fit, no scrolling);
+          icon + label from md up. */}
+      <div className="mb-6 flex border-b border-border pb-px md:gap-1">
         {TABS.map((t) => {
           const href = t.seg ? `${base}/${t.seg}` : base;
           const active = activeSeg === t.seg;
@@ -250,17 +251,19 @@ export function ConferenceProvider({
             <Link
               key={t.seg}
               href={href}
+              title={t.label}
               className={cn(
-                "-mb-px inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2.5 text-sm font-medium transition",
+                "-mb-px relative inline-flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap border-b-2 px-1 py-2.5 text-sm font-medium transition md:flex-none md:justify-start md:px-3",
                 active
                   ? "border-[var(--accent)] text-[var(--accent)]"
                   : "border-transparent text-muted hover:text-ink",
               )}
             >
-              <t.icon size={15} />
-              {t.label}
+              <t.icon size={17} className="md:hidden" />
+              <t.icon size={15} className="hidden md:block" />
+              <span className="hidden md:inline">{t.label}</span>
               {t.seg === "food" && foodUnread > 0 && (
-                <span className="grid h-4 min-w-4 place-items-center rounded-full bg-red-500 px-1 text-[10px] font-bold leading-none text-white">
+                <span className="absolute -top-0.5 right-0 grid h-4 min-w-4 place-items-center rounded-full bg-red-500 px-1 text-[10px] font-bold leading-none text-white md:static">
                   {foodUnread > 99 ? "99+" : foodUnread}
                 </span>
               )}
