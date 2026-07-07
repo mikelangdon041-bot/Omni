@@ -42,6 +42,10 @@ interface ImportRow {
   checked: boolean;
   kind: "event" | "poster";
   event_type: ImportEventType;
+  // The type the AI originally suggested. Grouping keys off this — never off
+  // the current type — so editing a row's type updates it in place instead of
+  // teleporting it into another group mid-review.
+  suggested: ImportEventType | "poster";
   title: string;
   description: string;
   location: string;
@@ -241,6 +245,12 @@ export function ImportScheduleModal({
           checked: true,
           kind: r.kind === "poster" ? "poster" : "event",
           event_type: isImportEventType(r.event_type) ? r.event_type : "session",
+          suggested:
+            r.kind === "poster"
+              ? ("poster" as const)
+              : isImportEventType(r.event_type)
+                ? r.event_type
+                : ("session" as const),
           title: String(r.title || "").trim(),
           description: String(r.description || ""),
           location: String(r.location || ""),
@@ -329,14 +339,14 @@ export function ImportScheduleModal({
 
   const selected = rows.filter((r) => r.checked && rowValid(r));
 
-  // Rows grouped by their current type so whole batches review/re-type together.
+  // Rows grouped by the AI's ORIGINAL suggestion, not the current type —
+  // groups are stable while reviewing, so a row whose type you correct stays
+  // exactly where it is (its dropdown and color update in place).
   const groups = useMemo(
     () =>
       EVENT_TYPE_ORDER.map((t) => ({
         type: t,
-        rows: rows.filter(
-          (r) => (r.kind === "poster" ? "poster" : r.event_type) === t,
-        ),
+        rows: rows.filter((r) => r.suggested === t),
       })).filter((g) => g.rows.length > 0),
     [rows],
   );
@@ -730,7 +740,9 @@ export function ImportScheduleModal({
                   <span className="text-xs font-semibold">
                     {EVENT_TYPES[g.type].label}
                   </span>
-                  <span className="text-xs text-muted">({g.rows.length})</span>
+                  <span className="text-xs text-muted">
+                    ({g.rows.length} suggested by AI)
+                  </span>
                   <span className="flex-1" />
                   <button
                     onClick={() =>
@@ -827,7 +839,12 @@ export function ImportScheduleModal({
                             event_type: v as ImportEventType,
                           });
                       }}
-                      className="rounded-md border border-border bg-surface px-1.5 py-1 text-xs font-medium outline-none"
+                      className={cn(
+                        "rounded-md border bg-surface px-1.5 py-1 text-xs font-medium outline-none",
+                        (r.kind === "poster" ? "poster" : r.event_type) !== r.suggested
+                          ? "border-[var(--accent)]"
+                          : "border-border",
+                      )}
                       style={{
                         color:
                           r.kind === "poster"
@@ -837,6 +854,11 @@ export function ImportScheduleModal({
                     >
                       <TypeOptions />
                     </select>
+                    {(r.kind === "poster" ? "poster" : r.event_type) !== r.suggested && (
+                      <span className="rounded-full bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--accent)]">
+                        changed
+                      </span>
+                    )}
                     <input
                       value={r.title}
                       onChange={(e) => updateRow(r.key, { title: e.target.value })}
