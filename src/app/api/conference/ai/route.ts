@@ -136,11 +136,12 @@ Rules:
       const attendees: string[] = Array.isArray(body?.attendees) ? body.attendees : [];
       if (!text.trim()) return NextResponse.json({ rows: [] });
 
-      const res = await openai().chat.completions.create({
+      const stream = await openai().chat.completions.create({
         model: MODEL,
         temperature: 0.1,
         response_format: { type: "json_object" },
         max_tokens: 8000,
+        stream: true,
         messages: [
           {
             role: "system",
@@ -167,7 +168,7 @@ Rules:
 - The conference days are: ${days.join(", ") || "(unknown)"}. When the source has a day without a year (e.g. "April 22" or "Day 2" or "Wednesday"), resolve it to one of those dates. Never invent dates outside them unless the source is explicit.
 - Booth-duty/staffing rows become ONE booth event per contiguous date+location block, with all covering people in "people" (do not emit one row per shift person unless times differ — separate time ranges may be separate rows).
 - Research posters (poster numbers, abstract titles, presenter lists) → kind "poster".
-- Talks/lectures/presentations → "session" (or "educational"/"competitor" when the source clearly says so). Meetings with named external clinicians/VIPs → "contact_meeting".
+- Talks/lectures/presentations → "session" (or "educational"/"competitor" when the source clearly says so). Symposia, CME/accredited programs, and workshops → "educational". Meetings with named external clinicians/VIPs → "contact_meeting".
 - Team member names in the source should match this roster when possible (copy the source spelling; do NOT substitute): ${attendees.join(", ") || "(none)"}.
 - Copy titles/locations/names exactly as written. Never fabricate rows, times, or people not in the source. Skip header/legend/blank rows.`,
           },
@@ -177,9 +178,30 @@ Rules:
           },
         ],
       });
-      const parsed = JSON.parse(res.choices[0]?.message?.content || "{}");
-      const rows = Array.isArray(parsed.rows) ? parsed.rows : [];
-      return NextResponse.json({ rows });
+
+      // Stream the raw model JSON as plain text so the client can count rows
+      // as they are produced and render a real progress percentage.
+      const encoder = new TextEncoder();
+      const readable = new ReadableStream({
+        async start(controller) {
+          try {
+            for await (const chunk of stream) {
+              const delta = chunk.choices[0]?.delta?.content;
+              if (delta) controller.enqueue(encoder.encode(delta));
+            }
+            controller.close();
+          } catch (err) {
+            controller.error(err);
+          }
+        },
+      });
+      return new Response(readable, {
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "no-cache, no-transform",
+          "X-Accel-Buffering": "no",
+        },
+      });
     }
 
     if (action === "extract_insights_image") {

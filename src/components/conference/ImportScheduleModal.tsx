@@ -23,6 +23,7 @@ import { cn } from "@/lib/ui";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
 import {
   EVENT_TYPES,
+  EVENT_TYPE_ORDER,
   type EventType,
   type Priority,
 } from "@/lib/conference/types";
@@ -81,6 +82,8 @@ export function ImportScheduleModal({
   const [sourceName, setSourceName] = useState("");
   const [guidance, setGuidance] = useState("");
   const [parsing, setParsing] = useState(false);
+  const [parsePct, setParsePct] = useState(0);
+  const [parseFound, setParseFound] = useState(0);
   const [error, setError] = useState("");
   const [rows, setRows] = useState<ImportRow[]>([]);
   const [resolution, setResolution] = useState<Resolution>({});
@@ -145,8 +148,13 @@ export function ImportScheduleModal({
   }
 
   // ---- Step 3: AI parse --------------------------------------------------
+  // The endpoint streams the model's JSON as it is generated; every row has
+  // exactly one "title" field, so counting titles in the partial text gives a
+  // live row count → real progress against the estimated source-row total.
   async function parse() {
     setParsing(true);
+    setParsePct(0);
+    setParseFound(0);
     setError("");
     try {
       const res = await fetch("/api/conference/ai", {
@@ -161,8 +169,30 @@ export function ImportScheduleModal({
           attendees: attendees.map((a) => a.name),
         }),
       });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "AI parse failed");
+      if (!res.ok || !res.body) {
+        const json = await res.json().catch(() => ({}));
+        throw new Error(json.error || "AI parse failed");
+      }
+      const expected = estimateSourceRows(rawText, !!previewGrid);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let acc = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        acc += decoder.decode(value, { stream: true });
+        const found = acc.split('"title"').length - 1;
+        setParseFound(found);
+        setParsePct(found ? Math.min(97, Math.round((found / expected) * 100)) : 2);
+      }
+      acc += decoder.decode();
+      let json: { rows?: Partial<ImportRow>[] };
+      try {
+        json = JSON.parse(acc);
+      } catch {
+        throw new Error("The AI returned an unreadable result — please re-run the parse.");
+      }
+      setParsePct(100);
       const parsed: ImportRow[] = (json.rows || []).map(
         (r: Partial<ImportRow>, i: number) => ({
           key: `row-${i}`,
@@ -220,7 +250,39 @@ export function ImportScheduleModal({
     setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...partial } : r)));
   }
 
+  function setChecked(keys: string[], checked: boolean) {
+    const set = new Set(keys);
+    setRows((prev) => (prev.map((r) => (set.has(r.key) ? { ...r, checked } : r))));
+  }
+
+  // Bulk type assignment: retag every given row at once (e.g. "these 10 are
+  // all educational sessions") instead of editing rows one by one.
+  function applyType(keys: string[], v: string) {
+    const set = new Set(keys);
+    setRows((prev) =>
+      prev.map((r) => {
+        if (!set.has(r.key)) return r;
+        return v === "poster"
+          ? { ...r, kind: "poster" as const }
+          : { ...r, kind: "event" as const, event_type: v as ImportEventType };
+      }),
+    );
+  }
+
   const selected = rows.filter((r) => r.checked && rowValid(r));
+  const checkedKeys = rows.filter((r) => r.checked).map((r) => r.key);
+
+  // Rows grouped by their current type so whole batches review/re-type together.
+  const groups = useMemo(
+    () =>
+      EVENT_TYPE_ORDER.map((t) => ({
+        type: t,
+        rows: rows.filter(
+          (r) => (r.kind === "poster" ? "poster" : r.event_type) === t,
+        ),
+      })).filter((g) => g.rows.length > 0),
+    [rows],
+  );
 
   // ---- Step 5: import ----------------------------------------------------
   async function runImport() {
@@ -486,8 +548,12 @@ export function ImportScheduleModal({
           {error && <ErrorNote text={error} />}
           {parsing && (
             <ProgressBar
-              percent={null}
-              label="AI is reading the schedule and normalizing rows — this can take up to a minute…"
+              percent={parsePct}
+              label={
+                parseFound > 0
+                  ? `AI is normalizing rows — ${parseFound} found so far…`
+                  : "AI is reading the schedule…"
+              }
             />
           )}
           <div className="flex justify-between gap-2">
@@ -513,73 +579,68 @@ export function ImportScheduleModal({
               size="sm"
               variant="secondary"
               onClick={() =>
-                setRows((prev) => {
-                  const all = prev.every((r) => r.checked);
-                  return prev.map((r) => ({ ...r, checked: !all }));
-                })
+                setChecked(rows.map((r) => r.key), !rows.every((r) => r.checked))
               }
             >
-              Toggle all
+              {rows.every((r) => r.checked) ? "Uncheck all" : "Check all"}
             </Button>
+            <select
+              value=""
+              onChange={(e) =>
+                e.target.value && applyType(checkedKeys, e.target.value)
+              }
+              disabled={checkedKeys.length === 0}
+              className="rounded-md border border-border bg-surface px-2 py-1.5 text-xs font-medium outline-none disabled:opacity-50"
+              title="Apply an event type to every checked row"
+            >
+              <option value="" disabled>
+                Set type for checked ({checkedKeys.length})…
+              </option>
+              <TypeOptions />
+            </select>
           </div>
 
-          {/* Name resolution */}
-          {distinctNames.length > 0 && (
-            <div className="space-y-2 rounded-lg bg-canvas p-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                People found in the source
-              </p>
-              <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-                {distinctNames.map((name) => {
-                  const matched = attendees.find((a) => a.id === resolution[name]);
-                  return (
-                    <div key={name} className="flex items-center gap-2 text-sm">
-                      <span
-                        className={cn(
-                          "min-w-0 flex-1 truncate",
-                          !resolution[name] && "font-medium text-amber-600",
-                        )}
-                      >
-                        {name}
-                      </span>
-                      <select
-                        value={resolution[name] || ""}
-                        onChange={(e) =>
-                          setResolution((prev) => ({ ...prev, [name]: e.target.value }))
-                        }
-                        className={cn(
-                          "rounded-md border bg-surface px-2 py-1 text-xs outline-none",
-                          resolution[name] ? "border-border" : "border-amber-400",
-                        )}
-                      >
-                        <option value="">Resolve…</option>
-                        {matched && <option value={matched.id}>→ {matched.name}</option>}
-                        {attendees
-                          .filter((a) => a.id !== resolution[name])
-                          .map((a) => (
-                            <option key={a.id} value={a.id}>
-                              → {a.name}
-                            </option>
-                          ))}
-                        <option value="__create__">＋ Create new attendee</option>
-                        <option value="__skip__">Skip this name</option>
-                      </select>
-                    </div>
-                  );
-                })}
-              </div>
-              {unresolved.length > 0 && (
-                <p className="flex items-center gap-1 text-xs text-amber-600">
-                  <TriangleAlert size={12} /> Unresolved names import without an
-                  assignment unless you map or create them.
-                </p>
-              )}
-            </div>
-          )}
-
-          {/* Rows */}
-          <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
-            {rows.map((r) => {
+          {/* Rows, grouped by type so whole batches can be re-typed at once */}
+          <div className="max-h-80 space-y-3 overflow-y-auto pr-1">
+            {groups.map((g) => (
+              <div key={g.type} className="space-y-2">
+                <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 rounded-lg bg-canvas px-2.5 py-1.5">
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ background: EVENT_TYPES[g.type].color }}
+                  />
+                  <span className="text-xs font-semibold">
+                    {EVENT_TYPES[g.type].label}
+                  </span>
+                  <span className="text-xs text-muted">({g.rows.length})</span>
+                  <span className="flex-1" />
+                  <button
+                    onClick={() =>
+                      setChecked(
+                        g.rows.map((r) => r.key),
+                        !g.rows.every((r) => r.checked),
+                      )
+                    }
+                    className="rounded-md border border-border bg-surface px-2 py-1 text-[11px] font-medium transition hover:border-[var(--accent)]"
+                  >
+                    {g.rows.every((r) => r.checked) ? "Uncheck all" : "Check all"}
+                  </button>
+                  <select
+                    value=""
+                    onChange={(e) =>
+                      e.target.value &&
+                      applyType(g.rows.map((r) => r.key), e.target.value)
+                    }
+                    className="rounded-md border border-border bg-surface px-1.5 py-1 text-[11px] font-medium outline-none"
+                    title={`Change all ${g.rows.length} to another type`}
+                  >
+                    <option value="" disabled>
+                      These are all…
+                    </option>
+                    <TypeOptions />
+                  </select>
+                </div>
+                {g.rows.map((r) => {
               const valid = rowValid(r);
               return (
                 <div
@@ -625,14 +686,7 @@ export function ImportScheduleModal({
                             : EVENT_TYPES[r.event_type].color,
                       }}
                     >
-                      {(Object.keys(EVENT_TYPES) as EventType[])
-                        .filter((t) => t !== "poster")
-                        .map((t) => (
-                          <option key={t} value={t}>
-                            {EVENT_TYPES[t].label}
-                          </option>
-                        ))}
-                      <option value="poster">Poster</option>
+                      <TypeOptions />
                     </select>
                     <input
                       value={r.title}
@@ -701,7 +755,50 @@ export function ImportScheduleModal({
                 </div>
               );
             })}
+              </div>
+            ))}
           </div>
+
+          {/* People — optional; unmatched names simply import unassigned */}
+          {distinctNames.length > 0 && (
+            <details className="rounded-lg bg-canvas">
+              <summary className="cursor-pointer select-none px-3 py-2 text-xs font-semibold text-muted">
+                Match people to your roster ({distinctNames.length} name
+                {distinctNames.length === 1 ? "" : "s"}
+                {unresolved.length > 0 ? `, ${unresolved.length} unmatched` : ""})
+                — optional, unmatched names import without an assignment
+              </summary>
+              <div className="grid grid-cols-1 gap-1.5 px-3 pb-3 sm:grid-cols-2">
+                {distinctNames.map((name) => {
+                  const matched = attendees.find((a) => a.id === resolution[name]);
+                  return (
+                    <div key={name} className="flex items-center gap-2 text-sm">
+                      <span className="min-w-0 flex-1 truncate">{name}</span>
+                      <select
+                        value={resolution[name] || ""}
+                        onChange={(e) =>
+                          setResolution((prev) => ({ ...prev, [name]: e.target.value }))
+                        }
+                        className="rounded-md border border-border bg-surface px-2 py-1 text-xs outline-none"
+                      >
+                        <option value="">Leave unassigned</option>
+                        {matched && <option value={matched.id}>→ {matched.name}</option>}
+                        {attendees
+                          .filter((a) => a.id !== resolution[name])
+                          .map((a) => (
+                            <option key={a.id} value={a.id}>
+                              → {a.name}
+                            </option>
+                          ))}
+                        <option value="__create__">＋ Create new attendee</option>
+                        <option value="__skip__">Skip this name</option>
+                      </select>
+                    </div>
+                  );
+                })}
+              </div>
+            </details>
+          )}
 
           {error && <ErrorNote text={error} />}
           {importing && (
@@ -796,6 +893,23 @@ function Stepper({ step }: { step: Step }) {
   );
 }
 
+// Every importable type (events + poster) as <option>s, shared by the per-row,
+// per-group, and bulk "set type" selects.
+function TypeOptions() {
+  return (
+    <>
+      {(Object.keys(EVENT_TYPES) as EventType[])
+        .filter((t) => t !== "poster")
+        .map((t) => (
+          <option key={t} value={t}>
+            {EVENT_TYPES[t].label}
+          </option>
+        ))}
+      <option value="poster">Poster</option>
+    </>
+  );
+}
+
 function ErrorNote({ text }: { text: string }) {
   return (
     <p className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
@@ -838,6 +952,16 @@ function isImportEventType(v: unknown): v is ImportEventType {
     typeof v === "string" &&
     ["booth", "educational", "competitor", "contact_meeting", "session", "custom"].includes(v)
   );
+}
+
+// Rough count of importable rows in the source, used as the denominator for
+// parse progress. Sheets: one row per serialized line (minus the header).
+// Pasted prose: lines carrying a time are the best proxy for events.
+function estimateSourceRows(text: string, isGrid: boolean): number {
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (isGrid) return Math.max(1, lines.length - 1);
+  const timed = lines.filter((l) => /\b\d{1,2}[:.]\d{2}\b/.test(l)).length;
+  return Math.max(1, timed >= 3 ? timed : lines.length);
 }
 
 function addHour(t: string): string {

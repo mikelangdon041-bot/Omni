@@ -8,6 +8,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [remember, setRemember] = useState(true);
   const isRegister = mode === "register";
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -21,6 +22,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
       password: String(form.get("password") || ""),
       displayName: String(form.get("displayName") || ""),
       company: String(form.get("company") || ""),
+      rememberMe: remember,
     };
 
     try {
@@ -100,6 +102,18 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
         placeholder={isRegister ? "At least 8 characters" : "••••••••"}
         required
       />
+
+      {!isRegister && (
+        <label className="flex cursor-pointer items-center gap-2 text-sm text-ink">
+          <input
+            type="checkbox"
+            checked={remember}
+            onChange={(e) => setRemember(e.target.checked)}
+            className="h-4 w-4 rounded border-border accent-primary"
+          />
+          Remember me on this device
+        </label>
+      )}
 
       {error && (
         <p className="rounded-lg bg-status-error/10 px-3 py-2 text-sm text-status-error">
