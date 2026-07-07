@@ -10,6 +10,8 @@ import { useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { createClient } from "@/lib/supabase/client";
 import {
+  ChevronDown,
+  ChevronRight,
   FileSpreadsheet,
   Sparkles,
   TriangleAlert,
@@ -93,6 +95,7 @@ export function ImportScheduleModal({
   // Batch-selection for bulk type assignment — independent of the "will
   // import" checkboxes, so several different batches can be typed in turn.
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [resolution, setResolution] = useState<Resolution>({});
   const [importing, setImporting] = useState(false);
   const [importPct, setImportPct] = useState(0);
@@ -109,6 +112,7 @@ export function ImportScheduleModal({
     setGuidance("");
     setRows([]);
     setSelectedKeys(new Set());
+    setCollapsedGroups(new Set());
     setResolution({});
     setError("");
   }
@@ -292,6 +296,7 @@ export function ImportScheduleModal({
       }
       setRows(parsed);
       setSelectedKeys(new Set());
+      setCollapsedGroups(new Set());
       setResolution(autoResolve(parsed, attendees));
       setStep("review");
     } catch (e) {
@@ -369,82 +374,55 @@ export function ImportScheduleModal({
   );
 
   // ---- Step 5: import ----------------------------------------------------
+  // Everything inserts in bulk (one round-trip per table, chunked at 100 rows)
+  // instead of one insert per row — a 180-row import is a handful of requests
+  // rather than hundreds.
   async function runImport() {
     setImporting(true);
     setImportPct(0);
     setError("");
-    const totalSteps = distinctNames.length + selected.length || 1;
-    let doneSteps = 0;
-    const bump = () => setImportPct((++doneSteps / totalSteps) * 100);
+    const CHUNK = 100;
     try {
       // Resolve names → attendee ids, creating new attendees where chosen.
       const nameToId: Record<string, string> = {};
       let created = 0;
       for (const name of distinctNames) {
-        bump();
         const r = resolution[name];
-        if (!r || r === "__skip__") continue;
-        if (r === "__create__") {
-          const { data } = await supabase
-            .from("conference_attendees")
-            .insert({ conference_id: conference.id, name })
-            .select("id")
-            .single();
-          if (data) {
-            nameToId[name] = data.id;
-            created++;
-          }
-        } else {
-          nameToId[name] = r;
+        if (r && r !== "__skip__" && r !== "__create__") nameToId[name] = r;
+      }
+      const toCreate = distinctNames.filter((n) => resolution[n] === "__create__");
+      if (toCreate.length) {
+        const { data, error: aErr } = await supabase
+          .from("conference_attendees")
+          .insert(toCreate.map((name) => ({ conference_id: conference.id, name })))
+          .select("id, name");
+        if (aErr) throw new Error(aErr.message);
+        for (const a of data || []) {
+          nameToId[a.name] = a.id;
+          created++;
         }
       }
+      setImportPct(10);
 
+      const evRows = selected.filter((r) => r.kind === "event");
+      const poRows = selected.filter((r) => r.kind === "poster");
+      const peopleIdsFor = (r: ImportRow) =>
+        r.people.map((p) => nameToId[p]).filter(Boolean) as string[];
+
+      // Events, then their assignments + booth shifts, each as bulk inserts.
       let events = 0;
-      let posters = 0;
-      for (const r of selected) {
-        bump();
-        const peopleIds = r.people
-          .map((p) => nameToId[p])
-          .filter(Boolean) as string[];
-
-        if (r.kind === "poster") {
-          const { data: poster } = await supabase
-            .from("conf_posters")
-            .insert({
-              conference_id: conference.id,
-              title: r.title,
-              date: r.date ? fmtDayKey(r.date, { weekday: true }) : "",
-              time: r.start_time,
-              location: r.location,
-              authors: r.authors,
-              abstract: r.abstract,
-              session_label: r.session_label,
-              suspected_priority: r.priority,
-            })
-            .select("id")
-            .single();
-          if (poster && peopleIds.length) {
-            await supabase.from("conf_poster_reps").insert(
-              peopleIds.map((attendee_id) => ({
-                conference_id: conference.id,
-                poster_id: poster.id,
-                attendee_id,
-              })),
-            );
-          }
-          posters++;
-          continue;
-        }
-
-        const starts_at = localToUtcISO(r.date, r.start_time, tz);
-        const ends_at = localToUtcISO(
-          r.date,
-          r.end_time && r.end_time > r.start_time ? r.end_time : addHour(r.start_time),
-          tz,
-        );
-        const { data: ev } = await supabase
-          .from("conf_events")
-          .insert({
+      const assignments: Record<string, unknown>[] = [];
+      const shifts: Record<string, unknown>[] = [];
+      for (let i = 0; i < evRows.length; i += CHUNK) {
+        const slice = evRows.slice(i, i + CHUNK);
+        const payload = slice.map((r) => {
+          const starts_at = localToUtcISO(r.date, r.start_time, tz);
+          const ends_at = localToUtcISO(
+            r.date,
+            r.end_time && r.end_time > r.start_time ? r.end_time : addHour(r.start_time),
+            tz,
+          );
+          return {
             conference_id: conference.id,
             title: r.title,
             event_type: r.event_type,
@@ -454,35 +432,94 @@ export function ImportScheduleModal({
             ends_at,
             suspected_priority: r.priority,
             created_by: me?.id,
-          })
-          .select("id")
-          .single();
-        if (ev) {
-          if (peopleIds.length) {
-            await supabase.from("conf_event_assignments").insert(
-              peopleIds.map((attendee_id) => ({
+          };
+        });
+        // Returned rows follow insert order, so index j maps back to slice[j].
+        const { data, error: eErr } = await supabase
+          .from("conf_events")
+          .insert(payload)
+          .select("id");
+        if (eErr) throw new Error(eErr.message);
+        (data || []).forEach((ev, j) => {
+          const r = slice[j];
+          for (const [k, attendee_id] of peopleIdsFor(r).entries()) {
+            assignments.push({
+              conference_id: conference.id,
+              event_id: ev.id,
+              attendee_id,
+            });
+            // Booth-duty rows also get coverage shifts spanning the event.
+            if (r.event_type === "booth") {
+              shifts.push({
                 conference_id: conference.id,
                 event_id: ev.id,
                 attendee_id,
-              })),
-            );
-            // Booth-duty rows also get coverage shifts spanning the event.
-            if (r.event_type === "booth") {
-              await supabase.from("conf_event_shifts").insert(
-                peopleIds.map((attendee_id, i) => ({
-                  conference_id: conference.id,
-                  event_id: ev.id,
-                  attendee_id,
-                  starts_at,
-                  ends_at,
-                  sort_order: i,
-                })),
-              );
+                starts_at: payload[j].starts_at,
+                ends_at: payload[j].ends_at,
+                sort_order: k,
+              });
             }
           }
           events++;
-        }
+        });
+        setImportPct(10 + Math.round(((i + slice.length) / Math.max(1, evRows.length)) * 45));
       }
+      for (let i = 0; i < assignments.length; i += CHUNK) {
+        const { error: asErr } = await supabase
+          .from("conf_event_assignments")
+          .insert(assignments.slice(i, i + CHUNK));
+        if (asErr) throw new Error(asErr.message);
+      }
+      setImportPct(65);
+      for (let i = 0; i < shifts.length; i += CHUNK) {
+        const { error: shErr } = await supabase
+          .from("conf_event_shifts")
+          .insert(shifts.slice(i, i + CHUNK));
+        if (shErr) throw new Error(shErr.message);
+      }
+      setImportPct(72);
+
+      // Posters + their reps, same pattern.
+      let posters = 0;
+      const reps: Record<string, unknown>[] = [];
+      for (let i = 0; i < poRows.length; i += CHUNK) {
+        const slice = poRows.slice(i, i + CHUNK);
+        const { data, error: pErr } = await supabase
+          .from("conf_posters")
+          .insert(
+            slice.map((r) => ({
+              conference_id: conference.id,
+              title: r.title,
+              date: r.date ? fmtDayKey(r.date, { weekday: true }) : "",
+              time: r.start_time,
+              location: r.location,
+              authors: r.authors,
+              abstract: r.abstract,
+              session_label: r.session_label,
+              suspected_priority: r.priority,
+            })),
+          )
+          .select("id");
+        if (pErr) throw new Error(pErr.message);
+        (data || []).forEach((p, j) => {
+          for (const attendee_id of peopleIdsFor(slice[j])) {
+            reps.push({
+              conference_id: conference.id,
+              poster_id: p.id,
+              attendee_id,
+            });
+          }
+          posters++;
+        });
+        setImportPct(72 + Math.round(((i + slice.length) / Math.max(1, poRows.length)) * 23));
+      }
+      for (let i = 0; i < reps.length; i += CHUNK) {
+        const { error: rErr } = await supabase
+          .from("conf_poster_reps")
+          .insert(reps.slice(i, i + CHUNK));
+        if (rErr) throw new Error(rErr.message);
+      }
+      setImportPct(100);
       setResult({ events, posters, people: created });
       setStep("done");
     } catch (e) {
@@ -750,16 +787,37 @@ export function ImportScheduleModal({
                     you scroll and taps meant for a row's own type dropdown hit
                     the group-wide one instead. */}
                 <div className="flex flex-wrap items-center gap-2 rounded-lg bg-canvas px-2.5 py-1.5">
-                  <span
-                    className="h-2.5 w-2.5 shrink-0 rounded-full"
-                    style={{ background: EVENT_TYPES[g.type].color }}
-                  />
-                  <span className="text-xs font-semibold">
-                    {EVENT_TYPES[g.type].label}
-                  </span>
-                  <span className="text-xs text-muted">
-                    ({g.rows.length} suggested by AI)
-                  </span>
+                  <button
+                    onClick={() =>
+                      setCollapsedGroups((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(g.type)) next.delete(g.type);
+                        else next.add(g.type);
+                        return next;
+                      })
+                    }
+                    className="flex min-w-0 items-center gap-2 text-left"
+                    title={collapsedGroups.has(g.type) ? "Expand group" : "Collapse group"}
+                  >
+                    {collapsedGroups.has(g.type) ? (
+                      <ChevronRight size={14} className="shrink-0 text-muted" />
+                    ) : (
+                      <ChevronDown size={14} className="shrink-0 text-muted" />
+                    )}
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{ background: EVENT_TYPES[g.type].color }}
+                    />
+                    <span className="text-xs font-semibold">
+                      {EVENT_TYPES[g.type].label}
+                    </span>
+                    <span className="text-xs text-muted">
+                      ({g.rows.length} suggested by AI
+                      {collapsedGroups.has(g.type)
+                        ? `, ${g.rows.filter((r) => r.checked).length} will import`
+                        : ""})
+                    </span>
+                  </button>
                   <span className="flex-1" />
                   <button
                     onClick={() =>
@@ -807,7 +865,8 @@ export function ImportScheduleModal({
                     <TypeOptions />
                   </select>
                 </div>
-                {g.rows.map((r) => {
+                {!collapsedGroups.has(g.type) &&
+                g.rows.map((r) => {
               const valid = rowValid(r);
               const isSelected = selectedKeys.has(r.key);
               return (

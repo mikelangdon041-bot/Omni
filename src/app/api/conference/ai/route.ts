@@ -221,7 +221,7 @@ Rules:
 - Booth-duty/staffing rows become ONE booth event per contiguous date+location block, with all covering people in "people" (do not emit one row per shift person unless times differ — separate time ranges may be separate rows).
 - Classify each row's type deliberately — do NOT default everything to "session". Apply these cues in order:
   · "poster": anything whose title/label/type mentions poster (poster session, poster hall/walk, ePoster, abstract number) or that reads like an abstract listing (title + authors + number) → kind "poster".
-  · Sponsored/industry content — product theaters, satellite symposia, industry-sponsored education, "Science & Innovation Theater", "Industry Connect", breakfast/lunch/dinner symposia, or rows with a sponsoring Company column: ${
+  · Sponsored/industry content — product theaters, satellite symposia, industry-sponsored education, "Science & Innovation Theater", "Industry Connect", breakfast/lunch/dinner symposia, rows with a sponsoring Company column, or anything saying "presented by", "sponsored by", "supported by", or otherwise clearly naming a company as the presenter: ${
     company
       ? `sponsored by "${company}" (the user's own company) → "educational"; sponsored by any OTHER company → "competitor". Mention the sponsoring company at the start of "description".`
       : `→ "competitor" (mention the sponsoring company at the start of "description"), unless the guidance says it is the user's own company's program — then "educational".`
