@@ -97,7 +97,13 @@ export function ConferenceProvider({
     update: updateAttendee,
     remove: removeAttendee,
   } = useAttendees(conferenceId);
-  useEnsureAttendee(conference, me, attendees, attendeesLoading, refreshAttendees);
+  const { claimable, claim } = useEnsureAttendee(
+    conference,
+    me,
+    attendees,
+    attendeesLoading,
+    refreshAttendees,
+  );
 
   const [showAnnounce, setShowAnnounce] = useState(false);
 
@@ -275,6 +281,42 @@ export function ConferenceProvider({
         onClose={() => setShowAnnounce(false)}
         conferenceId={conference.id}
       />
+
+      {/* Roster has placeholder people (e.g. from a schedule import) and this
+          user isn't linked yet — let them claim their spot. */}
+      <Modal
+        open={claimable.length > 0}
+        onClose={() => void claim(null)}
+        title="Are you on this roster?"
+        size="sm"
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-muted">
+            This conference&apos;s team list has people who haven&apos;t joined
+            the app yet. If one of them is you, pick your name — your
+            assignments and shifts come with it.
+          </p>
+          <div className="max-h-64 space-y-1 overflow-y-auto">
+            {claimable.map((a) => (
+              <button
+                key={a.id}
+                onClick={() => void claim(a.id)}
+                className="flex w-full items-center gap-2.5 rounded-lg border border-border bg-surface px-3 py-2.5 text-left text-sm font-medium transition hover:border-[var(--accent)] hover:bg-canvas"
+              >
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                  style={{ background: a.color || "var(--accent)" }}
+                />
+                {a.name}
+                {a.role && <span className="text-xs font-normal text-muted">· {a.role}</span>}
+              </button>
+            ))}
+          </div>
+          <Button variant="secondary" onClick={() => void claim(null)} className="w-full">
+            I&apos;m not on this list — add me as new
+          </Button>
+        </div>
+      </Modal>
     </Ctx.Provider>
   );
 }

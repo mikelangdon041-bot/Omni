@@ -677,14 +677,19 @@ export function EventFormModal({
                   {a.name}
                 </label>
               ))}
-              {filteredAttendees.length === 0 && personSearch.trim() && (
-                <button
-                  onClick={createAttendeeInline}
-                  className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-[var(--accent)] hover:bg-canvas"
-                >
-                  <Plus size={14} /> Create attendee “{personSearch.trim()}”
-                </button>
-              )}
+              {personSearch.trim() &&
+                !attendees.some(
+                  (a) =>
+                    a.name.trim().toLowerCase() ===
+                    personSearch.trim().toLowerCase(),
+                ) && (
+                  <button
+                    onClick={createAttendeeInline}
+                    className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-[var(--accent)] hover:bg-canvas"
+                  >
+                    <Plus size={14} /> Create attendee “{personSearch.trim()}”
+                  </button>
+                )}
             </div>
 
             {type === "contact_meeting" && (
@@ -737,14 +742,20 @@ export function EventFormModal({
                       )}
                     </label>
                   ))}
-                  {filteredContacts.length === 0 && contactSearch.trim() && (
-                    <button
-                      onClick={createContactInline}
-                      className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-[var(--accent)] hover:bg-surface"
-                    >
-                      <Plus size={14} /> Create KOL “{contactSearch.trim()}”
-                    </button>
-                  )}
+                  {contactSearch.trim() &&
+                    !contacts.some(
+                      (c) =>
+                        !c.archived &&
+                        c.name.trim().toLowerCase() ===
+                          contactSearch.trim().toLowerCase(),
+                    ) && (
+                      <button
+                        onClick={createContactInline}
+                        className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-[var(--accent)] hover:bg-surface"
+                      >
+                        <Plus size={14} /> Create KOL “{contactSearch.trim()}”
+                      </button>
+                    )}
                 </div>
               </div>
             )}

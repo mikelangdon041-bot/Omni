@@ -256,6 +256,9 @@ export function useAttendees(conferenceId: string | null) {
 
 // Auto-add the signed-in user as an attendee of the conference they open,
 // linking to a placeholder row (by email, then exact name) when one exists.
+// When placeholders exist but none match exactly (e.g. an import created
+// "Kristin H." and the user is "Kristin Hoffman"), we don't guess — we return
+// the unclaimed placeholders so the UI can ask "which of these are you?".
 export function useEnsureAttendee(
   conference: Conference | null,
   me: Me | null,
@@ -264,11 +267,14 @@ export function useEnsureAttendee(
   refresh: () => void,
 ) {
   const done = useRef<string | null>(null);
+  const [claimable, setClaimable] = useState<Attendee[]>([]);
+
   useEffect(() => {
     if (!conference || !me || loading) return;
     if (done.current === conference.id) return;
     if (attendees.some((a) => a.user_id === me.id)) {
       done.current = conference.id;
+      setClaimable([]);
       return;
     }
     done.current = conference.id;
@@ -284,6 +290,35 @@ export function useEnsureAttendee(
           .from("conference_attendees")
           .update({ user_id: me.id })
           .eq("id", placeholder.id);
+        refresh();
+        return;
+      }
+      const unclaimed = attendees.filter((a) => !a.user_id);
+      if (unclaimed.length) {
+        // Let the user pick themselves (or say "I'm new") via the claim modal.
+        setClaimable(unclaimed);
+        return;
+      }
+      await supabase.from("conference_attendees").insert({
+        conference_id: conference.id,
+        user_id: me.id,
+        name: me.displayName,
+        email: me.email,
+      });
+      refresh();
+    })();
+  }, [conference, me, attendees, loading, refresh]);
+
+  // attendeeId = an unclaimed placeholder to become; null = add me as new.
+  const claim = useCallback(
+    async (attendeeId: string | null) => {
+      if (!conference || !me) return;
+      setClaimable([]);
+      if (attendeeId) {
+        await supabase
+          .from("conference_attendees")
+          .update({ user_id: me.id, email: me.email })
+          .eq("id", attendeeId);
       } else {
         await supabase.from("conference_attendees").insert({
           conference_id: conference.id,
@@ -293,8 +328,11 @@ export function useEnsureAttendee(
         });
       }
       refresh();
-    })();
-  }, [conference, me, attendees, loading, refresh]);
+    },
+    [conference, me, refresh],
+  );
+
+  return { claimable, claim };
 }
 
 // ------------------------------------------------------------------

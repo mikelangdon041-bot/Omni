@@ -1042,10 +1042,11 @@ export function ImportScheduleModal({
           {distinctNames.length > 0 && (
             <details className="rounded-lg bg-canvas">
               <summary className="cursor-pointer select-none px-3 py-2 text-xs font-semibold text-muted">
-                Match people to your roster ({distinctNames.length} name
+                People ({distinctNames.length} name
                 {distinctNames.length === 1 ? "" : "s"}
-                {unresolved.length > 0 ? `, ${unresolved.length} unmatched` : ""})
-                — optional, unmatched names import without an assignment
+                {unresolved.length > 0 ? `, ${unresolved.length} unassigned` : ""})
+                — new names become roster placeholders they can claim when they
+                join the app
               </summary>
               <div className="grid grid-cols-1 gap-1.5 px-3 pb-3 sm:grid-cols-2">
                 {distinctNames.map((name) => {
@@ -1302,7 +1303,9 @@ function serializeSheet(wb: XLSX.WorkBook, sheetName: string): string {
 }
 
 // Match source names to the roster: exact (case-insensitive), then unique
-// first-name match. Unmatched names stay unresolved for manual mapping.
+// first-name match. Unmatched names default to creating a placeholder
+// attendee — assignments survive the import, and the person claims their
+// spot when they join the app (the roster "is this you?" prompt).
 function autoResolve(
   rows: ImportRow[],
   attendees: { id: string; name: string }[],
@@ -1321,7 +1324,7 @@ function autoResolve(
     const firstMatches = attendees.filter(
       (a) => a.name.trim().toLowerCase().split(/\s+/)[0] === first,
     );
-    if (firstMatches.length === 1) out[name] = firstMatches[0].id;
+    out[name] = firstMatches.length === 1 ? firstMatches[0].id : "__create__";
   }
   return out;
 }
