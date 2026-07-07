@@ -181,16 +181,14 @@ export function ImportScheduleModal({
       const dateLike =
         /(\d{1,2}\/\d{1,2}\/\d{2,4})|(\d{4}-\d{2}-\d{2})|\b(mon|tues|wednes|thurs|fri|satur|sun)day\b/i;
 
-      const all: Partial<ImportRow>[] = [];
-      let linesDone = 0;
-      for (let i = 0; i < batches.length; i++) {
-        const batch = batches[i];
-        // Day headers / merged date cells earlier in the sheet carry the date
-        // for later rows — resend the latest one, marked context-only, so
-        // mid-sheet chunks still resolve dates.
+      // Each chunk's date context comes from the SOURCE text (day headers /
+      // merged date cells above it), not from earlier results — so chunks are
+      // independent and can run in parallel. 4 at a time keeps a 6-chunk
+      // master schedule to ~1-2 chunk durations instead of 6.
+      const batchInfos = batches.map((batch, i) => {
         let context = "";
         if (i > 0) {
-          for (let j = linesDone - 1; j >= 0; j--) {
+          for (let j = i * chunkSize - 1; j >= 0; j--) {
             if (dateLike.test(data[j])) {
               context = data[j];
               break;
@@ -206,38 +204,57 @@ export function ImportScheduleModal({
         ]
           .filter(Boolean)
           .join("\n");
-        const payload = {
-          action: "parse_schedule",
-          text: chunkText,
-          guidance,
-          days,
-          attendees: attendees.map((a) => a.name),
-        };
-        const base = linesDone;
-        const doneSoFar = all.length;
-        const onFound = (n: number) => {
-          setParseFound(doneSoFar + n);
-          setParsePct(
-            Math.min(
-              97,
-              Math.max(
-                2,
-                Math.round(((base + Math.min(n, batch.length)) / expected) * 100),
-              ),
-            ),
-          );
-        };
-        let chunkRows: Partial<ImportRow>[];
-        try {
-          chunkRows = await streamParseChunk(payload, onFound);
-        } catch {
-          // One retry per chunk — a hiccup shouldn't sink a 5-chunk run.
-          chunkRows = await streamParseChunk(payload, onFound);
+        return { chunkText, len: batch.length };
+      });
+
+      const results: Partial<ImportRow>[][] = new Array(batchInfos.length);
+      const foundBy: number[] = new Array(batchInfos.length).fill(0);
+      const doneBy: boolean[] = new Array(batchInfos.length).fill(false);
+      const report = () => {
+        setParseFound(foundBy.reduce((a, b) => a + b, 0));
+        const progressed = batchInfos.reduce(
+          (acc, info, i) =>
+            acc + (doneBy[i] ? info.len : Math.min(foundBy[i], info.len)),
+          0,
+        );
+        setParsePct(
+          Math.min(97, Math.max(2, Math.round((progressed / expected) * 100))),
+        );
+      };
+
+      let nextChunk = 0;
+      const worker = async () => {
+        while (nextChunk < batchInfos.length) {
+          const i = nextChunk++;
+          const payload = {
+            action: "parse_schedule",
+            text: batchInfos[i].chunkText,
+            guidance,
+            days,
+            attendees: attendees.map((a) => a.name),
+          };
+          const onFound = (n: number) => {
+            foundBy[i] = n;
+            report();
+          };
+          try {
+            results[i] = await streamParseChunk(payload, onFound);
+          } catch {
+            // One retry per chunk — a hiccup shouldn't sink the whole run.
+            results[i] = await streamParseChunk(payload, onFound);
+          }
+          doneBy[i] = true;
+          foundBy[i] = results[i].length;
+          report();
         }
-        all.push(...chunkRows);
-        linesDone += batch.length;
-        setParseFound(all.length);
-      }
+      };
+      await Promise.all(
+        Array.from(
+          { length: Math.min(4, batchInfos.length) },
+          () => worker(),
+        ),
+      );
+      const all: Partial<ImportRow>[] = results.flat();
       setParsePct(100);
       const parsed: ImportRow[] = all.map(
         (r: Partial<ImportRow>, i: number) => ({

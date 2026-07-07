@@ -6,6 +6,9 @@ export const runtime = "nodejs";
 export const maxDuration = 120;
 
 const MODEL = process.env.OPENAI_SUMMARY_MODEL || "gpt-4o";
+// Schedule parsing is mechanical normalization — a faster/cheaper model can
+// be swapped in (e.g. OPENAI_PARSE_MODEL=gpt-4o-mini) without touching code.
+const PARSE_MODEL = process.env.OPENAI_PARSE_MODEL || MODEL;
 
 // One endpoint for the module's text-AI actions. All prompts share the same
 // philosophy: only genuine, actionable field intelligence; preserve every
@@ -186,7 +189,7 @@ Rules:
       }
 
       const stream = await openai().chat.completions.create({
-        model: MODEL,
+        model: PARSE_MODEL,
         temperature: 0.1,
         response_format: { type: "json_object" },
         max_tokens: 12000,
