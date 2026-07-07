@@ -217,8 +217,12 @@ Return ONLY JSON: {"rows":[{...}]} where each row is:
 }
 
 Rules:
+- The first line may say "Source name: …" — the workbook/tab name. When a tab name declares what the sheet holds, apply that type to EVERY row from it unless a specific row clearly differs: "KOL Meetings" → contact_meeting; "Booth Duty" → booth; "Poster Sessions" → poster; "Plenaries"/"General Sessions"/"Symposia" → session; "Satellite Symposia"/"Sponsored" → the sponsored rule below. A tab named after a person (a rep's personal day grid) does not set a type.
 - The conference days are: ${days.join(", ") || "(unknown)"}. When the source has a day without a year (e.g. "April 22" or "Day 2" or "Wednesday"), resolve it to one of those dates. Never invent dates outside them unless the source is explicit.
-- Booth-duty/staffing rows become ONE booth event per contiguous date+location block, with all covering people in "people" (do not emit one row per shift person unless times differ — separate time ranges may be separate rows).
+- Day-header lines like "SATURDAY, June 13th" set the date for every row beneath them until the next day header.
+- Booth-duty/staffing sheets are usually grids: a "Shift Time" column gives the start–end, and the staff-name columns hold who covers. Emit ONE "booth" event per shift-time row per day (title "Booth duty" unless the sheet names it), with ALL covering staff in "people". Contiguous identical blocks may merge; separate time ranges stay separate rows.
+- KOL-meeting grids put the clinician's name in a time-row × day-column cell: emit one contact_meeting per filled cell — title = the clinician's name (plus affiliation if given). External clinicians NEVER go in "people"; "people" holds only the internal team/roster members covering the row.
+- Strip phone numbers and other parentheticals from names in "people" ("Kristin H. (971-484-3419)" → "Kristin H.").
 - Classify each row's type deliberately — do NOT default everything to "session". Apply these cues in order:
   · "poster": anything whose title/label/type mentions poster (poster session, poster hall/walk, ePoster, abstract number) or that reads like an abstract listing (title + authors + number) → kind "poster".
   · Sponsored/industry content — product theaters, satellite symposia, industry-sponsored education, "Science & Innovation Theater", "Industry Connect", breakfast/lunch/dinner symposia, rows with a sponsoring Company column, or anything saying "presented by", "sponsored by", "supported by", or otherwise clearly naming a company as the presenter: ${

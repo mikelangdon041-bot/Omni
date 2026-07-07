@@ -200,6 +200,9 @@ export function ImportScheduleModal({
           }
         }
         const chunkText = [
+          // The tab/file name often declares what every row is ("KOL
+          // Meetings", "Booth Duty") — the AI weights it heavily.
+          sourceName ? `Source name: ${sourceName}` : "",
           header,
           context
             ? `(Date context from earlier rows, ALREADY imported — do not re-emit: ${context})`
@@ -781,7 +784,18 @@ export function ImportScheduleModal({
 
           {/* Rows, grouped by type so whole batches can be re-typed at once */}
           <div className="max-h-80 space-y-3 overflow-y-auto pr-1">
-            {groups.map((g) => (
+            {groups.map((g) => {
+              // Membership stays keyed to the AI's suggestion (stable), but
+              // the header reflects where the rows are NOW — after "change
+              // whole group" it flips to the new type instead of looking
+              // like nothing happened.
+              const currents = new Set(
+                g.rows.map((r) => (r.kind === "poster" ? "poster" : r.event_type)),
+              );
+              const displayType = currents.size === 1 ? [...currents][0] : g.type;
+              const retyped = currents.size === 1 && displayType !== g.type;
+              const mixed = currents.size > 1;
+              return (
               <div key={g.type} className="space-y-2">
                 {/* Not sticky on purpose: a sticky header floats over rows as
                     you scroll and taps meant for a row's own type dropdown hit
@@ -806,13 +820,18 @@ export function ImportScheduleModal({
                     )}
                     <span
                       className="h-2.5 w-2.5 shrink-0 rounded-full"
-                      style={{ background: EVENT_TYPES[g.type].color }}
+                      style={{ background: EVENT_TYPES[displayType].color }}
                     />
                     <span className="text-xs font-semibold">
-                      {EVENT_TYPES[g.type].label}
+                      {EVENT_TYPES[displayType].label}
                     </span>
                     <span className="text-xs text-muted">
-                      ({g.rows.length} suggested by AI
+                      ({g.rows.length}
+                      {retyped
+                        ? ` — changed from ${EVENT_TYPES[g.type].label}`
+                        : mixed
+                          ? " — mixed types"
+                          : " suggested by AI"}
                       {collapsedGroups.has(g.type)
                         ? `, ${g.rows.filter((r) => r.checked).length} will import`
                         : ""})
@@ -1015,7 +1034,8 @@ export function ImportScheduleModal({
               );
             })}
               </div>
-            ))}
+              );
+            })}
           </div>
 
           {/* People — optional; unmatched names simply import unassigned */}

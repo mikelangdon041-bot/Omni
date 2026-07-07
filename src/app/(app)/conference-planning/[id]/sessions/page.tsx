@@ -17,7 +17,7 @@ import { useConferenceCtx } from "@/components/conference/ConferenceContext";
 import { useEvents, type EventWithPeople } from "@/lib/conference/hooks";
 import { EventFormModal } from "@/components/conference/EventFormModal";
 import { PriorityPill } from "@/components/conference/Priority";
-import { EVENT_TYPES, SESSION_TYPES } from "@/lib/conference/types";
+import { EVENT_TYPES, SESSION_TYPES, type EventType } from "@/lib/conference/types";
 import {
   dateKeyInTz,
   fmtDayKeyLong,
@@ -28,7 +28,10 @@ import {
 export default function SessionsPage() {
   const router = useRouter();
   const { conference, attendees, me } = useConferenceCtx();
-  const { events, loading, save, remove } = useEvents(conference.id, me?.id);
+  const { events, loading, save, remove, bulkUpdate, bulkRemove } = useEvents(
+    conference.id,
+    me?.id,
+  );
   const tz = conference.timezone;
   const today = todayKey(tz);
 
@@ -40,6 +43,39 @@ export default function SessionsPage() {
   );
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [formOpen, setFormOpen] = useState(false);
+  // Multi-select for bulk actions — mirrors the import review's batch flow.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  function toggleSelected(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  // Toggle a whole batch (a day) in or out of the selection.
+  function toggleMany(ids: string[]) {
+    setSelectedIds((prev) => {
+      const allIn = ids.every((id) => prev.has(id));
+      const next = new Set(prev);
+      ids.forEach((id) => (allIn ? next.delete(id) : next.add(id)));
+      return next;
+    });
+  }
+
+  async function bulkType(v: string) {
+    await bulkUpdate([...selectedIds], { event_type: v as EventType });
+    setSelectedIds(new Set());
+  }
+
+  async function bulkDelete() {
+    const n = selectedIds.size;
+    if (!confirm(`Delete ${n} session${n === 1 ? "" : "s"}?`)) return;
+    await bulkRemove([...selectedIds]);
+    setSelectedIds(new Set());
+  }
 
   function setSearchAndUrl(q: string) {
     setSearch(q);
@@ -107,6 +143,50 @@ export default function SessionsPage() {
         </Button>
       </div>
 
+      {/* Bulk actions — tap rows (or a day's Select button) to build a batch */}
+      {selectedIds.size > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--accent)]/50 bg-[var(--accent-soft)]/60 px-3 py-2 text-sm">
+          <span className="font-semibold text-[var(--accent)]">
+            {selectedIds.size} selected
+          </span>
+          <select
+            value=""
+            onChange={(e) => e.target.value && void bulkType(e.target.value)}
+            className="rounded-md border border-[var(--accent)]/50 bg-surface px-2 py-1 text-xs font-semibold text-[var(--accent)] outline-none"
+          >
+            <option value="" disabled>
+              Change type to…
+            </option>
+            {(Object.keys(EVENT_TYPES) as EventType[])
+              .filter((t) => t !== "poster")
+              .map((t) => (
+                <option key={t} value={t}>
+                  {EVENT_TYPES[t].label}
+                </option>
+              ))}
+          </select>
+          <button
+            onClick={() => void bulkDelete()}
+            className="inline-flex items-center gap-1 rounded-md border border-red-300 bg-surface px-2 py-1 text-xs font-semibold text-red-600 transition hover:bg-red-50"
+          >
+            <Trash2 size={12} /> Delete
+          </button>
+          <span className="flex-1" />
+          <button
+            onClick={() => setSelectedIds(new Set(filtered.map((e) => e.id)))}
+            className="rounded-md border border-border bg-surface px-2 py-1 text-[11px] font-medium transition hover:border-[var(--accent)]"
+          >
+            Select all{search.trim() ? " matching" : ""}
+          </button>
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            className="rounded-md border border-border bg-surface px-2 py-1 text-[11px] font-medium transition hover:border-[var(--accent)]"
+          >
+            Clear
+          </button>
+        </div>
+      )}
+
       {loading ? (
         <Loading />
       ) : groups.length === 0 ? (
@@ -127,36 +207,69 @@ export default function SessionsPage() {
             const closed = isCollapsed(day);
             return (
               <section key={day} className="overflow-hidden rounded-xl border border-border bg-surface">
-                <button
-                  onClick={() =>
-                    setCollapsed((prev) => ({ ...prev, [day]: !closed }))
-                  }
-                  className="flex w-full items-center justify-between px-4 py-3 text-left"
-                >
-                  <span className="text-sm font-semibold">
-                    {fmtDayKeyLong(day)}
-                    {day === today && (
-                      <span className="ml-2 rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[10px] font-bold text-[var(--accent)]">
-                        TODAY
-                      </span>
+                <div className="flex w-full items-center gap-2 px-4 py-3">
+                  <button
+                    onClick={() =>
+                      setCollapsed((prev) => ({ ...prev, [day]: !closed }))
+                    }
+                    className="flex min-w-0 flex-1 items-center justify-between text-left"
+                  >
+                    <span className="text-sm font-semibold">
+                      {fmtDayKeyLong(day)}
+                      {day === today && (
+                        <span className="ml-2 rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[10px] font-bold text-[var(--accent)]">
+                          TODAY
+                        </span>
+                      )}
+                    </span>
+                    <span className="flex items-center gap-2 text-xs text-muted">
+                      {list.length} session{list.length === 1 ? "" : "s"}
+                      <ChevronDown
+                        size={15}
+                        className={cn("transition-transform", closed && "-rotate-90")}
+                      />
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => toggleMany(list.map((e) => e.id))}
+                    title="Add this whole day to the selection"
+                    className={cn(
+                      "shrink-0 rounded-md border px-2 py-1 text-[11px] font-medium transition",
+                      list.every((e) => selectedIds.has(e.id))
+                        ? "border-[var(--accent)] bg-[var(--accent)] text-white"
+                        : "border-border bg-surface hover:border-[var(--accent)]",
                     )}
-                  </span>
-                  <span className="flex items-center gap-2 text-xs text-muted">
-                    {list.length} session{list.length === 1 ? "" : "s"}
-                    <ChevronDown
-                      size={15}
-                      className={cn("transition-transform", closed && "-rotate-90")}
-                    />
-                  </span>
-                </button>
+                  >
+                    Select
+                  </button>
+                </div>
                 {!closed && (
                   <div className="divide-y divide-border border-t border-border">
                     {list.map((e) => {
                       const names = e.assignments
                         .map((a) => attendees.find((x) => x.id === a.attendee_id)?.name?.split(" ")[0])
                         .filter(Boolean);
+                      const sel = selectedIds.has(e.id);
                       return (
-                        <div key={e.id} className="group flex items-center">
+                        <div
+                          key={e.id}
+                          className={cn(
+                            "group flex items-center",
+                            sel && "bg-[var(--accent-soft)]/40",
+                          )}
+                        >
+                          <button
+                            onClick={() => toggleSelected(e.id)}
+                            title={sel ? "Remove from selection" : "Select for bulk actions"}
+                            className={cn(
+                              "ml-3 grid h-5 w-5 shrink-0 place-items-center rounded-full border text-[11px] font-bold transition",
+                              sel
+                                ? "border-[var(--accent)] bg-[var(--accent)] text-white"
+                                : "border-border bg-surface text-transparent hover:border-[var(--accent)]",
+                            )}
+                          >
+                            ✓
+                          </button>
                           <Link
                             href={`/conference-planning/${conference.id}/sessions/${e.id}`}
                             className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 transition hover:bg-canvas"

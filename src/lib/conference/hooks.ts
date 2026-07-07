@@ -425,6 +425,24 @@ export function useEvents(conferenceId: string | null, userId?: string | null) {
     [],
   );
 
+  // Bulk variants for multi-select flows — one round-trip for N events.
+  const bulkUpdate = useCallback(
+    async (ids: string[], partial: Partial<ConfEvent>) => {
+      if (!ids.length) return;
+      const set = new Set(ids);
+      setEvents((prev) => prev.map((e) => (set.has(e.id) ? { ...e, ...partial } : e)));
+      await supabase.from("conf_events").update(partial).in("id", ids);
+    },
+    [],
+  );
+
+  const bulkRemove = useCallback(async (ids: string[]) => {
+    if (!ids.length) return;
+    const set = new Set(ids);
+    setEvents((prev) => prev.filter((e) => !set.has(e.id)));
+    await supabase.from("conf_events").update({ cancelled: true }).in("id", ids);
+  }, []);
+
   const setPriority = useCallback(
     async (
       id: string,
@@ -455,7 +473,7 @@ export function useEvents(conferenceId: string | null, userId?: string | null) {
     [conferenceId],
   );
 
-  return { events, loading, refresh, save, remove, setPriority };
+  return { events, loading, refresh, save, remove, bulkUpdate, bulkRemove, setPriority };
 }
 
 export function useEvent(eventId: string) {
