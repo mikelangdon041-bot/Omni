@@ -136,11 +136,28 @@ Rules:
       const attendees: string[] = Array.isArray(body?.attendees) ? body.attendees : [];
       if (!text.trim()) return NextResponse.json({ rows: [] });
 
+      // The user's own company: their sponsored talks are educational, every
+      // other company's sponsored content is competitor material.
+      let company = "";
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("org_id")
+        .eq("id", user.id)
+        .single();
+      if (profile?.org_id) {
+        const { data: org } = await supabase
+          .from("organizations")
+          .select("name")
+          .eq("id", profile.org_id)
+          .single();
+        company = (org?.name || "").trim();
+      }
+
       const stream = await openai().chat.completions.create({
         model: MODEL,
         temperature: 0.1,
         response_format: { type: "json_object" },
-        max_tokens: 8000,
+        max_tokens: 12000,
         stream: true,
         messages: [
           {
@@ -167,8 +184,18 @@ Return ONLY JSON: {"rows":[{...}]} where each row is:
 Rules:
 - The conference days are: ${days.join(", ") || "(unknown)"}. When the source has a day without a year (e.g. "April 22" or "Day 2" or "Wednesday"), resolve it to one of those dates. Never invent dates outside them unless the source is explicit.
 - Booth-duty/staffing rows become ONE booth event per contiguous date+location block, with all covering people in "people" (do not emit one row per shift person unless times differ — separate time ranges may be separate rows).
-- Research posters (poster numbers, abstract titles, presenter lists) → kind "poster".
-- Talks/lectures/presentations → "session" (or "educational"/"competitor" when the source clearly says so). Symposia, CME/accredited programs, and workshops → "educational". Meetings with named external clinicians/VIPs → "contact_meeting".
+- Classify each row's type deliberately — do NOT default everything to "session". Apply these cues in order:
+  · "poster": anything whose title/label/type mentions poster (poster session, poster hall/walk, ePoster, abstract number) or that reads like an abstract listing (title + authors + number) → kind "poster".
+  · Sponsored/industry content — product theaters, satellite symposia, industry-sponsored education, "Science & Innovation Theater", "Industry Connect", breakfast/lunch/dinner symposia, or rows with a sponsoring Company column: ${
+    company
+      ? `sponsored by "${company}" (the user's own company) → "educational"; sponsored by any OTHER company → "competitor". Mention the sponsoring company at the start of "description".`
+      : `→ "competitor" (mention the sponsoring company at the start of "description"), unless the guidance says it is the user's own company's program — then "educational".`
+  }
+  · "educational": CME/CE-accredited or certified medical-education programs and courses.
+  · "contact_meeting": meetings/1:1s with named external clinicians, KOLs, or VIPs — including meeting grids where a time row × day column cell holds the clinician's name.
+  · "booth": booth duty, exhibit-hall staffing, in-booth activities.
+  · "session": the official scientific program — plenaries, keynotes, general sessions, program symposia, "Meet the Professor", oral abstract sessions, panels, debates.
+- When the source has a session-type/category column, trust it and map it with the rules above (e.g. "Plenary"/"General Session"/"Symposia" in the official program → "session"; "Satellite Symposia"/"IND Sponsored Edu" → the sponsored rule; "Poster" → poster).
 - Team member names in the source should match this roster when possible (copy the source spelling; do NOT substitute): ${attendees.join(", ") || "(none)"}.
 - Copy titles/locations/names exactly as written. Never fabricate rows, times, or people not in the source. Skip header/legend/blank rows.`,
           },

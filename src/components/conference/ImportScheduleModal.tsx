@@ -86,6 +86,9 @@ export function ImportScheduleModal({
   const [parseFound, setParseFound] = useState(0);
   const [error, setError] = useState("");
   const [rows, setRows] = useState<ImportRow[]>([]);
+  // Batch-selection for bulk type assignment — independent of the "will
+  // import" checkboxes, so several different batches can be typed in turn.
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [resolution, setResolution] = useState<Resolution>({});
   const [importing, setImporting] = useState(false);
   const [importPct, setImportPct] = useState(0);
@@ -101,6 +104,7 @@ export function ImportScheduleModal({
     setSourceName("");
     setGuidance("");
     setRows([]);
+    setSelectedKeys(new Set());
     setResolution({});
     setError("");
   }
@@ -148,52 +152,90 @@ export function ImportScheduleModal({
   }
 
   // ---- Step 3: AI parse --------------------------------------------------
-  // The endpoint streams the model's JSON as it is generated; every row has
-  // exactly one "title" field, so counting titles in the partial text gives a
-  // live row count → real progress against the estimated source-row total.
+  // Large sources are parsed in chunks (a 200-row master schedule would blow
+  // the model's output limit in one go). Each chunk streams back as it is
+  // generated; every row has exactly one "title" field, so counting titles in
+  // the partial text gives a live row count → real progress across the run.
   async function parse() {
     setParsing(true);
     setParsePct(0);
     setParseFound(0);
     setError("");
     try {
-      const res = await fetch("/api/conference/ai", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({
+      const isGrid = !!previewGrid;
+      const lines = rawText.split("\n").filter((l) => l.trim());
+      const header = isGrid ? lines[0] || "" : "";
+      const data = isGrid ? lines.slice(1) : lines;
+      const chunkSize = isGrid ? 35 : 60;
+      const batches: string[][] = [];
+      for (let i = 0; i < data.length; i += chunkSize) {
+        batches.push(data.slice(i, i + chunkSize));
+      }
+      const expected = isGrid
+        ? Math.max(1, data.length)
+        : estimateSourceRows(rawText, false);
+      const dateLike =
+        /(\d{1,2}\/\d{1,2}\/\d{2,4})|(\d{4}-\d{2}-\d{2})|\b(mon|tues|wednes|thurs|fri|satur|sun)day\b/i;
+
+      const all: Partial<ImportRow>[] = [];
+      let linesDone = 0;
+      for (let i = 0; i < batches.length; i++) {
+        const batch = batches[i];
+        // Day headers / merged date cells earlier in the sheet carry the date
+        // for later rows — resend the latest one, marked context-only, so
+        // mid-sheet chunks still resolve dates.
+        let context = "";
+        if (i > 0) {
+          for (let j = linesDone - 1; j >= 0; j--) {
+            if (dateLike.test(data[j])) {
+              context = data[j];
+              break;
+            }
+          }
+        }
+        const chunkText = [
+          header,
+          context
+            ? `(Date context from earlier rows, ALREADY imported — do not re-emit: ${context})`
+            : "",
+          ...batch,
+        ]
+          .filter(Boolean)
+          .join("\n");
+        const payload = {
           action: "parse_schedule",
-          text: rawText,
+          text: chunkText,
           guidance,
           days,
           attendees: attendees.map((a) => a.name),
-        }),
-      });
-      if (!res.ok || !res.body) {
-        const json = await res.json().catch(() => ({}));
-        throw new Error(json.error || "AI parse failed");
-      }
-      const expected = estimateSourceRows(rawText, !!previewGrid);
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let acc = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        acc += decoder.decode(value, { stream: true });
-        const found = acc.split('"title"').length - 1;
-        setParseFound(found);
-        setParsePct(found ? Math.min(97, Math.round((found / expected) * 100)) : 2);
-      }
-      acc += decoder.decode();
-      let json: { rows?: Partial<ImportRow>[] };
-      try {
-        json = JSON.parse(acc);
-      } catch {
-        throw new Error("The AI returned an unreadable result — please re-run the parse.");
+        };
+        const base = linesDone;
+        const doneSoFar = all.length;
+        const onFound = (n: number) => {
+          setParseFound(doneSoFar + n);
+          setParsePct(
+            Math.min(
+              97,
+              Math.max(
+                2,
+                Math.round(((base + Math.min(n, batch.length)) / expected) * 100),
+              ),
+            ),
+          );
+        };
+        let chunkRows: Partial<ImportRow>[];
+        try {
+          chunkRows = await streamParseChunk(payload, onFound);
+        } catch {
+          // One retry per chunk — a hiccup shouldn't sink a 5-chunk run.
+          chunkRows = await streamParseChunk(payload, onFound);
+        }
+        all.push(...chunkRows);
+        linesDone += batch.length;
+        setParseFound(all.length);
       }
       setParsePct(100);
-      const parsed: ImportRow[] = (json.rows || []).map(
+      const parsed: ImportRow[] = all.map(
         (r: Partial<ImportRow>, i: number) => ({
           key: `row-${i}`,
           checked: true,
@@ -222,6 +264,7 @@ export function ImportScheduleModal({
         return;
       }
       setRows(parsed);
+      setSelectedKeys(new Set());
       setResolution(autoResolve(parsed, attendees));
       setStep("review");
     } catch (e) {
@@ -269,8 +312,22 @@ export function ImportScheduleModal({
     );
   }
 
+  function toggleSelected(key: string) {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  // Type the current batch, clear the selection, ready for the next batch.
+  function applyTypeToSelection(v: string) {
+    applyType([...selectedKeys], v);
+    setSelectedKeys(new Set());
+  }
+
   const selected = rows.filter((r) => r.checked && rowValid(r));
-  const checkedKeys = rows.filter((r) => r.checked).map((r) => r.key);
 
   // Rows grouped by their current type so whole batches review/re-type together.
   const groups = useMemo(
@@ -584,20 +641,78 @@ export function ImportScheduleModal({
             >
               {rows.every((r) => r.checked) ? "Uncheck all" : "Check all"}
             </Button>
-            <select
-              value=""
-              onChange={(e) =>
-                e.target.value && applyType(checkedKeys, e.target.value)
+          </div>
+
+          {/* Batch typing: tap rows (or a group's Select button) to build a
+              selection, assign one type to all of them, repeat per batch. */}
+          <div
+            className={cn(
+              "flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-sm transition",
+              selectedKeys.size > 0
+                ? "border-[var(--accent)]/50 bg-[var(--accent-soft)]/60"
+                : "border-border bg-canvas",
+            )}
+          >
+            {selectedKeys.size > 0 ? (
+              <>
+                <span className="font-semibold text-[var(--accent)]">
+                  {selectedKeys.size} row{selectedKeys.size === 1 ? "" : "s"} selected
+                </span>
+                <select
+                  value=""
+                  onChange={(e) =>
+                    e.target.value && applyTypeToSelection(e.target.value)
+                  }
+                  className="rounded-md border border-[var(--accent)]/50 bg-surface px-2 py-1 text-xs font-semibold text-[var(--accent)] outline-none"
+                >
+                  <option value="" disabled>
+                    Make these…
+                  </option>
+                  <TypeOptions />
+                </select>
+              </>
+            ) : (
+              <span className="text-xs text-muted">
+                Tap rows to select a batch, then set their type in one go —
+                repeat per batch (e.g. 10 sessions, then 5 KOL meetings).
+              </span>
+            )}
+            <span className="flex-1" />
+            <button
+              onClick={() =>
+                setSelectedKeys((prev) =>
+                  prev.size === rows.length
+                    ? new Set()
+                    : new Set(rows.map((r) => r.key)),
+                )
               }
-              disabled={checkedKeys.length === 0}
-              className="rounded-md border border-border bg-surface px-2 py-1.5 text-xs font-medium outline-none disabled:opacity-50"
-              title="Apply an event type to every checked row"
+              className="rounded-md border border-border bg-surface px-2 py-1 text-[11px] font-medium transition hover:border-[var(--accent)]"
             >
-              <option value="" disabled>
-                Set type for checked ({checkedKeys.length})…
-              </option>
-              <TypeOptions />
-            </select>
+              {selectedKeys.size === rows.length ? "Select none" : "Select all"}
+            </button>
+            {selectedKeys.size > 0 && selectedKeys.size < rows.length && (
+              <button
+                onClick={() =>
+                  setSelectedKeys(
+                    new Set(
+                      rows.filter((r) => !selectedKeys.has(r.key)).map((r) => r.key),
+                    ),
+                  )
+                }
+                title="Swap the selection to all currently unselected rows"
+                className="rounded-md border border-border bg-surface px-2 py-1 text-[11px] font-medium transition hover:border-[var(--accent)]"
+              >
+                Select the rest ({rows.length - selectedKeys.size})
+              </button>
+            )}
+            {selectedKeys.size > 0 && (
+              <button
+                onClick={() => setSelectedKeys(new Set())}
+                className="rounded-md border border-border bg-surface px-2 py-1 text-[11px] font-medium transition hover:border-[var(--accent)]"
+              >
+                Clear
+              </button>
+            )}
           </div>
 
           {/* Rows, grouped by type so whole batches can be re-typed at once */}
@@ -614,6 +729,26 @@ export function ImportScheduleModal({
                   </span>
                   <span className="text-xs text-muted">({g.rows.length})</span>
                   <span className="flex-1" />
+                  <button
+                    onClick={() =>
+                      setSelectedKeys((prev) => {
+                        const keys = g.rows.map((r) => r.key);
+                        const allIn = keys.every((k) => prev.has(k));
+                        const next = new Set(prev);
+                        keys.forEach((k) => (allIn ? next.delete(k) : next.add(k)));
+                        return next;
+                      })
+                    }
+                    title="Add this whole group to the batch selection"
+                    className={cn(
+                      "rounded-md border px-2 py-1 text-[11px] font-medium transition",
+                      g.rows.every((r) => selectedKeys.has(r.key))
+                        ? "border-[var(--accent)] bg-[var(--accent)] text-white"
+                        : "border-border bg-surface hover:border-[var(--accent)]",
+                    )}
+                  >
+                    Select
+                  </button>
                   <button
                     onClick={() =>
                       setChecked(
@@ -642,16 +777,26 @@ export function ImportScheduleModal({
                 </div>
                 {g.rows.map((r) => {
               const valid = rowValid(r);
+              const isSelected = selectedKeys.has(r.key);
               return (
                 <div
                   key={r.key}
+                  onClick={(e) => {
+                    // Tap the card to (de)select for batch typing; taps on the
+                    // inputs/selects inside keep their normal behavior.
+                    const t = e.target as HTMLElement;
+                    if (t.closest("input,select,button,textarea,label")) return;
+                    toggleSelected(r.key);
+                  }}
                   className={cn(
-                    "rounded-lg border p-2.5",
+                    "cursor-pointer rounded-lg border p-2.5 transition",
                     !valid
                       ? "border-red-300 bg-red-50/50"
                       : r.checked
                         ? "border-border bg-surface shadow-sm"
                         : "border-border bg-canvas opacity-60",
+                    isSelected &&
+                      "border-[var(--accent)] ring-2 ring-[var(--accent)]/40",
                   )}
                   style={{
                     borderLeft: `4px solid ${
@@ -666,6 +811,7 @@ export function ImportScheduleModal({
                       type="checkbox"
                       checked={r.checked}
                       onChange={(e) => updateRow(r.key, { checked: e.target.checked })}
+                      title="Include in the import"
                     />
                     <select
                       value={r.kind === "poster" ? "poster" : r.event_type}
@@ -694,6 +840,18 @@ export function ImportScheduleModal({
                       placeholder="Title *"
                       className="min-w-32 flex-1 rounded-md border border-border bg-surface px-2 py-1 text-sm outline-none focus:border-[var(--accent)]"
                     />
+                    <button
+                      onClick={() => toggleSelected(r.key)}
+                      title={isSelected ? "Remove from batch" : "Add to batch for bulk typing"}
+                      className={cn(
+                        "grid h-5 w-5 shrink-0 place-items-center rounded-full border text-[11px] font-bold transition",
+                        isSelected
+                          ? "border-[var(--accent)] bg-[var(--accent)] text-white"
+                          : "border-border bg-surface text-transparent hover:border-[var(--accent)]",
+                      )}
+                    >
+                      ✓
+                    </button>
                   </div>
                   <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
                     <select
@@ -952,6 +1110,41 @@ function isImportEventType(v: unknown): v is ImportEventType {
     typeof v === "string" &&
     ["booth", "educational", "competitor", "contact_meeting", "session", "custom"].includes(v)
   );
+}
+
+// POST one chunk to the parse endpoint and read the streamed model output,
+// reporting the number of rows seen so far via onFound. Returns the rows.
+async function streamParseChunk(
+  payload: Record<string, unknown>,
+  onFound: (n: number) => void,
+): Promise<Partial<ImportRow>[]> {
+  const res = await fetch("/api/conference/ai", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok || !res.body) {
+    const json = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(json.error || "AI parse failed");
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let acc = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    acc += decoder.decode(value, { stream: true });
+    onFound(acc.split('"title"').length - 1);
+  }
+  acc += decoder.decode();
+  let json: { rows?: Partial<ImportRow>[] };
+  try {
+    json = JSON.parse(acc);
+  } catch {
+    throw new Error("The AI returned an unreadable result — please re-run the parse.");
+  }
+  return Array.isArray(json.rows) ? json.rows : [];
 }
 
 // Rough count of importable rows in the source, used as the denominator for
