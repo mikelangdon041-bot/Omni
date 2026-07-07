@@ -12,6 +12,8 @@ export interface ConfHeaderInfo {
   name: string;
   status: "live" | "upcoming" | "past";
   daysAway: number;
+  // Opens the conference's announce-to-team modal (lives in the provider).
+  announce?: () => void;
 }
 
 let info: ConfHeaderInfo | null = null;

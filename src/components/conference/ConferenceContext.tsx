@@ -16,7 +16,6 @@ import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  ArrowLeftRight,
   CalendarDays,
   ClipboardList,
   Landmark,
@@ -151,6 +150,7 @@ export function ConferenceProvider({
       name: conference.name,
       status: conferenceStatus(conference),
       daysAway: daysAway(conference),
+      announce: () => setShowAnnounce(true),
     });
     return () => setConfHeader(null);
   }, [conference]);
@@ -251,20 +251,6 @@ export function ConferenceProvider({
             </span>
           )}
         </span>
-        <button
-          onClick={() => setShowAnnounce(true)}
-          className="shrink-0 rounded-lg p-2 text-muted transition hover:bg-canvas hover:text-ink"
-          title="Announce to the team"
-        >
-          <Megaphone size={15} />
-        </button>
-        <Link
-          href="/conference-planning"
-          className="shrink-0 rounded-lg p-2 text-muted transition hover:bg-canvas hover:text-ink"
-          title="Switch conference"
-        >
-          <ArrowLeftRight size={15} />
-        </Link>
       </div>
 
       {children}

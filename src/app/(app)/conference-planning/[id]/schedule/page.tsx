@@ -82,10 +82,19 @@ export default function SchedulePage() {
   const [view, setView] = useState<"calendar" | "list" | "who">("calendar");
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  // Multi-select (list view) for bulk actions.
+  // Multi-select (list view) for bulk actions. Select mode is explicit: while
+  // it's on, tapping anywhere on an event toggles it (no peek), and the bulk
+  // bar stays visible even with nothing selected yet.
+  const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
+  function exitSelect() {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  }
+
   function toggleSelected(id: string) {
+    setSelectMode(true);
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -112,9 +121,13 @@ export default function SchedulePage() {
       danger: true,
     });
     if (!ok) return;
-    await bulkRemove([...selectedIds]);
-    setSelectedIds(new Set());
-    toast("success", `Deleted ${n} event${n === 1 ? "" : "s"}.`);
+    try {
+      await bulkRemove([...selectedIds]);
+      exitSelect();
+      toast("success", `Deleted ${n} event${n === 1 ? "" : "s"}.`);
+    } catch (e) {
+      toast("error", `Delete failed: ${(e as Error).message}`);
+    }
   }
 
   // Editing state.
@@ -205,6 +218,14 @@ export default function SchedulePage() {
             <UserRound size={15} />
           </ViewBtn>
         </div>
+        {view === "list" && !selectMode && (
+          <button
+            onClick={() => setSelectMode(true)}
+            className="rounded-lg border border-border bg-surface px-3 py-2 text-xs font-medium text-muted transition hover:border-[var(--accent)] hover:text-ink"
+          >
+            Select
+          </button>
+        )}
         <span className="flex-1" />
         <div className="hidden items-center gap-2 sm:flex">
           <ExportMenu attendees={attendees} onExport={exportPerson} />
@@ -300,98 +321,126 @@ export default function SchedulePage() {
         <WhoIsWhere events={events} />
       ) : view === "list" ? (
         <>
-          {/* Bulk actions — tap event circles (or a day's Select) to batch */}
-          {selectedIds.size > 0 && (
+          {/* Bulk actions — visible while selecting; tap events to build the batch */}
+          {selectMode && (
             <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--accent)]/50 bg-[var(--accent-soft)]/60 px-3 py-2 text-sm">
-              <span className="font-semibold text-[var(--accent)]">
-                {selectedIds.size} selected
-              </span>
-              <select
-                value=""
-                onChange={(e) => {
-                  if (!e.target.value) return;
-                  void bulkUpdate([...selectedIds], {
-                    event_type: e.target.value as EventType,
-                  }).then(() => setSelectedIds(new Set()));
-                }}
-                className="rounded-md border border-[var(--accent)]/50 bg-surface px-2 py-1 text-xs font-semibold text-[var(--accent)] outline-none"
-              >
-                <option value="" disabled>
-                  Type…
-                </option>
-                {EVENT_TYPE_ORDER.filter((t) => t !== "poster").map((t) => (
-                  <option key={t} value={t}>
-                    {EVENT_TYPES[t].label}
-                  </option>
-                ))}
-              </select>
-              <select
-                value=""
-                onChange={(e) => {
-                  if (!e.target.value) return;
-                  const v = e.target.value === "none" ? null : (e.target.value as Priority);
-                  void bulkUpdate([...selectedIds], {
-                    suspected_priority: v,
-                    priority_set_by: me?.id || null,
-                    priority_set_at: new Date().toISOString(),
-                  }).then(() => setSelectedIds(new Set()));
-                }}
-                className="rounded-md border border-[var(--accent)]/50 bg-surface px-2 py-1 text-xs font-semibold text-[var(--accent)] outline-none"
-              >
-                <option value="" disabled>
-                  Priority…
-                </option>
-                {(["high", "medium", "low"] as Priority[]).map((p) => (
-                  <option key={p} value={p}>
-                    {PRIORITIES[p].label}
-                  </option>
-                ))}
-                <option value="none">Clear priority</option>
-              </select>
-              <select
-                value=""
-                onChange={(e) => {
-                  if (!e.target.value) return;
-                  void bulkAssign([...selectedIds], e.target.value).then(() =>
-                    toast("success", "Added to the selected events."),
-                  );
-                }}
-                className="rounded-md border border-[var(--accent)]/50 bg-surface px-2 py-1 text-xs font-semibold text-[var(--accent)] outline-none"
-              >
-                <option value="" disabled>
-                  ＋ Add person…
-                </option>
-                {attendees.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
-              </select>
-              <select
-                value=""
-                onChange={(e) => {
-                  if (!e.target.value) return;
-                  void bulkUnassign([...selectedIds], e.target.value).then(() =>
-                    toast("success", "Removed from the selected events."),
-                  );
-                }}
-                className="rounded-md border border-border bg-surface px-2 py-1 text-xs font-medium text-muted outline-none"
-              >
-                <option value="" disabled>
-                  − Remove person…
-                </option>
-                {attendees.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
-              </select>
-              <button
-                onClick={() => void bulkDelete()}
-                className="inline-flex items-center gap-1 rounded-md border border-red-300 bg-surface px-2 py-1 text-xs font-semibold text-red-600 transition hover:bg-red-50"
-              >
-                <Trash2 size={12} /> Delete
-              </button>
+              {selectedIds.size > 0 ? (
+                <>
+                  <span className="font-semibold text-[var(--accent)]">
+                    {selectedIds.size} selected
+                  </span>
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      if (!e.target.value) return;
+                      void bulkUpdate([...selectedIds], {
+                        event_type: e.target.value as EventType,
+                      })
+                        .then(() => {
+                          setSelectedIds(new Set());
+                          toast("success", "Type updated.");
+                        })
+                        .catch((err: Error) =>
+                          toast("error", `Update failed: ${err.message}`),
+                        );
+                    }}
+                    className="rounded-md border border-[var(--accent)]/50 bg-surface px-2 py-1 text-xs font-semibold text-[var(--accent)] outline-none"
+                  >
+                    <option value="" disabled>
+                      Type…
+                    </option>
+                    {EVENT_TYPE_ORDER.filter((t) => t !== "poster").map((t) => (
+                      <option key={t} value={t}>
+                        {EVENT_TYPES[t].label}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      if (!e.target.value) return;
+                      const v =
+                        e.target.value === "none" ? null : (e.target.value as Priority);
+                      void bulkUpdate([...selectedIds], {
+                        suspected_priority: v,
+                        priority_set_by: me?.id || null,
+                        priority_set_at: new Date().toISOString(),
+                      })
+                        .then(() => {
+                          setSelectedIds(new Set());
+                          toast("success", "Priority updated.");
+                        })
+                        .catch((err: Error) =>
+                          toast("error", `Update failed: ${err.message}`),
+                        );
+                    }}
+                    className="rounded-md border border-[var(--accent)]/50 bg-surface px-2 py-1 text-xs font-semibold text-[var(--accent)] outline-none"
+                  >
+                    <option value="" disabled>
+                      Priority…
+                    </option>
+                    {(["high", "medium", "low"] as Priority[]).map((p) => (
+                      <option key={p} value={p}>
+                        {PRIORITIES[p].label}
+                      </option>
+                    ))}
+                    <option value="none">Clear priority</option>
+                  </select>
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      if (!e.target.value) return;
+                      void bulkAssign([...selectedIds], e.target.value)
+                        .then(() => toast("success", "Added to the selected events."))
+                        .catch((err: Error) =>
+                          toast("error", `Assign failed: ${err.message}`),
+                        );
+                    }}
+                    className="rounded-md border border-[var(--accent)]/50 bg-surface px-2 py-1 text-xs font-semibold text-[var(--accent)] outline-none"
+                  >
+                    <option value="" disabled>
+                      ＋ Add person…
+                    </option>
+                    {attendees.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      if (!e.target.value) return;
+                      void bulkUnassign([...selectedIds], e.target.value)
+                        .then(() => toast("success", "Removed from the selected events."))
+                        .catch((err: Error) =>
+                          toast("error", `Remove failed: ${err.message}`),
+                        );
+                    }}
+                    className="rounded-md border border-border bg-surface px-2 py-1 text-xs font-medium text-muted outline-none"
+                  >
+                    <option value="" disabled>
+                      − Remove person…
+                    </option>
+                    {attendees.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => void bulkDelete()}
+                    className="inline-flex items-center gap-1 rounded-md border border-red-300 bg-surface px-2 py-1 text-xs font-semibold text-red-600 transition hover:bg-red-50"
+                  >
+                    <Trash2 size={12} /> Delete
+                  </button>
+                </>
+              ) : (
+                <span className="text-xs text-muted">
+                  Tap events to select them — then set type, priority, people, or
+                  delete in one go.
+                </span>
+              )}
               <span className="flex-1" />
               <button
                 onClick={() => setSelectedIds(new Set(filtered.map((e) => e.id)))}
@@ -400,18 +449,20 @@ export default function SchedulePage() {
                 Select all shown
               </button>
               <button
-                onClick={() => setSelectedIds(new Set())}
-                className="rounded-md border border-border bg-surface px-2 py-1 text-[11px] font-medium transition hover:border-[var(--accent)]"
+                onClick={exitSelect}
+                className="rounded-md border border-border bg-surface px-2 py-1 text-[11px] font-semibold transition hover:border-[var(--accent)]"
               >
-                Clear
+                Done
               </button>
             </div>
           )}
           <ListView
             events={filtered}
+            selectMode={selectMode}
             selectedIds={selectedIds}
             onToggleSelect={toggleSelected}
             onToggleDay={toggleMany}
+            onEnterSelect={() => setSelectMode(true)}
             onTap={(e) => setPeek(e)}
             onDelete={async (e) => {
               const ok = await confirm({
@@ -565,16 +616,20 @@ function ExportMenu({
 // List view grouped by day (spec §7.11), with multi-select for bulk actions.
 function ListView({
   events,
+  selectMode,
   selectedIds,
   onToggleSelect,
   onToggleDay,
+  onEnterSelect,
   onTap,
   onDelete,
 }: {
   events: EventWithPeople[];
+  selectMode: boolean;
   selectedIds: Set<string>;
   onToggleSelect: (id: string) => void;
   onToggleDay: (ids: string[]) => void;
+  onEnterSelect: () => void;
   onTap: (e: EventWithPeople) => void;
   onDelete: (e: EventWithPeople) => void;
 }) {
@@ -605,18 +660,28 @@ function ListView({
           <div className="mb-2 flex items-center gap-2">
             <h3 className="text-sm font-semibold text-muted">{fmtDayKeyLong(day)}</h3>
             <span className="flex-1" />
-            <button
-              onClick={() => onToggleDay(list.map((e) => e.id))}
-              title="Add this whole day to the selection"
-              className={cn(
-                "rounded-md border px-2 py-1 text-[11px] font-medium transition",
-                list.every((e) => selectedIds.has(e.id))
-                  ? "border-[var(--accent)] bg-[var(--accent)] text-white"
-                  : "border-border bg-surface hover:border-[var(--accent)]",
-              )}
-            >
-              Select
-            </button>
+            {selectMode ? (
+              <button
+                onClick={() => onToggleDay(list.map((e) => e.id))}
+                title="Add or remove this whole day from the selection"
+                className={cn(
+                  "rounded-md border px-2 py-1 text-[11px] font-medium transition",
+                  list.every((e) => selectedIds.has(e.id))
+                    ? "border-[var(--accent)] bg-[var(--accent)] text-white"
+                    : "border-border bg-surface hover:border-[var(--accent)]",
+                )}
+              >
+                {list.every((e) => selectedIds.has(e.id)) ? "Deselect day" : "Select day"}
+              </button>
+            ) : (
+              <button
+                onClick={onEnterSelect}
+                title="Start selecting events for bulk actions"
+                className="rounded-md border border-border bg-surface px-2 py-1 text-[11px] font-medium text-muted transition hover:border-[var(--accent)] hover:text-ink"
+              >
+                Select
+              </button>
+            )}
           </div>
           <div className="space-y-1.5">
             {list.map((e) => {
@@ -633,7 +698,9 @@ function ListView({
                       ? "border-[var(--accent)] ring-1 ring-[var(--accent)]/40"
                       : "border-border",
                   )}
-                  onClick={() => onTap(e)}
+                  // In select mode the whole card is a select target; otherwise
+                  // tapping opens the event peek as before.
+                  onClick={() => (selectMode ? onToggleSelect(e.id) : onTap(e))}
                 >
                   <button
                     onClick={(ev) => {

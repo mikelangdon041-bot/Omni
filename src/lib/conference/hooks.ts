@@ -464,22 +464,38 @@ export function useEvents(conferenceId: string | null, userId?: string | null) {
   );
 
   // Bulk variants for multi-select flows — one round-trip for N events.
+  // Each verifies the DB write: on failure the optimistic state is rolled
+  // back via refetch and the error is thrown for the caller to surface.
   const bulkUpdate = useCallback(
     async (ids: string[], partial: Partial<ConfEvent>) => {
       if (!ids.length) return;
       const set = new Set(ids);
       setEvents((prev) => prev.map((e) => (set.has(e.id) ? { ...e, ...partial } : e)));
-      await supabase.from("conf_events").update(partial).in("id", ids);
+      const { error } = await supabase.from("conf_events").update(partial).in("id", ids);
+      if (error) {
+        await refresh();
+        throw new Error(error.message);
+      }
     },
-    [],
+    [refresh],
   );
 
-  const bulkRemove = useCallback(async (ids: string[]) => {
-    if (!ids.length) return;
-    const set = new Set(ids);
-    setEvents((prev) => prev.filter((e) => !set.has(e.id)));
-    await supabase.from("conf_events").update({ cancelled: true }).in("id", ids);
-  }, []);
+  const bulkRemove = useCallback(
+    async (ids: string[]) => {
+      if (!ids.length) return;
+      const set = new Set(ids);
+      setEvents((prev) => prev.filter((e) => !set.has(e.id)));
+      const { error } = await supabase
+        .from("conf_events")
+        .update({ cancelled: true })
+        .in("id", ids);
+      if (error) {
+        await refresh();
+        throw new Error(error.message);
+      }
+    },
+    [refresh],
+  );
 
   // Assign one person to many events (skipping events that already have them).
   const bulkAssign = useCallback(
@@ -490,7 +506,7 @@ export function useEvents(conferenceId: string | null, userId?: string | null) {
         return ev && !ev.assignments.some((a) => a.attendee_id === attendeeId);
       });
       if (!missing.length) return;
-      await supabase.from("conf_event_assignments").insert(
+      const { error } = await supabase.from("conf_event_assignments").insert(
         missing.map((event_id) => ({
           conference_id: conferenceId,
           event_id,
@@ -498,6 +514,7 @@ export function useEvents(conferenceId: string | null, userId?: string | null) {
         })),
       );
       await refresh();
+      if (error) throw new Error(error.message);
     },
     [conferenceId, events, refresh],
   );
@@ -505,12 +522,13 @@ export function useEvents(conferenceId: string | null, userId?: string | null) {
   const bulkUnassign = useCallback(
     async (ids: string[], attendeeId: string) => {
       if (!ids.length) return;
-      await supabase
+      const { error } = await supabase
         .from("conf_event_assignments")
         .delete()
         .in("event_id", ids)
         .eq("attendee_id", attendeeId);
       await refresh();
+      if (error) throw new Error(error.message);
     },
     [refresh],
   );

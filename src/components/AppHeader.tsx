@@ -3,7 +3,15 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LayoutGrid, Settings, LogOut, X, Shield } from "lucide-react";
+import {
+  ArrowLeftRight,
+  LayoutGrid,
+  LogOut,
+  Megaphone,
+  Settings,
+  Shield,
+  X,
+} from "lucide-react";
 import { MODULES, moduleForPath } from "@/lib/modules";
 import { NotificationBell } from "@/components/NotificationBell";
 import { TaskBar } from "@/components/TaskBar";
@@ -104,8 +112,27 @@ export function AppHeader({
           </Link>
         )}
 
-        {/* Right: tasks + notifications + switch-app launcher + account menu */}
+        {/* Right: conference actions (when inside one) + tasks + notifications
+            + switch-app launcher + account menu */}
         <div className="ml-auto flex items-center gap-1.5">
+          {showConf && conf && (
+            <>
+              <button
+                onClick={() => conf.announce?.()}
+                className="rounded-lg p-2 text-muted transition hover:bg-canvas hover:text-ink"
+                title="Announce to the team"
+              >
+                <Megaphone size={17} />
+              </button>
+              <Link
+                href="/conference-planning"
+                className="rounded-lg p-2 text-muted transition hover:bg-canvas hover:text-ink"
+                title="Switch conference"
+              >
+                <ArrowLeftRight size={17} />
+              </Link>
+            </>
+          )}
           <TaskBar />
           <NotificationBell />
           <button
