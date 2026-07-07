@@ -11,6 +11,7 @@ import {
   Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { useConfirm } from "@/components/ui/Feedback";
 import { Badge } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useSurveyAdmin, useOrgProfile } from "@/lib/insights/hooks";
@@ -45,6 +46,7 @@ interface EditorCtx {
 }
 
 export function SurveyBuilder() {
+  const confirm = useConfirm();
   const { orgId, isAdmin, loading: profileLoading } = useOrgProfile();
   const admin = useSurveyAdmin(orgId);
   const {
@@ -293,8 +295,15 @@ export function SurveyBuilder() {
               index={i + 1}
               depth={0}
               onEdit={(n) => setEditor({ existing: n })}
-              onDelete={(id) => {
-                if (confirm("Delete this question and its follow-ups?"))
+              onDelete={async (id) => {
+                if (
+                  await confirm({
+                    title: "Delete this question?",
+                    message: "Its follow-up questions are deleted with it.",
+                    confirmLabel: "Delete",
+                    danger: true,
+                  })
+                )
                   removeQuestion(id);
               }}
               onAddFollowUp={(parent, optionId, optionLabel) =>

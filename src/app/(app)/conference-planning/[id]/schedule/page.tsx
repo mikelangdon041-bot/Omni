@@ -13,9 +13,11 @@ import {
   List,
   Plus,
   SlidersHorizontal,
+  Trash2,
   UserRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { useConfirm, useToast } from "@/components/ui/Feedback";
 import { cn } from "@/lib/ui";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
 import {
@@ -34,7 +36,9 @@ import { PriorityPill } from "@/components/conference/Priority";
 import {
   EVENT_TYPES,
   EVENT_TYPE_ORDER,
+  PRIORITIES,
   type EventType,
+  type Priority,
 } from "@/lib/conference/types";
 import { buildICS, downloadICS } from "@/lib/conference/ics";
 import {
@@ -48,8 +52,19 @@ import { useRouter } from "next/navigation";
 
 export default function SchedulePage() {
   const router = useRouter();
+  const confirm = useConfirm();
+  const toast = useToast();
   const { conference, attendees, me, myAttendee } = useConferenceCtx();
-  const { events, loading, save, remove } = useEvents(conference.id, me?.id);
+  const {
+    events,
+    loading,
+    save,
+    remove,
+    bulkUpdate,
+    bulkRemove,
+    bulkAssign,
+    bulkUnassign,
+  } = useEvents(conference.id, me?.id);
   const { posters } = usePosters(conference.id);
 
   // Filters (persisted per conference).
@@ -66,6 +81,41 @@ export default function SchedulePage() {
   const [dayFilter, setDayFilter] = useState<string | null>(null);
   const [view, setView] = useState<"calendar" | "list" | "who">("calendar");
   const [filtersOpen, setFiltersOpen] = useState(false);
+
+  // Multi-select (list view) for bulk actions.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  function toggleSelected(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleMany(ids: string[]) {
+    setSelectedIds((prev) => {
+      const allIn = ids.every((id) => prev.has(id));
+      const next = new Set(prev);
+      ids.forEach((id) => (allIn ? next.delete(id) : next.add(id)));
+      return next;
+    });
+  }
+
+  async function bulkDelete() {
+    const n = selectedIds.size;
+    const ok = await confirm({
+      title: `Delete ${n} event${n === 1 ? "" : "s"}?`,
+      message: "They disappear from everyone's schedule. This can't be undone here.",
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
+    await bulkRemove([...selectedIds]);
+    setSelectedIds(new Set());
+    toast("success", `Deleted ${n} event${n === 1 ? "" : "s"}.`);
+  }
 
   // Editing state.
   const [peek, setPeek] = useState<EventWithPeople | null>(null);
@@ -110,7 +160,7 @@ export default function SchedulePage() {
         e.shifts.some((s) => s.attendee_id === attendeeId),
     );
     if (!theirs.length) {
-      alert("No events assigned to this person yet.");
+      toast("info", "No events assigned to this person yet.");
       return;
     }
     downloadICS(`${a?.name || "schedule"} — ${conference.name}`, buildICS(theirs, conference));
@@ -249,13 +299,131 @@ export default function SchedulePage() {
       ) : view === "who" ? (
         <WhoIsWhere events={events} />
       ) : view === "list" ? (
-        <ListView
-          events={filtered}
-          onTap={(e) => setPeek(e)}
-          onDelete={async (e) => {
-            if (confirm(`Delete "${e.title}"?`)) await remove(e.id);
-          }}
-        />
+        <>
+          {/* Bulk actions — tap event circles (or a day's Select) to batch */}
+          {selectedIds.size > 0 && (
+            <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--accent)]/50 bg-[var(--accent-soft)]/60 px-3 py-2 text-sm">
+              <span className="font-semibold text-[var(--accent)]">
+                {selectedIds.size} selected
+              </span>
+              <select
+                value=""
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  void bulkUpdate([...selectedIds], {
+                    event_type: e.target.value as EventType,
+                  }).then(() => setSelectedIds(new Set()));
+                }}
+                className="rounded-md border border-[var(--accent)]/50 bg-surface px-2 py-1 text-xs font-semibold text-[var(--accent)] outline-none"
+              >
+                <option value="" disabled>
+                  Type…
+                </option>
+                {EVENT_TYPE_ORDER.filter((t) => t !== "poster").map((t) => (
+                  <option key={t} value={t}>
+                    {EVENT_TYPES[t].label}
+                  </option>
+                ))}
+              </select>
+              <select
+                value=""
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  const v = e.target.value === "none" ? null : (e.target.value as Priority);
+                  void bulkUpdate([...selectedIds], {
+                    suspected_priority: v,
+                    priority_set_by: me?.id || null,
+                    priority_set_at: new Date().toISOString(),
+                  }).then(() => setSelectedIds(new Set()));
+                }}
+                className="rounded-md border border-[var(--accent)]/50 bg-surface px-2 py-1 text-xs font-semibold text-[var(--accent)] outline-none"
+              >
+                <option value="" disabled>
+                  Priority…
+                </option>
+                {(["high", "medium", "low"] as Priority[]).map((p) => (
+                  <option key={p} value={p}>
+                    {PRIORITIES[p].label}
+                  </option>
+                ))}
+                <option value="none">Clear priority</option>
+              </select>
+              <select
+                value=""
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  void bulkAssign([...selectedIds], e.target.value).then(() =>
+                    toast("success", "Added to the selected events."),
+                  );
+                }}
+                className="rounded-md border border-[var(--accent)]/50 bg-surface px-2 py-1 text-xs font-semibold text-[var(--accent)] outline-none"
+              >
+                <option value="" disabled>
+                  ＋ Add person…
+                </option>
+                {attendees.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                value=""
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  void bulkUnassign([...selectedIds], e.target.value).then(() =>
+                    toast("success", "Removed from the selected events."),
+                  );
+                }}
+                className="rounded-md border border-border bg-surface px-2 py-1 text-xs font-medium text-muted outline-none"
+              >
+                <option value="" disabled>
+                  − Remove person…
+                </option>
+                {attendees.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => void bulkDelete()}
+                className="inline-flex items-center gap-1 rounded-md border border-red-300 bg-surface px-2 py-1 text-xs font-semibold text-red-600 transition hover:bg-red-50"
+              >
+                <Trash2 size={12} /> Delete
+              </button>
+              <span className="flex-1" />
+              <button
+                onClick={() => setSelectedIds(new Set(filtered.map((e) => e.id)))}
+                className="rounded-md border border-border bg-surface px-2 py-1 text-[11px] font-medium transition hover:border-[var(--accent)]"
+              >
+                Select all shown
+              </button>
+              <button
+                onClick={() => setSelectedIds(new Set())}
+                className="rounded-md border border-border bg-surface px-2 py-1 text-[11px] font-medium transition hover:border-[var(--accent)]"
+              >
+                Clear
+              </button>
+            </div>
+          )}
+          <ListView
+            events={filtered}
+            selectedIds={selectedIds}
+            onToggleSelect={toggleSelected}
+            onToggleDay={toggleMany}
+            onTap={(e) => setPeek(e)}
+            onDelete={async (e) => {
+              const ok = await confirm({
+                title: `Delete "${e.title}"?`,
+                message: "It disappears from everyone's schedule.",
+                confirmLabel: "Delete",
+                danger: true,
+              });
+              if (ok) await remove(e.id);
+            }}
+          />
+        </>
       ) : (
         <ScheduleCalendar
           conference={conference}
@@ -394,13 +562,19 @@ function ExportMenu({
   );
 }
 
-// List view grouped by day (spec §7.11).
+// List view grouped by day (spec §7.11), with multi-select for bulk actions.
 function ListView({
   events,
+  selectedIds,
+  onToggleSelect,
+  onToggleDay,
   onTap,
   onDelete,
 }: {
   events: EventWithPeople[];
+  selectedIds: Set<string>;
+  onToggleSelect: (id: string) => void;
+  onToggleDay: (ids: string[]) => void;
   onTap: (e: EventWithPeople) => void;
   onDelete: (e: EventWithPeople) => void;
 }) {
@@ -428,18 +602,54 @@ function ListView({
     <div className="space-y-6">
       {groups.map(([day, list]) => (
         <section key={day}>
-          <h3 className="mb-2 text-sm font-semibold text-muted">{fmtDayKeyLong(day)}</h3>
+          <div className="mb-2 flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-muted">{fmtDayKeyLong(day)}</h3>
+            <span className="flex-1" />
+            <button
+              onClick={() => onToggleDay(list.map((e) => e.id))}
+              title="Add this whole day to the selection"
+              className={cn(
+                "rounded-md border px-2 py-1 text-[11px] font-medium transition",
+                list.every((e) => selectedIds.has(e.id))
+                  ? "border-[var(--accent)] bg-[var(--accent)] text-white"
+                  : "border-border bg-surface hover:border-[var(--accent)]",
+              )}
+            >
+              Select
+            </button>
+          </div>
           <div className="space-y-1.5">
             {list.map((e) => {
               const names = e.assignments
                 .map((a) => attendees.find((x) => x.id === a.attendee_id)?.name?.split(" ")[0])
                 .filter(Boolean);
+              const sel = selectedIds.has(e.id);
               return (
                 <div
                   key={e.id}
-                  className="flex cursor-pointer items-center gap-3 rounded-xl border border-border bg-surface px-4 py-3 transition hover:shadow-sm"
+                  className={cn(
+                    "flex cursor-pointer items-center gap-3 rounded-xl border bg-surface px-4 py-3 transition hover:shadow-sm",
+                    sel
+                      ? "border-[var(--accent)] ring-1 ring-[var(--accent)]/40"
+                      : "border-border",
+                  )}
                   onClick={() => onTap(e)}
                 >
+                  <button
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      onToggleSelect(e.id);
+                    }}
+                    title={sel ? "Remove from selection" : "Select for bulk actions"}
+                    className={cn(
+                      "grid h-5 w-5 shrink-0 place-items-center rounded-full border text-[11px] font-bold transition",
+                      sel
+                        ? "border-[var(--accent)] bg-[var(--accent)] text-white"
+                        : "border-border bg-surface text-transparent hover:border-[var(--accent)]",
+                    )}
+                  >
+                    ✓
+                  </button>
                   <span
                     className="h-8 w-1.5 shrink-0 rounded-full"
                     style={{ background: EVENT_TYPES[e.event_type].color }}
@@ -461,10 +671,10 @@ function ListView({
                       ev.stopPropagation();
                       onDelete(e);
                     }}
-                    className="rounded p-1 text-muted transition hover:text-red-600"
+                    className="rounded p-1.5 text-muted transition hover:text-red-600"
                     title="Delete"
                   >
-                    ×
+                    <Trash2 size={14} />
                   </button>
                 </div>
               );

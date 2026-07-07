@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { useConfirm, useToast } from "@/components/ui/Feedback";
 import { PriorityPill } from "@/components/conference/Priority";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
 import { buildOutlookInvite } from "@/lib/conference/exports";
@@ -41,6 +42,8 @@ export function EventPeek({
   onDelete: (e: EventWithPeople) => void;
 }) {
   const { conference, attendees, me, myAttendee, canManage } = useConferenceCtx();
+  const confirm = useConfirm();
+  const toast = useToast();
   if (!event) return null;
 
   const tz = conference.timezone;
@@ -150,11 +153,11 @@ export function EventPeek({
                     email: me?.email || myAttendee?.email || "organizer@omni.local",
                   });
                   if (count === 0) {
-                    alert("None of the assigned people have an email on the roster — nothing to invite.");
+                    toast("error", "None of the assigned people have an email on the roster — nothing to invite.");
                     return;
                   }
                   downloadICS(`Invite — ${event.title}`, ics);
-                  alert(`Meeting request created with ${count} attendee${count === 1 ? "" : "s"}. Open it in Outlook to review and send.`);
+                  toast("success", `Meeting request created with ${count} attendee${count === 1 ? "" : "s"} — open it in Outlook to review and send.`);
                 }}
               >
                 <CalendarPlus size={13} /> Send invite
@@ -164,8 +167,15 @@ export function EventPeek({
               size="sm"
               variant="ghost"
               className="!text-red-600 hover:!bg-red-50"
-              onClick={() => {
-                if (confirm(`Delete "${event.title}"? Other assignees will be notified.`)) {
+              onClick={async () => {
+                if (
+                  await confirm({
+                    title: `Delete "${event.title}"?`,
+                    message: "Other assignees will be notified.",
+                    confirmLabel: "Delete",
+                    danger: true,
+                  })
+                ) {
                   onDelete(event);
                 }
               }}

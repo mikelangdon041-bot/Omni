@@ -17,6 +17,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { useConfirm } from "@/components/ui/Feedback";
 import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -28,6 +29,7 @@ import { fmtTime, initials } from "@/lib/conference/utils";
 const supabase = createClient();
 
 export default function TeamPage() {
+  const confirm = useConfirm();
   const {
     conference,
     attendees,
@@ -80,7 +82,14 @@ export default function TeamPage() {
         return;
       }
     }
-    if (confirm(`Remove ${a.name} from this conference?`)) {
+    if (
+      await confirm({
+        title: `Remove ${a.name} from this conference?`,
+        message: "They come off the roster; their past notes and insights stay.",
+        confirmLabel: "Remove",
+        danger: true,
+      })
+    ) {
       await removeAttendee(a.id);
     }
   }

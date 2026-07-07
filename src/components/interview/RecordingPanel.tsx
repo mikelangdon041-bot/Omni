@@ -5,6 +5,7 @@ import { RefreshCw, Pencil, Trash2 } from "lucide-react";
 import { StatusChip } from "@/components/StatusChip";
 import { SummaryTree } from "@/components/SummaryTree";
 import { RichText } from "@/components/ui/RichText";
+import { useConfirm } from "@/components/ui/Feedback";
 import { parseOutline, type SummaryNodeRow } from "@/lib/summaryTree";
 import { createClient } from "@/lib/supabase/client";
 
@@ -44,6 +45,7 @@ export function RecordingPanel({
   embedded?: boolean;
   onDeleted?: () => void;
 }) {
+  const confirm = useConfirm();
   const [recording, setRecording] = useState<Recording | null>(initialRecording ?? null);
   const [nodes, setNodes] = useState<SummaryNodeRow[]>(initialNodes);
   const [loading, setLoading] = useState(!initialRecording);
@@ -217,7 +219,13 @@ export function RecordingPanel({
   }
 
   async function del() {
-    if (!confirm("Delete this recording?")) return;
+    const ok = await confirm({
+      title: "Delete this recording?",
+      message: "The transcript and summary are removed too.",
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
     await supabase.from("recordings").delete().eq("id", id);
     onDeleted?.();
   }

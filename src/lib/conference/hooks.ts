@@ -481,6 +481,40 @@ export function useEvents(conferenceId: string | null, userId?: string | null) {
     await supabase.from("conf_events").update({ cancelled: true }).in("id", ids);
   }, []);
 
+  // Assign one person to many events (skipping events that already have them).
+  const bulkAssign = useCallback(
+    async (ids: string[], attendeeId: string) => {
+      if (!conferenceId || !ids.length) return;
+      const missing = ids.filter((id) => {
+        const ev = events.find((e) => e.id === id);
+        return ev && !ev.assignments.some((a) => a.attendee_id === attendeeId);
+      });
+      if (!missing.length) return;
+      await supabase.from("conf_event_assignments").insert(
+        missing.map((event_id) => ({
+          conference_id: conferenceId,
+          event_id,
+          attendee_id: attendeeId,
+        })),
+      );
+      await refresh();
+    },
+    [conferenceId, events, refresh],
+  );
+
+  const bulkUnassign = useCallback(
+    async (ids: string[], attendeeId: string) => {
+      if (!ids.length) return;
+      await supabase
+        .from("conf_event_assignments")
+        .delete()
+        .in("event_id", ids)
+        .eq("attendee_id", attendeeId);
+      await refresh();
+    },
+    [refresh],
+  );
+
   const setPriority = useCallback(
     async (
       id: string,
@@ -511,7 +545,18 @@ export function useEvents(conferenceId: string | null, userId?: string | null) {
     [conferenceId],
   );
 
-  return { events, loading, refresh, save, remove, bulkUpdate, bulkRemove, setPriority };
+  return {
+    events,
+    loading,
+    refresh,
+    save,
+    remove,
+    bulkUpdate,
+    bulkRemove,
+    bulkAssign,
+    bulkUnassign,
+    setPriority,
+  };
 }
 
 export function useEvent(eventId: string) {

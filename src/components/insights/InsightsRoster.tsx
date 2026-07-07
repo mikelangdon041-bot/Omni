@@ -15,6 +15,7 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { useConfirm } from "@/components/ui/Feedback";
 import { Avatar } from "@/components/ui/Avatar";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { EngagementRing } from "@/components/ui/EngagementRing";
@@ -57,6 +58,7 @@ const SORT_LABELS: Record<SortKey, string> = {
 };
 
 export function InsightsRoster({ userId }: { userId: string | null }) {
+  const confirm = useConfirm();
   const { orgId } = useOrgProfile();
   const { template, questions, options, loading: defLoading } =
     useSurveyDefinition();
@@ -275,8 +277,15 @@ export function InsightsRoster({ userId }: { userId: string | null }) {
               tree={tree}
               answerMap={answersToMap(answersByResponse.get(r.id) || [])}
               comp={compByResponse.get(r.id) || { answered: 0, total: 0, pct: 0 }}
-              onDelete={() => {
-                if (confirm(`Remove ${kolFullName(r.kol)} from the survey? Their answers will be deleted.`))
+              onDelete={async () => {
+                if (
+                  await confirm({
+                    title: `Remove ${kolFullName(r.kol)} from the survey?`,
+                    message: "Their answers will be deleted.",
+                    confirmLabel: "Remove",
+                    danger: true,
+                  })
+                )
                   removeResponse(r.id);
               }}
             />

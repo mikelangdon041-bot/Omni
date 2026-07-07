@@ -18,6 +18,7 @@ import {
   Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { useConfirm } from "@/components/ui/Feedback";
 import { AutoRichField } from "@/components/ui/AutoRichField";
 import { RichTextView } from "@/components/ui/RichText";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
@@ -45,6 +46,7 @@ export default function PosterDetailPage({
   params: Promise<{ posterId: string }>;
 }) {
   const { posterId } = use(params);
+  const confirm = useConfirm();
   const { conference, attendees, me, canManage } = useConferenceCtx();
   const { posters, loading, save, remove } = usePosters(conference.id);
   const { notes, upsertMine } = usePosterNotes(conference.id, posterId);
@@ -186,7 +188,16 @@ export default function PosterDetailPage({
               variant="ghost"
               className="!text-red-600 hover:!bg-red-50"
               onClick={async () => {
-                if (confirm(`Delete "${poster.title}"${poster.is_session ? " and its sub-posters" : ""}?`)) {
+                if (
+                  await confirm({
+                    title: `Delete "${poster.title}"?`,
+                    message: poster.is_session
+                      ? "Its sub-posters are deleted with it."
+                      : undefined,
+                    confirmLabel: "Delete",
+                    danger: true,
+                  })
+                ) {
                   await remove(poster.id);
                   window.history.back();
                 }
@@ -294,7 +305,14 @@ export default function PosterDetailPage({
                 />
                 <button
                   onClick={async () => {
-                    if (me && confirm("Delete this photo?")) {
+                    if (
+                      me &&
+                      (await confirm({
+                        title: "Delete this photo?",
+                        confirmLabel: "Delete",
+                        danger: true,
+                      }))
+                    ) {
                       await upsertMine(me.id, {
                         images: (myNote?.images || []).filter((u) => u !== url),
                       });
@@ -383,7 +401,14 @@ export default function PosterDetailPage({
                   <p className="text-sm font-medium">{ins.title}</p>
                   <button
                     onClick={async () => {
-                      if (confirm("Delete this insight?")) await insightsApi.remove(ins.id);
+                      if (
+                        await confirm({
+                          title: "Delete this insight?",
+                          confirmLabel: "Delete",
+                          danger: true,
+                        })
+                      )
+                        await insightsApi.remove(ins.id);
                     }}
                     className="rounded p-1 text-muted hover:text-red-600"
                   >

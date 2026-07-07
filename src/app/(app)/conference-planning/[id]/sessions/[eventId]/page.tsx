@@ -9,6 +9,7 @@ import { Loading, ProgressBar } from "@/components/conference/Bits";
 import Link from "next/link";
 import { Clock, ImagePlus, MapPin, Pencil, Sparkles, Trash2, Users } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { useConfirm } from "@/components/ui/Feedback";
 import { AutoRichField } from "@/components/ui/AutoRichField";
 import { RichTextView } from "@/components/ui/RichText";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
@@ -43,6 +44,7 @@ export default function SessionDetailPage({
   params: Promise<{ eventId: string }>;
 }) {
   const { eventId } = use(params);
+  const confirm = useConfirm();
   const { conference, attendees, me, canManage } = useConferenceCtx();
   const { events, save, setPriority, loading } = useEvents(conference.id, me?.id);
   const event = useMemo(
@@ -217,7 +219,14 @@ export default function SessionDetailPage({
                   />
                   <button
                     onClick={async () => {
-                      if (me && confirm("Delete this photo?")) {
+                      if (
+                        me &&
+                        (await confirm({
+                          title: "Delete this photo?",
+                          confirmLabel: "Delete",
+                          danger: true,
+                        }))
+                      ) {
                         await upsertMine(me.id, {
                           images: allImages.filter((u) => u !== url),
                         });
@@ -321,7 +330,14 @@ export default function SessionDetailPage({
                   <p className="text-sm font-medium">{ins.title}</p>
                   <button
                     onClick={async () => {
-                      if (confirm("Delete this insight?")) await insightsApi.remove(ins.id);
+                      if (
+                        await confirm({
+                          title: "Delete this insight?",
+                          confirmLabel: "Delete",
+                          danger: true,
+                        })
+                      )
+                        await insightsApi.remove(ins.id);
                     }}
                     className="rounded p-1 text-muted hover:text-red-600"
                   >

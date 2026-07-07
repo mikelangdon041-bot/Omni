@@ -43,6 +43,7 @@ import {
 } from "@/lib/conference/hooks";
 import type { Attendee, Conference } from "@/lib/conference/types";
 import { conferenceStatus, daysAway, fmtDateRange } from "@/lib/conference/utils";
+import { setConfHeader } from "@/lib/conference/headerStore";
 
 interface ConferenceCtx {
   conference: Conference;
@@ -141,6 +142,19 @@ export function ConferenceProvider({
     else void recountFood();
   });
 
+  // Publish the conference identity to the global AppHeader (it renders the
+  // name + status badge in the top bar, so this shell needs no name row).
+  useEffect(() => {
+    if (!conference) return;
+    setConfHeader({
+      id: conference.id,
+      name: conference.name,
+      status: conferenceStatus(conference),
+      daysAway: daysAway(conference),
+    });
+    return () => setConfHeader(null);
+  }, [conference]);
+
   const myAttendee = useMemo(
     () => attendees.find((a) => a.user_id === me?.id) || null,
     [attendees, me],
@@ -192,59 +206,14 @@ export function ConferenceProvider({
     const rest = pathname.slice(base.length).replace(/^\//, "");
     return rest.split("/")[0] || "";
   })();
-  const status = conferenceStatus(conference);
 
   return (
     <Ctx.Provider value={value}>
-      {/* Compact conference strip — full-bleed and flush under the app top
-          bar so the two read as one piece of chrome (no floating banner). */}
-      <div className="-mx-3 -mt-5 mb-5 border-b border-border bg-surface px-3 sm:-mx-8 sm:-mt-8 sm:px-8">
-        <div className="flex items-center gap-2 pt-2.5">
-          <Link href={base} className="flex min-w-0 items-center gap-2" title="Conference overview">
-            <span className="truncate text-[15px] font-bold tracking-tight">
-              {conference.name}
-            </span>
-            {status === "live" ? (
-              <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
-                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
-                LIVE
-              </span>
-            ) : status === "upcoming" ? (
-              <span className="shrink-0 rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[10px] font-semibold text-[var(--accent)]">
-                {daysAway(conference)}d away
-              </span>
-            ) : null}
-          </Link>
-          <span className="hidden min-w-0 flex-wrap items-center gap-x-3 text-xs text-muted sm:flex">
-            <span className="inline-flex items-center gap-1">
-              <CalendarDays size={12} /> {fmtDateRange(conference)}
-            </span>
-            {conference.location && (
-              <span className="inline-flex items-center gap-1">
-                <MapPin size={12} /> {conference.location}
-              </span>
-            )}
-          </span>
-          <span className="flex-1" />
-          <button
-            onClick={() => setShowAnnounce(true)}
-            className="rounded-lg p-2 text-muted transition hover:bg-canvas hover:text-ink"
-            title="Announce to the team"
-          >
-            <Megaphone size={16} />
-          </button>
-          <Link
-            href="/conference-planning"
-            className="rounded-lg p-2 text-muted transition hover:bg-canvas hover:text-ink"
-            title="Switch conference"
-          >
-            <ArrowLeftRight size={16} />
-          </Link>
-        </div>
-
-        {/* Tab bar — icons-only on phones (all tabs fit, no scrolling);
-            icon + label from md up. */}
-        <div className="flex pb-px pt-0.5 md:gap-1">
+      {/* Single-row conference strip: tabs + meta + actions, full-bleed and
+          flush under the app bar (the conference NAME lives in the app bar
+          itself via the header store — one merged piece of chrome). */}
+      <div className="-mx-3 -mt-5 mb-5 flex items-center gap-1 border-b border-border bg-surface px-3 sm:-mx-8 sm:-mt-8 sm:px-8">
+        <div className="flex min-w-0 flex-1 pb-px pt-0.5 md:gap-1">
         {TABS.map((t) => {
           const href = t.seg ? `${base}/${t.seg}` : base;
           const active = activeSeg === t.seg;
@@ -272,6 +241,30 @@ export function ConferenceProvider({
           );
         })}
         </div>
+        <span className="hidden shrink-0 items-center gap-x-3 pl-2 text-xs text-muted lg:flex">
+          <span className="inline-flex items-center gap-1">
+            <CalendarDays size={12} /> {fmtDateRange(conference)}
+          </span>
+          {conference.location && (
+            <span className="inline-flex items-center gap-1">
+              <MapPin size={12} /> {conference.location}
+            </span>
+          )}
+        </span>
+        <button
+          onClick={() => setShowAnnounce(true)}
+          className="shrink-0 rounded-lg p-2 text-muted transition hover:bg-canvas hover:text-ink"
+          title="Announce to the team"
+        >
+          <Megaphone size={15} />
+        </button>
+        <Link
+          href="/conference-planning"
+          className="shrink-0 rounded-lg p-2 text-muted transition hover:bg-canvas hover:text-ink"
+          title="Switch conference"
+        >
+          <ArrowLeftRight size={15} />
+        </Link>
       </div>
 
       {children}

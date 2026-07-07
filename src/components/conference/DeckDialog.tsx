@@ -18,6 +18,7 @@ import {
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Input";
+import { useConfirm } from "@/components/ui/Feedback";
 import { cn } from "@/lib/ui";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
 import { uploadConferenceFile } from "@/lib/conference/hooks";
@@ -66,6 +67,7 @@ interface TemplateRow {
 
 export function DeckDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { conference, me } = useConferenceCtx();
+  const confirm = useConfirm();
   const tz = conference.timezone;
 
   const [loading, setLoading] = useState(true);
@@ -422,7 +424,12 @@ export function DeckDialog({ open, onClose }: { open: boolean; onClose: () => vo
                   theme={themeFor(t.id)}
                   onClick={() => setTemplateId(t.id)}
                   onDelete={async () => {
-                    if (!confirm(`Delete template "${t.name}"?`)) return;
+                    const ok = await confirm({
+                      title: `Delete template "${t.name}"?`,
+                      confirmLabel: "Delete",
+                      danger: true,
+                    });
+                    if (!ok) return;
                     await supabase.from("conf_deck_templates").delete().eq("id", t.id);
                     setTemplates((prev) => prev.filter((x) => x.id !== t.id));
                     if (templateId === t.id) setTemplateId("");

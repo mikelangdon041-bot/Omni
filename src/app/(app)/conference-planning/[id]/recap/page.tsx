@@ -10,6 +10,7 @@ import { createClient } from "@/lib/supabase/client";
 import { Images, Landmark, Mic2, NotebookPen, Presentation, Sparkles } from "lucide-react";
 import { cn } from "@/lib/ui";
 import { Button } from "@/components/ui/Button";
+import { useToast } from "@/components/ui/Feedback";
 import { ProgressBar } from "@/components/conference/Bits";
 import { DeckDialog } from "@/components/conference/DeckDialog";
 import { exportPhotosZip } from "@/lib/conference/exports";
@@ -39,6 +40,7 @@ import {
 const supabase = createClient();
 
 export default function RecapPage() {
+  const toast = useToast();
   const { conference, attendees, me, canManage } = useConferenceCtx();
   const { events } = useEvents(conference.id, me?.id);
   const { posters } = usePosters(conference.id);
@@ -70,7 +72,7 @@ export default function RecapPage() {
     ];
     if (!urls.length) {
       setZipProgress("");
-      alert("No photos have been uploaded yet.");
+      toast("info", "No photos have been uploaded yet.");
       return;
     }
     await exportPhotosZip(urls, `${conference.name} — photos`, (done, total) => {

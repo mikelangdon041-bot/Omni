@@ -25,6 +25,7 @@ import {
   exportInsightsXlsx,
 } from "@/lib/conference/exports";
 import { Button } from "@/components/ui/Button";
+import { useConfirm, useToast } from "@/components/ui/Feedback";
 import { Modal } from "@/components/ui/Modal";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -59,6 +60,7 @@ import {
 } from "@/lib/conference/utils";
 
 export default function InsightsPage() {
+  const confirm = useConfirm();
   const { conference, attendees, me } = useConferenceCtx();
   const insightsApi = useInsights(conference.id);
   const { parents, childrenOf, loading, add, update, remove } = insightsApi;
@@ -355,7 +357,14 @@ export default function InsightsPage() {
                             />
                             <button
                               onClick={async () => {
-                                if (confirm("Delete this insight?")) await remove(i.id);
+                                if (
+                                  await confirm({
+                                    title: "Delete this insight?",
+                                    confirmLabel: "Delete",
+                                    danger: true,
+                                  })
+                                )
+                                  await remove(i.id);
                               }}
                               className="rounded p-1 text-muted hover:text-red-600"
                             >
@@ -570,6 +579,7 @@ function DailyRollupModal({
   childrenOf: (parentId: string) => Insight[];
 }) {
   const { conference } = useConferenceCtx();
+  const toast = useToast();
   const summaryRow = useDailyRow<DailySummary>("conf_daily_summaries", conference.id, day);
   const boothRow = useDailyRow<BoothLog>("conf_booth_logs", conference.id, day);
   const [guidance, setGuidance] = useState("");
@@ -681,7 +691,7 @@ function DailyRollupModal({
                   await navigator.clipboard.writeText(
                     `${subject}\n\n${summaryRow.row!.content}`,
                   );
-                  alert("Digest copied — paste it into an email.");
+                  toast("success", "Digest copied — paste it into an email.");
                 }}
               >
                 Copy email digest

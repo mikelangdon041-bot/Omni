@@ -7,6 +7,7 @@ import { LayoutGrid, Settings, LogOut, X, Shield } from "lucide-react";
 import { MODULES, moduleForPath } from "@/lib/modules";
 import { NotificationBell } from "@/components/NotificationBell";
 import { TaskBar } from "@/components/TaskBar";
+import { useConfHeader } from "@/lib/conference/headerStore";
 
 export function AppHeader({
   username,
@@ -47,6 +48,10 @@ export function AppHeader({
   }
 
   const active = moduleForPath(pathname);
+  // Inside a conference, the top bar carries the conference identity instead
+  // of repeating the module name — one bar, no second banner.
+  const conf = useConfHeader();
+  const showConf = !!conf && pathname.startsWith("/conference-planning/");
 
   return (
     <>
@@ -54,17 +59,45 @@ export function AppHeader({
         {/* Left: just the app you're in (click → its home). Switch apps via the
             launcher on the right. */}
         {active.slug !== "" ? (
-          <Link href={active.href} className="flex items-center gap-2.5">
-            <span
-              className="grid h-8 w-8 place-items-center rounded-lg text-white shadow-sm"
-              style={{
-                backgroundImage: `linear-gradient(135deg, ${active.theme.gradFrom}, ${active.theme.gradTo})`,
-              }}
-            >
-              <active.icon size={17} />
-            </span>
-            <span className="font-semibold tracking-tight">{active.label}</span>
-          </Link>
+          <span className="flex min-w-0 items-center gap-2.5">
+            <Link href={active.href} title={active.label} className="shrink-0">
+              <span
+                className="grid h-8 w-8 place-items-center rounded-lg text-white shadow-sm"
+                style={{
+                  backgroundImage: `linear-gradient(135deg, ${active.theme.gradFrom}, ${active.theme.gradTo})`,
+                }}
+              >
+                <active.icon size={17} />
+              </span>
+            </Link>
+            {showConf && conf ? (
+              <Link
+                href={`/conference-planning/${conf.id}`}
+                className="flex min-w-0 items-center gap-2"
+                title="Conference overview"
+              >
+                <span className="truncate font-semibold tracking-tight">
+                  {conf.name}
+                </span>
+                {conf.status === "live" ? (
+                  <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+                    LIVE
+                  </span>
+                ) : conf.status === "upcoming" ? (
+                  <span className="shrink-0 rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-semibold text-accent">
+                    {conf.daysAway}d away
+                  </span>
+                ) : null}
+              </Link>
+            ) : (
+              <Link href={active.href} className="min-w-0">
+                <span className="block truncate font-semibold tracking-tight">
+                  {active.label}
+                </span>
+              </Link>
+            )}
+          </span>
         ) : (
           <Link href="/" className="font-semibold tracking-tight">
             Omni

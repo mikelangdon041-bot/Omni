@@ -11,6 +11,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronDown, Plus, Search, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { useConfirm } from "@/components/ui/Feedback";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { cn } from "@/lib/ui";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
@@ -27,6 +28,7 @@ import {
 
 export default function SessionsPage() {
   const router = useRouter();
+  const confirm = useConfirm();
   const { conference, attendees, me } = useConferenceCtx();
   const { events, loading, save, remove, bulkUpdate, bulkRemove } = useEvents(
     conference.id,
@@ -72,7 +74,13 @@ export default function SessionsPage() {
 
   async function bulkDelete() {
     const n = selectedIds.size;
-    if (!confirm(`Delete ${n} session${n === 1 ? "" : "s"}?`)) return;
+    const ok = await confirm({
+      title: `Delete ${n} session${n === 1 ? "" : "s"}?`,
+      message: "They disappear from everyone's schedule.",
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
     await bulkRemove([...selectedIds]);
     setSelectedIds(new Set());
   }
@@ -293,7 +301,14 @@ export default function SessionsPage() {
                           </Link>
                           <button
                             onClick={async () => {
-                              if (confirm(`Delete "${e.title}"?`)) await remove(e.id);
+                              if (
+                                await confirm({
+                                  title: `Delete "${e.title}"?`,
+                                  confirmLabel: "Delete",
+                                  danger: true,
+                                })
+                              )
+                                await remove(e.id);
                             }}
                             className="mr-3 rounded p-1.5 text-muted opacity-0 transition hover:text-red-600 group-hover:opacity-100"
                             title="Delete session"

@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { exportKolDocx } from "@/lib/conference/exports";
 import { Button } from "@/components/ui/Button";
+import { useConfirm } from "@/components/ui/Feedback";
 import { Input } from "@/components/ui/Input";
 import { AutoRichField } from "@/components/ui/AutoRichField";
 import { Avatar } from "@/components/ui/Avatar";
@@ -45,6 +46,7 @@ export default function ContactDetailPage({
   params: Promise<{ contactId: string }>;
 }) {
   const { contactId } = use(params);
+  const confirm = useConfirm();
   const { conference } = useConferenceCtx();
   const { contact, loading, update } = useContact(contactId);
   const { meetings, add: addMeeting, update: updateMeeting, remove: removeMeeting } =
@@ -307,7 +309,14 @@ export default function ContactDetailPage({
                   <p className="text-sm font-medium">{ins.title}</p>
                   <button
                     onClick={async () => {
-                      if (confirm("Delete this insight?")) await insightsApi.remove(ins.id);
+                      if (
+                        await confirm({
+                          title: "Delete this insight?",
+                          confirmLabel: "Delete",
+                          danger: true,
+                        })
+                      )
+                        await insightsApi.remove(ins.id);
                     }}
                     className="rounded p-1 text-muted hover:text-red-600"
                   >
@@ -568,6 +577,7 @@ function MeetingsSection({
   removeMeeting: (id: string) => Promise<void>;
   meetingRefs: React.MutableRefObject<Record<string, HTMLDivElement | null>>;
 }) {
+  const confirm = useConfirm();
   const [showAdd, setShowAdd] = useState(false);
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
@@ -639,7 +649,14 @@ function MeetingsSection({
               </p>
               <button
                 onClick={async () => {
-                  if (confirm("Delete this meeting note?")) await removeMeeting(m.id);
+                  if (
+                    await confirm({
+                      title: "Delete this meeting note?",
+                      confirmLabel: "Delete",
+                      danger: true,
+                    })
+                  )
+                    await removeMeeting(m.id);
                 }}
                 className="rounded p-1 text-muted hover:text-red-600"
               >

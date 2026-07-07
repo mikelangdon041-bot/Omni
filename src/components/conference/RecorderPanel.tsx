@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Input";
+import { useConfirm } from "@/components/ui/Feedback";
 import { ProgressBar } from "@/components/conference/Bits";
 import { cn } from "@/lib/ui";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
@@ -43,6 +44,7 @@ export function RecorderPanel({
   consentNotice?: boolean;
   defaultTitle: string;
 }) {
+  const confirm = useConfirm();
   const { conference, attendees } = useConferenceCtx();
   const { recordings, add, remove } = useRecordings(conference.id, {
     eventId,
@@ -403,7 +405,15 @@ export function RecorderPanel({
                 </button>
                 <button
                   onClick={async () => {
-                    if (confirm("Delete this recording?")) await remove(r.id);
+                    if (
+                      await confirm({
+                        title: "Delete this recording?",
+                        message: "The transcript and summary are removed too.",
+                        confirmLabel: "Delete",
+                        danger: true,
+                      })
+                    )
+                      await remove(r.id);
                   }}
                   className="rounded p-1 text-muted hover:text-red-600"
                 >
