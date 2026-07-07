@@ -190,60 +190,55 @@ export function ConferenceProvider({
 
   return (
     <Ctx.Provider value={value}>
-      {/* Header banner */}
-      <div className="omni-hero relative mb-4 overflow-hidden rounded-2xl px-5 py-4 text-white shadow-sm sm:px-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <Link href={base} className="block">
-              <h1 className="flex items-center gap-2 truncate text-lg font-bold tracking-tight sm:text-xl">
-                {conference.name}
-                {status === "live" ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-400/25 px-2 py-0.5 text-[11px] font-bold text-emerald-100">
-                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-300" />
-                    LIVE
-                  </span>
-                ) : status === "upcoming" ? (
-                  <span className="rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-semibold">
-                    {daysAway(conference)}d away
-                  </span>
-                ) : null}
-              </h1>
-            </Link>
-            <p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-white/80">
-              <span className="inline-flex items-center gap-1">
-                <CalendarDays size={12} /> {fmtDateRange(conference)}
+      {/* Compact conference strip — full-bleed and flush under the app top
+          bar so the two read as one piece of chrome (no floating banner). */}
+      <div className="-mx-3 -mt-5 mb-5 border-b border-border bg-surface px-3 sm:-mx-8 sm:-mt-8 sm:px-8">
+        <div className="flex items-center gap-2 pt-2.5">
+          <Link href={base} className="flex min-w-0 items-center gap-2" title="Conference overview">
+            <span className="truncate text-[15px] font-bold tracking-tight">
+              {conference.name}
+            </span>
+            {status === "live" ? (
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+                LIVE
               </span>
-              {conference.location && (
-                <span className="inline-flex items-center gap-1">
-                  <MapPin size={12} /> {conference.location}
-                </span>
-              )}
-              <span className="text-white/60">{conference.timezone.replace(/_/g, " ")}</span>
-            </p>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <button
-              onClick={() => setShowAnnounce(true)}
-              className="rounded-lg bg-white/15 p-2 backdrop-blur-sm transition hover:bg-white/25"
-              title="Announce to the team"
-            >
-              <Megaphone size={16} />
-            </button>
-            <Link
-              href="/conference-planning"
-              className="inline-flex items-center gap-1.5 rounded-lg bg-white/15 px-2.5 py-2 text-xs font-medium backdrop-blur-sm transition hover:bg-white/25"
-              title="Switch conference"
-            >
-              <ArrowLeftRight size={14} />
-              <span className="hidden sm:inline">Switch</span>
-            </Link>
-          </div>
+            ) : status === "upcoming" ? (
+              <span className="shrink-0 rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[10px] font-semibold text-[var(--accent)]">
+                {daysAway(conference)}d away
+              </span>
+            ) : null}
+          </Link>
+          <span className="hidden min-w-0 flex-wrap items-center gap-x-3 text-xs text-muted sm:flex">
+            <span className="inline-flex items-center gap-1">
+              <CalendarDays size={12} /> {fmtDateRange(conference)}
+            </span>
+            {conference.location && (
+              <span className="inline-flex items-center gap-1">
+                <MapPin size={12} /> {conference.location}
+              </span>
+            )}
+          </span>
+          <span className="flex-1" />
+          <button
+            onClick={() => setShowAnnounce(true)}
+            className="rounded-lg p-2 text-muted transition hover:bg-canvas hover:text-ink"
+            title="Announce to the team"
+          >
+            <Megaphone size={16} />
+          </button>
+          <Link
+            href="/conference-planning"
+            className="rounded-lg p-2 text-muted transition hover:bg-canvas hover:text-ink"
+            title="Switch conference"
+          >
+            <ArrowLeftRight size={16} />
+          </Link>
         </div>
-      </div>
 
-      {/* Tab bar — icons-only on phones (all tabs fit, no scrolling);
-          icon + label from md up. */}
-      <div className="mb-6 flex border-b border-border pb-px md:gap-1">
+        {/* Tab bar — icons-only on phones (all tabs fit, no scrolling);
+            icon + label from md up. */}
+        <div className="flex pb-px pt-0.5 md:gap-1">
         {TABS.map((t) => {
           const href = t.seg ? `${base}/${t.seg}` : base;
           const active = activeSeg === t.seg;
@@ -270,6 +265,7 @@ export function ConferenceProvider({
             </Link>
           );
         })}
+        </div>
       </div>
 
       {children}

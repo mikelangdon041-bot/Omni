@@ -719,7 +719,10 @@ export function ImportScheduleModal({
           <div className="max-h-80 space-y-3 overflow-y-auto pr-1">
             {groups.map((g) => (
               <div key={g.type} className="space-y-2">
-                <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 rounded-lg bg-canvas px-2.5 py-1.5">
+                {/* Not sticky on purpose: a sticky header floats over rows as
+                    you scroll and taps meant for a row's own type dropdown hit
+                    the group-wide one instead. */}
+                <div className="flex flex-wrap items-center gap-2 rounded-lg bg-canvas px-2.5 py-1.5">
                   <span
                     className="h-2.5 w-2.5 shrink-0 rounded-full"
                     style={{ background: EVENT_TYPES[g.type].color }}
@@ -766,11 +769,11 @@ export function ImportScheduleModal({
                       e.target.value &&
                       applyType(g.rows.map((r) => r.key), e.target.value)
                     }
-                    className="rounded-md border border-border bg-surface px-1.5 py-1 text-[11px] font-medium outline-none"
-                    title={`Change all ${g.rows.length} to another type`}
+                    className="rounded-md border border-dashed border-border bg-surface px-1.5 py-1 text-[11px] font-medium text-muted outline-none"
+                    title={`Change all ${g.rows.length} rows in this group to another type`}
                   >
                     <option value="" disabled>
-                      These are all…
+                      Change whole group ({g.rows.length})…
                     </option>
                     <TypeOptions />
                   </select>

@@ -129,6 +129,38 @@ Rules:
       });
     }
 
+    if (action === "extract_conference_meta") {
+      // Read a workbook/schedule excerpt and pull out the conference identity
+      // to prefill the "create conference" form.
+      const text: string = (body?.text || "").slice(0, 20000);
+      if (!text.trim()) return NextResponse.json({ meta: {} });
+
+      const res = await openai().chat.completions.create({
+        model: MODEL,
+        temperature: 0,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content: `You read an excerpt of a conference planning workbook or schedule document and extract the conference's identity for a "create conference" form.
+
+Return ONLY JSON:
+{"name":"...","location":"...","venue_address":"...","start_date":"YYYY-MM-DD","end_date":"YYYY-MM-DD","timezone":"IANA zone or \\"\\""}
+
+Rules:
+- "name": the conference/congress/meeting name, including the year when stated (e.g. "ENDO 2026"). The workbook file name and sheet names often carry it. "" if truly absent.
+- "location": city + state/country when stated. "venue_address": only an actual venue/street address that appears in the source.
+- "start_date"/"end_date": the overall first and last schedule day found. Resolve formats like "6/13/26" or "Saturday, June 13th" using any year present anywhere in the source; "" when unresolvable.
+- "timezone": an IANA zone (e.g. "America/Chicago") ONLY when the host city is clearly identifiable; otherwise "".
+- Never invent values — leave fields "" instead of guessing.`,
+          },
+          { role: "user", content: text },
+        ],
+      });
+      const parsed = JSON.parse(res.choices[0]?.message?.content || "{}");
+      return NextResponse.json({ meta: parsed });
+    }
+
     if (action === "parse_schedule") {
       const text: string = (body?.text || "").slice(0, 80000);
       const guidance: string = body?.guidance || "";
