@@ -15,19 +15,35 @@ export interface CompletedMeeting {
   followUp: DueDatePreset | "none";
 }
 
+const MEETING_METHODS = ["in_person", "video_call", "phone"];
+
+// datetime-local wants local time, not the UTC slice of toISOString().
+function toLocalInput(iso?: string): string {
+  const d = iso ? new Date(iso) : new Date();
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 16);
+}
+
 export function CompleteMeetingModal({
   open,
   onClose,
   meetingNumber,
   onComplete,
+  defaultDate,
+  defaultMethod,
 }: {
   open: boolean;
   onClose: () => void;
   meetingNumber: number;
   onComplete: (m: CompletedMeeting) => Promise<unknown>;
+  /** Prefill from the scheduled activity (ISO date). */
+  defaultDate?: string;
+  defaultMethod?: string;
 }) {
-  const [method, setMethod] = useState("in_person");
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 16));
+  const [method, setMethod] = useState(
+    defaultMethod && MEETING_METHODS.includes(defaultMethod) ? defaultMethod : "in_person",
+  );
+  const [date, setDate] = useState(() => toLocalInput(defaultDate));
   const [discussed, setDiscussed] = useState("");
   const [missed, setMissed] = useState("");
   const [followUpActions, setFollowUpActions] = useState("");

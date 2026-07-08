@@ -29,7 +29,7 @@ function kolHaystack(k: KOL): string {
     k.institution, k.address, k.email, k.phone, k.tier, k.list_name,
     k.society_associations, k.leadership_appointments, k.publications,
     k.areas_of_interest, k.potential_collaborations, k.primary_objective,
-    k.backup_questions, k.other_info, k.how_met_other,
+    k.backup_questions, k.other_info, k.how_met_other, k.trials_interest_notes,
     RELATIONSHIP_LABELS[k.relationship_level],
   ];
   return fields.join(" ").replace(/<[^>]+>/g, " ").toLowerCase();

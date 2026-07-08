@@ -3,8 +3,9 @@
 import { useState } from "react";
 import { Pencil } from "lucide-react";
 import type { KOL } from "@/lib/territory/types";
+import { HOW_MET_LABELS } from "@/lib/territory/utils";
 import { Button } from "@/components/territory/ui/Button";
-import { Input } from "@/components/territory/ui/Input";
+import { Input, Select } from "@/components/territory/ui/Input";
 import { RichText, RichTextView } from "@/components/ui/RichText";
 
 // Editable text fields. Contact info now lives on the header card; this tab is
@@ -14,6 +15,7 @@ const SECTIONS: { title: string; fields: { key: keyof KOL; label: string; long?:
     title: "Profile",
     fields: [
       { key: "tier", label: "Tier" },
+      { key: "how_met", label: "How did you meet?" },
       { key: "society_associations", label: "Societies / associations", long: true },
       { key: "leadership_appointments", label: "Leadership appointments", long: true },
       { key: "publications", label: "Publications", long: true },
@@ -106,6 +108,48 @@ export function ProfileSection({
             {section.fields.map((field) => {
               const value = (draft[field.key] ?? kol[field.key] ?? "") as string;
               const span = field.long ? "sm:col-span-2" : "";
+              // "How did you meet?" is a fixed dropdown (plus a free-text
+              // field when "Other" is picked), not a plain input.
+              if (field.key === "how_met") {
+                const howMet = value || "other";
+                const other = (draft.how_met_other ?? kol.how_met_other ?? "") as string;
+                if (!editing) {
+                  // Everyone defaults to "other"; only show once it says something.
+                  if (howMet === "other" && !other) return null;
+                  return (
+                    <div key={field.key} className={span}>
+                      <p className="text-xs text-muted">{field.label}</p>
+                      <p className="text-sm text-ink">
+                        {howMet === "other" && other
+                          ? `Other — ${other}`
+                          : HOW_MET_LABELS[howMet] || howMet}
+                      </p>
+                    </div>
+                  );
+                }
+                return (
+                  <div key={field.key} className={`space-y-2 ${span}`}>
+                    <Select
+                      label={field.label}
+                      value={howMet}
+                      onChange={(e) => set("how_met", e.target.value)}
+                    >
+                      {Object.entries(HOW_MET_LABELS).map(([v, l]) => (
+                        <option key={v} value={v}>
+                          {l}
+                        </option>
+                      ))}
+                    </Select>
+                    {howMet === "other" && (
+                      <Input
+                        label="Other — please specify"
+                        value={other}
+                        onChange={(e) => set("how_met_other", e.target.value)}
+                      />
+                    )}
+                  </div>
+                );
+              }
               if (!editing) {
                 if (!value) return null;
                 return (
@@ -138,9 +182,11 @@ export function ProfileSection({
             })}
           </div>
           {!editing &&
-            section.fields.every((f) => !((kol[f.key] ?? "") as string)) && (
-              <p className="text-sm text-muted">No information yet.</p>
-            )}
+            section.fields.every((f) =>
+              f.key === "how_met"
+                ? ((kol.how_met ?? "other") === "other" && !kol.how_met_other)
+                : !((kol[f.key] ?? "") as string),
+            ) && <p className="text-sm text-muted">No information yet.</p>}
         </div>
       ))}
     </div>

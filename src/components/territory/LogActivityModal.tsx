@@ -15,7 +15,6 @@ const OUTBOUND_STATUSES = [
   "2nd_outreach",
   "3rd_outreach",
   "meeting_scheduled",
-  "meeting_accepted",
   "non_responsive",
   "other",
 ];
@@ -109,11 +108,21 @@ export function LogActivityModal({
         )}
 
         <Input
-          label="Date & time"
+          label={
+            type === "outbound" && status === "meeting_scheduled"
+              ? "Meeting date & time"
+              : "Date & time"
+          }
           type="datetime-local"
           value={date}
           onChange={(e) => setDate(e.target.value)}
         />
+        {type === "outbound" && status === "meeting_scheduled" && (
+          <p className="-mt-2 text-xs text-muted">
+            Enter when the meeting will happen — a green “Meeting completed?”
+            banner will appear on the Activity and Meetings tabs afterwards.
+          </p>
+        )}
 
         <Textarea
           label="Notes"

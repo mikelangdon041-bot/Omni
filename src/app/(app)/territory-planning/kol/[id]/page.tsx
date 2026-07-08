@@ -98,7 +98,7 @@ export default function KOLDetailPage() {
           onEngagement={(score) => update({ engagement_score: score })}
         />
       )}
-      {tab === "Meetings" && <MeetingsSection kolId={kol.id} />}
+      {tab === "Meetings" && <MeetingsSection kolId={kol.id} userId={userId} />}
       {tab === "Strategy" && <StrategySection kol={kol} update={update} />}
     </>
   );

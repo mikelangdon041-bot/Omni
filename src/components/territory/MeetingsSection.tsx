@@ -1,61 +1,80 @@
 "use client";
 
 import { Trash2, CalendarDays } from "lucide-react";
-import { useMeetings } from "@/lib/territory/hooks";
+import { useMeetingFlow } from "@/lib/territory/meetingFlow";
 import { METHOD_LABELS } from "@/lib/territory/utils";
+import { MeetingCompletedBanner } from "@/components/territory/MeetingCompletedBanner";
 
-export function MeetingsSection({ kolId }: { kolId: string }) {
-  const { meetings, loading, remove } = useMeetings(kolId);
+export function MeetingsSection({
+  kolId,
+  userId,
+}: {
+  kolId: string;
+  userId: string | null;
+}) {
+  const { meetingsApi, scheduledActivity, meetingNumber, completeMeeting } =
+    useMeetingFlow(kolId, userId);
+  const { meetings, loading, remove } = meetingsApi;
 
   if (loading) {
     return <p className="py-8 text-center text-sm text-muted">Loading…</p>;
   }
-  if (meetings.length === 0) {
-    return (
-      <div className="rounded-xl border border-dashed border-border bg-surface px-6 py-12 text-center text-sm text-muted">
-        No meetings yet. Use “Complete meeting” on the Activity tab to record one.
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-3">
-      {meetings.map((m) => (
-        <div
-          key={m.id}
-          className="rounded-xl border border-border bg-surface p-5 shadow-sm"
-        >
-          <div className="mb-2 flex items-center justify-between">
-            <h3 className="flex items-center gap-2 font-semibold">
-              <CalendarDays size={16} className="text-[var(--accent)]" />
-              Meeting #{m.meeting_number}
-            </h3>
-            <div className="flex items-center gap-3">
-              <span className="text-xs text-muted">
-                {new Date(m.date).toLocaleDateString()}
-                {m.meeting_method && ` · ${METHOD_LABELS[m.meeting_method] || m.meeting_method}`}
-              </span>
-              <button
-                onClick={() => remove(m.id)}
-                className="text-muted transition hover:text-status-error"
-                title="Delete meeting"
-              >
-                <Trash2 size={15} />
-              </button>
-            </div>
-          </div>
+      {/* Scheduled meeting awaiting completion — same banner as the Activity tab */}
+      {scheduledActivity && (
+        <MeetingCompletedBanner
+          scheduledFor={scheduledActivity.date}
+          method={scheduledActivity.outreach_method}
+          meetingNumber={meetingNumber}
+          onComplete={completeMeeting}
+        />
+      )}
 
-          {m.topics_discussed && (
-            <Field label="Discussed" value={m.topics_discussed} />
-          )}
-          {m.topics_missed && (
-            <Field label="To revisit" value={m.topics_missed} />
-          )}
-          {m.follow_up_actions && (
-            <Field label="Follow-up actions" value={m.follow_up_actions} />
-          )}
+      {meetings.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-border bg-surface px-6 py-12 text-center text-sm text-muted">
+          No meetings yet. Log “Meeting scheduled” on the Activity tab — once
+          it happens, mark it completed here or there.
         </div>
-      ))}
+      ) : (
+        meetings.map((m) => (
+          <div
+            key={m.id}
+            className="rounded-xl border border-border bg-surface p-5 shadow-sm"
+          >
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="flex items-center gap-2 font-semibold">
+                <CalendarDays size={16} className="text-[var(--accent)]" />
+                Meeting #{m.meeting_number}
+              </h3>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-muted">
+                  {new Date(m.date).toLocaleDateString()}
+                  {m.meeting_method && ` · ${METHOD_LABELS[m.meeting_method] || m.meeting_method}`}
+                </span>
+                <button
+                  onClick={() => remove(m.id)}
+                  className="text-muted transition hover:text-status-error"
+                  title="Delete meeting"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
+            </div>
+
+            {m.topics_discussed && (
+              <Field label="Discussed" value={m.topics_discussed} />
+            )}
+            {m.topics_missed && (
+              <Field label="To revisit" value={m.topics_missed} />
+            )}
+            {m.follow_up_actions && (
+              <Field label="Follow-up actions" value={m.follow_up_actions} />
+            )}
+          </div>
+        ))
+      )}
     </div>
   );
 }

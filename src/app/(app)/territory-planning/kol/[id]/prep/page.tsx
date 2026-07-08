@@ -211,6 +211,22 @@ export default function MeetingPrepPage() {
                 <RichTextView html={kol.areas_of_interest} />
               </div>
             )}
+            {kol.potential_collaborations && (
+              <div className="mt-3">
+                <p className="mb-1 text-xs font-medium text-muted">Potential collaborations</p>
+                <RichTextView html={kol.potential_collaborations} />
+              </div>
+            )}
+            {kol.interested_in_trials && (
+              <div className="mt-3">
+                <p className="mb-1 text-xs font-medium text-muted">Interest in clinical trials</p>
+                {kol.trials_interest_notes ? (
+                  <RichTextView html={kol.trials_interest_notes} />
+                ) : (
+                  <p className="text-sm text-ink/90">Interested — no details noted yet.</p>
+                )}
+              </div>
+            )}
           </PrepCard>
 
           <PrepCard icon={ListChecks} title={`Open goals${openGoals.length ? ` (${openGoals.length})` : ""}`}>

@@ -25,6 +25,19 @@ export const RELATIONSHIP_COLORS: Record<RelationshipLevel, string> = {
   advocate: "bg-emerald-100 text-emerald-700",
 };
 
+// "How did you meet?" options. The DB value `unresponsive_emails` is legacy
+// naming from the original app — it means the KOL *responded* to email
+// outreach, so it's labeled that way here.
+export const HOW_MET_LABELS: Record<string, string> = {
+  conference: "Conference",
+  unresponsive_emails: "Responded to emails",
+  commercial_introduction: "Commercial introduction",
+  clinical_trial_site: "Clinical trial site",
+  meets_regularly: "Meets regularly",
+  special_program: "Special program",
+  other: "Other",
+};
+
 export const METHOD_LABELS: Record<string, string> = {
   email: "Email",
   phone: "Phone",
@@ -42,6 +55,19 @@ export const METHOD_COLORS: Record<string, string> = {
   text: "#f59e0b",
   other: "#64748b",
 };
+
+// Rich-text fields store sanitized HTML; flatten to plain text for exports
+// and AI prompts.
+export function stripHtml(html: string): string {
+  return (html || "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 export function kolFullName(k: { first_name: string; last_name: string }) {
   return `${k.first_name} ${k.last_name}`.trim();

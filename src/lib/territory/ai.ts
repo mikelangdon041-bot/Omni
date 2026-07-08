@@ -12,7 +12,7 @@ export interface MeetingPrep {
 const PREP_SYSTEM = `You are a field medical engagement advisor helping a Medical Science Liaison prepare for a meeting with a key contact (KOL).
 - Return ONLY JSON: {"opener": string, "talkingPoints": string[], "reminders": string[], "followUps": string[]}.
 - opener: one warm, specific conversation starter.
-- talkingPoints: 4-6 prioritized, specific points to cover, grounded in the contact's interests, objectives, and goals.
+- talkingPoints: 4-6 prioritized, specific points to cover, grounded in the contact's interests, objectives, potential collaborations, clinical-trial interest, and goals.
 - reminders: 2-4 relationship-aware reminders (tone, cadence, sensitivities) based on the relationship level.
 - followUps: any open items from the last meeting to revisit.
 - Use only the information provided. Do not invent facts, studies, or data. Be concise and practical. Neutral tone, no brand or product promotion.`;
@@ -23,6 +23,9 @@ export async function generateMeetingPrep(input: {
   institution?: string;
   relationship?: string;
   areasOfInterest?: string;
+  potentialCollaborations?: string;
+  otherInfo?: string;
+  trialsInterest?: string;
   primaryObjective?: string;
   backupQuestions?: string;
   goals?: string[];
@@ -33,6 +36,9 @@ Specialty: ${input.specialty || "—"}
 Institution: ${input.institution || "—"}
 Relationship level: ${input.relationship || "—"}
 Areas of interest: ${input.areasOfInterest || "—"}
+Potential collaborations: ${input.potentialCollaborations || "—"}
+Interest in clinical trials: ${input.trialsInterest || "No / unknown"}
+Other background: ${input.otherInfo || "—"}
 Primary objective: ${input.primaryObjective || "—"}
 Backup questions: ${input.backupQuestions || "—"}
 Current quarterly goals:

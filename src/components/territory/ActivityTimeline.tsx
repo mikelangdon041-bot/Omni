@@ -2,17 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { Plus, CheckCircle2 } from "lucide-react";
-import {
-  useActivities,
-  useMeetings,
-  useReminders,
-} from "@/lib/territory/hooks";
+import { useMeetingFlow } from "@/lib/territory/meetingFlow";
 import {
   STATUS_LABELS,
   STEPPER,
   ACTIVITY_TYPE_LABELS,
-  activeCycle,
-  latestStatus,
   getNextStep,
 } from "@/lib/territory/activity";
 import {
@@ -23,10 +17,8 @@ import {
 import { presetToDate, type Activity } from "@/lib/territory/types";
 import { Button } from "@/components/ui/Button";
 import { LogActivityModal } from "@/components/territory/LogActivityModal";
-import {
-  CompleteMeetingModal,
-  type CompletedMeeting,
-} from "@/components/territory/CompleteMeetingModal";
+import { CompleteMeetingModal } from "@/components/territory/CompleteMeetingModal";
+import { MeetingCompletedBanner } from "@/components/territory/MeetingCompletedBanner";
 
 export function ActivityTimeline({
   kolId,
@@ -39,9 +31,18 @@ export function ActivityTimeline({
   engagementScore: number;
   onEngagement: (score: number) => void;
 }) {
-  const { activities, add, loading } = useActivities(kolId);
-  const { meetings, add: addMeeting } = useMeetings(kolId);
-  const { add: addReminder } = useReminders(userId);
+  const {
+    activitiesApi,
+    remindersApi,
+    cycleNum,
+    status,
+    workingCycle,
+    scheduledActivity,
+    meetingNumber,
+    completeMeeting,
+  } = useMeetingFlow(kolId, userId);
+  const { activities, add, loading } = activitiesApi;
+  const { add: addReminder } = remindersApi;
 
   const [logOpen, setLogOpen] = useState(false);
   const [logStatus, setLogStatus] = useState<string | undefined>();
@@ -54,11 +55,6 @@ export function ActivityTimeline({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activities]);
 
-  const cycleNum = activeCycle(activities);
-  const cycleActs = activities.filter((a) => a.meeting_cycle === cycleNum);
-  const status = latestStatus(cycleActs);
-  // New outreach starts a fresh cycle once a meeting is completed.
-  const workingCycle = status === "meeting_completed" ? cycleNum + 1 : cycleNum;
   const next = getNextStep(status);
   const stepIndex = STEPPER.findIndex((s) => s.key === status);
 
@@ -73,36 +69,19 @@ export function ActivityTimeline({
   async function onFollowUp(title: string, dueDateISO: string) {
     await addReminder({ title, due_date: dueDateISO, kol_id: kolId });
   }
-  async function onCompleteMeeting(m: CompletedMeeting) {
-    const meetingNumber = meetings.length + 1;
-    const act = await add({
-      type: "meeting",
-      status: "meeting_completed",
-      meeting_cycle: cycleNum,
-      outreach_method: m.meeting_method as Activity["outreach_method"],
-      date: m.date,
-      notes: m.topics_discussed,
-    });
-    await addMeeting({
-      activity_id: act?.id ?? null,
-      meeting_number: meetingNumber,
-      date: m.date,
-      meeting_method: m.meeting_method,
-      topics_discussed: m.topics_discussed,
-      topics_missed: m.topics_missed,
-      follow_up_actions: m.follow_up_actions,
-    });
-    if (m.followUp !== "none") {
-      await addReminder({
-        title: `Follow up after meeting`,
-        due_date: presetToDate(m.followUp),
-        kol_id: kolId,
-      });
-    }
-  }
 
   return (
     <div className="space-y-5">
+      {/* Scheduled meeting awaiting completion */}
+      {scheduledActivity && (
+        <MeetingCompletedBanner
+          scheduledFor={scheduledActivity.date}
+          method={scheduledActivity.outreach_method}
+          meetingNumber={meetingNumber}
+          onComplete={completeMeeting}
+        />
+      )}
+
       {/* Stepper + next action */}
       <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
         <div className="mb-4 flex items-center justify-between">
@@ -223,8 +202,8 @@ export function ActivityTimeline({
       <CompleteMeetingModal
         open={meetOpen}
         onClose={() => setMeetOpen(false)}
-        meetingNumber={meetings.length + 1}
-        onComplete={onCompleteMeeting}
+        meetingNumber={meetingNumber}
+        onComplete={completeMeeting}
       />
     </div>
   );

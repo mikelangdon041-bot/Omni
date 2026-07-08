@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Plus, Trash2, Check, ArrowRight, Pencil } from "lucide-react";
+import { useRef, useState } from "react";
+import { Plus, Trash2, Check, ArrowRight, Pencil, FlaskConical } from "lucide-react";
 import { useQuarterlyGoals } from "@/lib/territory/hooks";
 import type { KOL } from "@/lib/territory/types";
 import { cn } from "@/lib/territory/utils";
@@ -33,6 +33,18 @@ export function StrategySection({
   const [draft, setDraft] = useState<Partial<KOL>>({});
   const [newGoal, setNewGoal] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // Clinical-trials notes autosave (debounced) so the box works like the
+  // other rich-text fields without needing the Edit/Save cycle.
+  const [trialsNotes, setTrialsNotes] = useState(kol.trials_interest_notes || "");
+  const trialsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function onTrialsNotes(html: string) {
+    setTrialsNotes(html);
+    if (trialsTimer.current) clearTimeout(trialsTimer.current);
+    trialsTimer.current = setTimeout(() => {
+      void update({ trials_interest_notes: html });
+    }, 600);
+  }
 
   async function saveFields() {
     setSaving(true);
@@ -98,6 +110,32 @@ export function StrategySection({
         {!editing && FIELDS.every((f) => !((kol[f.key] ?? "") as string)) && (
           <p className="text-sm text-muted">No strategy notes yet.</p>
         )}
+
+        {/* Interest in clinical trials */}
+        <div className="mt-4 border-t border-border pt-4">
+          <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
+            <input
+              type="checkbox"
+              checked={!!kol.interested_in_trials}
+              onChange={(e) => update({ interested_in_trials: e.target.checked })}
+              className="h-4 w-4 accent-[var(--accent)]"
+            />
+            <FlaskConical size={15} className="text-[var(--accent)]" />
+            Interest in clinical trials
+          </label>
+          {kol.interested_in_trials && (
+            <div className="mt-3">
+              <p className="mb-1 text-xs font-medium text-muted">
+                Which trial or indication are they interested in?
+              </p>
+              <RichText
+                value={trialsNotes}
+                onChange={onTrialsNotes}
+                placeholder="e.g. Phase III trial in indication X — saves automatically"
+              />
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Quarterly goals */}

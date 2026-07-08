@@ -73,6 +73,24 @@ export function RichText({
     if ((e.metaKey || e.ctrlKey) && e.key === "i") { e.preventDefault(); exec("italic"); }
     if ((e.metaKey || e.ctrlKey) && e.key === "u") { e.preventDefault(); exec("underline"); }
     if (e.key === "Tab") { e.preventDefault(); exec(e.shiftKey ? "outdent" : "indent"); }
+    // Enter: keep the browser default inside lists (new bullet), but insert
+    // an explicit line break elsewhere — default block insertion is
+    // unreliable in contenteditable across browsers and could swallow the
+    // carriage return entirely.
+    if (e.key === "Enter" && !e.shiftKey) {
+      let node: Node | null = window.getSelection()?.anchorNode ?? null;
+      let inList = false;
+      while (node && node !== ref.current) {
+        if (node.nodeName === "LI") { inList = true; break; }
+        node = node.parentNode;
+      }
+      if (!inList) {
+        e.preventDefault();
+        const ok = document.execCommand("insertLineBreak");
+        if (!ok) document.execCommand("insertHTML", false, "<br>");
+        emit();
+      }
+    }
   }
 
   return (

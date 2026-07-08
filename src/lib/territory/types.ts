@@ -60,6 +60,8 @@ export interface KOL {
   other_info: string;
   areas_of_interest: string;
   potential_collaborations: string;
+  interested_in_trials: boolean;
+  trials_interest_notes: string;
   primary_objective: string;
   backup_questions: string;
   engagement_score: number;

@@ -31,15 +31,21 @@ export const ACTIVITY_TYPE_LABELS: Record<string, string> = {
   status_change: "Status change",
 };
 
-// The visual stepper for a cycle.
+// The visual stepper for a cycle. "meeting_accepted" was dropped from the
+// flow — scheduling is the only step before completion now.
 export const STEPPER = [
   { key: "1st_outreach", label: "1st" },
   { key: "2nd_outreach", label: "2nd" },
   { key: "3rd_outreach", label: "3rd" },
   { key: "meeting_scheduled", label: "Scheduled" },
-  { key: "meeting_accepted", label: "Accepted" },
   { key: "meeting_completed", label: "Met" },
 ];
+
+// Legacy activities logged under the old scheduled→accepted flow collapse
+// into "scheduled" so they still light up the stepper and the banner.
+export function normalizeStatus(status: string): string {
+  return status === "meeting_accepted" ? "meeting_scheduled" : status;
+}
 
 // Highest meeting_cycle present (the active arc); defaults to 1.
 export function activeCycle(activities: Activity[]): number {
@@ -63,7 +69,7 @@ export function latestStatus(activities: Activity[]): string {
       best = a.status;
     }
   }
-  return best;
+  return normalizeStatus(best);
 }
 
 // Suggest the next action given the current status.
@@ -80,10 +86,8 @@ export function getNextStep(status: string): {
       return { label: "Log 3rd outreach", status: "3rd_outreach" };
     case "3rd_outreach":
       return { label: "Mark meeting scheduled", status: "meeting_scheduled" };
-    case "meeting_scheduled":
-      return { label: "Mark meeting accepted", status: "meeting_accepted" };
-    case "meeting_accepted":
-      return { label: "Complete meeting", status: "meeting_completed" };
+    // Once a meeting is scheduled, the green "Meeting completed?" banner is
+    // the call to action — no accepted/confirmed steps in between.
     default:
       return null;
   }

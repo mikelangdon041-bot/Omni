@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { generateMeetingPrep } from "@/lib/territory/ai";
+import { stripHtml } from "@/lib/territory/utils";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -16,11 +17,11 @@ export async function POST(req: Request) {
   const kolId = String(body.kolId || "");
   if (!kolId) return NextResponse.json({ error: "kolId required" }, { status: 400 });
 
+  // select("*") so newly added strategy columns flow through without edits
+  // (and the route keeps working even before optional migrations run).
   const { data: kol } = await supabase
     .from("kols")
-    .select(
-      "first_name, last_name, specialty, institution, relationship_level, areas_of_interest, primary_objective, backup_questions",
-    )
+    .select("*")
     .eq("id", kolId)
     .single();
   if (!kol) return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -49,9 +50,14 @@ export async function POST(req: Request) {
       specialty: kol.specialty,
       institution: kol.institution,
       relationship: kol.relationship_level,
-      areasOfInterest: kol.areas_of_interest,
-      primaryObjective: kol.primary_objective,
-      backupQuestions: kol.backup_questions,
+      areasOfInterest: stripHtml(kol.areas_of_interest),
+      potentialCollaborations: stripHtml(kol.potential_collaborations),
+      otherInfo: stripHtml(kol.other_info),
+      trialsInterest: kol.interested_in_trials
+        ? stripHtml(kol.trials_interest_notes) || "Yes"
+        : "",
+      primaryObjective: stripHtml(kol.primary_objective),
+      backupQuestions: stripHtml(kol.backup_questions),
       goals: (goals || []).map((g) => g.goal),
       lastMeeting,
     });
