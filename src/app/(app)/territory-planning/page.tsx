@@ -1,15 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Search, ArrowUpDown, MapPin, List, CalendarDays, Wand2 } from "lucide-react";
+import Link from "next/link";
+import { Plus, Search, ArrowUpDown, MapPin, List, CalendarDays, Wand2, BarChart3 } from "lucide-react";
 import { ModuleHero } from "@/components/ui/ModuleHero";
 import { Button } from "@/components/territory/ui/Button";
 import { KOLCard } from "@/components/territory/KOLCard";
 import { AddKOLModal } from "@/components/territory/AddKOLModal";
-import { ImportExport } from "@/components/territory/ImportExport";
+import { ToolsMenu } from "@/components/territory/ToolsMenu";
 import { KolMap } from "@/components/territory/KolMap";
 import { TerritoryCalendar } from "@/components/territory/TerritoryCalendar";
-import { MergeKolsModal } from "@/components/territory/MergeKolsModal";
 import { TidyInstitutionsModal } from "@/components/territory/TidyInstitutionsModal";
 import { useKOLs, useReminders, useUserId } from "@/lib/territory/hooks";
 import { createClient } from "@/lib/supabase/client";
@@ -47,7 +47,6 @@ export default function TerritoryDashboard() {
   const { reminders } = useReminders(userId);
 
   const [showAdd, setShowAdd] = useState(false);
-  const [showMerge, setShowMerge] = useState(false);
   const [showTidy, setShowTidy] = useState(false);
   const [search, setSearch] = useState("");
   const [relFilter, setRelFilter] = useState<"all" | RelationshipLevel>("all");
@@ -199,18 +198,21 @@ export default function TerritoryDashboard() {
           + New list
         </button>
         <div className="ml-auto flex items-center gap-1.5">
-          <button
-            onClick={() => setShowMerge(true)}
+          <Link
+            href="/territory-planning/reports"
             className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2.5 text-sm text-muted transition hover:text-ink"
-            title="Find and combine duplicate profiles"
+            title="Monthly & quarterly activity report"
           >
-            <Wand2 size={15} /> Combine duplicates
-          </button>
-          <ImportExport
+            <BarChart3 size={15} /> Report
+          </Link>
+          <ToolsMenu
             kols={kols}
             onImport={async (rows) => {
               await addMany(rows);
             }}
+            onMerge={(primaryId, dupIds, overrides) =>
+              merge(primaryId, dupIds, kols, overrides)
+            }
           />
         </div>
       </div>
@@ -361,13 +363,6 @@ export default function TerritoryDashboard() {
         onClose={() => setShowAdd(false)}
         onCreate={add}
         lists={lists}
-      />
-
-      <MergeKolsModal
-        open={showMerge}
-        onClose={() => setShowMerge(false)}
-        kols={kols}
-        onMerge={(primaryId, dupIds, overrides) => merge(primaryId, dupIds, kols, overrides)}
       />
 
       <TidyInstitutionsModal

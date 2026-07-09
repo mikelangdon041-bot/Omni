@@ -10,11 +10,10 @@ export type RelationshipLevel =
 
 export type HowMet =
   | "conference"
-  | "unresponsive_emails"
+  | "responded_emails"
   | "commercial_introduction"
   | "clinical_trial_site"
   | "meets_regularly"
-  | "special_program"
   | "other";
 
 export type ActivityType =
@@ -23,7 +22,14 @@ export type ActivityType =
   | "unsolicited"
   | "meeting"
   | "note"
-  | "status_change";
+  | "status_change"
+  // MSL event categories (logged per KOL or standalone from the report page)
+  | "clinical_presentation"
+  | "payer_presentation"
+  | "mirf"
+  | "clinical_training"
+  | "crossfunctional_training"
+  | "congress_activity";
 
 export type OutreachMethod =
   | "email"
@@ -77,10 +83,12 @@ export interface KOL {
 
 export interface Activity {
   id: string;
-  kol_id: string;
+  kol_id: string | null;
+  user_id?: string | null;
   type: ActivityType;
   status: string;
   outreach_method: OutreachMethod | null;
+  attendees?: number | null;
   outreach_number: number;
   meeting_cycle: number;
   date: string;

@@ -4,6 +4,7 @@ import { Trash2, CalendarDays } from "lucide-react";
 import { useMeetingFlow } from "@/lib/territory/meetingFlow";
 import { METHOD_LABELS } from "@/lib/territory/utils";
 import { MeetingCompletedBanner } from "@/components/territory/MeetingCompletedBanner";
+import { TextView } from "@/components/ui/RichText";
 
 export function MeetingsSection({
   kolId,
@@ -85,7 +86,7 @@ function Field({ label, value }: { label: string; value: string }) {
       <p className="text-xs font-medium uppercase tracking-wide text-muted">
         {label}
       </p>
-      <p className="whitespace-pre-wrap text-sm text-ink/90">{value}</p>
+      <TextView value={value} />
     </div>
   );
 }

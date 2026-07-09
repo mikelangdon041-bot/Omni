@@ -180,10 +180,13 @@ export function useKOL(id: string) {
     void refresh();
   }, [refresh]);
 
+  // Optimistic update; returns the DB error message (if any) so callers can
+  // surface silent failures (e.g. a column that needs a pending migration).
   const update = useCallback(
     async (partial: Partial<KOL>) => {
       setKol((prev) => (prev ? { ...prev, ...partial } : prev));
-      await supabase.from("kols").update(partial).eq("id", id);
+      const { error } = await supabase.from("kols").update(partial).eq("id", id);
+      return error?.message ?? null;
     },
     [id],
   );

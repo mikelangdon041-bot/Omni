@@ -41,7 +41,7 @@ export async function POST(req: Request) {
 
   const last = meetings?.[0];
   const lastMeeting = last
-    ? `Discussed: ${last.topics_discussed}\nTo revisit: ${last.topics_missed}\nFollow-ups: ${last.follow_up_actions}`
+    ? `Discussed: ${stripHtml(last.topics_discussed)}\nTo revisit: ${stripHtml(last.topics_missed)}\nFollow-ups: ${stripHtml(last.follow_up_actions)}`
     : "";
 
   try {

@@ -7,8 +7,10 @@ import {
   STATUS_LABELS,
   STEPPER,
   ACTIVITY_TYPE_LABELS,
-  getNextStep,
+  getNextActions,
 } from "@/lib/territory/activity";
+import { useCategoryLabels } from "@/lib/territory/reports";
+import { TextView } from "@/components/ui/RichText";
 import {
   METHOD_LABELS,
   calculateEngagementScore,
@@ -55,7 +57,8 @@ export function ActivityTimeline({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activities]);
 
-  const next = getNextStep(status);
+  const { labels: categoryLabels } = useCategoryLabels();
+  const nextActions = getNextActions(status);
   const stepIndex = STEPPER.findIndex((s) => s.key === status);
 
   // Group all activities by cycle (desc), each cycle's items by date asc.
@@ -93,7 +96,11 @@ export function ActivityTimeline({
               size="sm"
               variant="secondary"
               onClick={() => {
-                setLogStatus(undefined);
+                // Default to the next logical step in the sequence instead of
+                // always "1st outreach" (wrong once you've already met).
+                setLogStatus(
+                  status === "meeting_scheduled" ? "other" : nextActions[0]?.status,
+                );
                 setLogOpen(true);
               }}
             >
@@ -123,16 +130,32 @@ export function ActivityTimeline({
           ))}
         </div>
 
-        {next && (
-          <button
-            onClick={() => {
-              setLogStatus(next.status);
-              setLogOpen(true);
-            }}
-            className="mt-3 text-sm font-medium text-[var(--accent)] hover:underline"
-          >
-            Next: {next.label} →
-          </button>
+        {/* Next actions — always visible green chips for what comes next.
+            Once a meeting is scheduled the only option is completing it. */}
+        {(status === "meeting_scheduled" || nextActions.length > 0) && (
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Next
+            </span>
+            {status === "meeting_scheduled" ? (
+              <NextChip label="Meeting completed" onClick={() => setMeetOpen(true)} />
+            ) : (
+              nextActions.map((a) => (
+                <NextChip
+                  key={a.status}
+                  label={
+                    workingCycle !== cycleNum
+                      ? `${a.label} · cycle ${workingCycle}`
+                      : a.label
+                  }
+                  onClick={() => {
+                    setLogStatus(a.status);
+                    setLogOpen(true);
+                  }}
+                />
+              ))
+            )}
+          </div>
         )}
       </div>
 
@@ -151,7 +174,7 @@ export function ActivityTimeline({
           return (
             <div key={cy}>
               <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-                {cy === 0 ? "Special program" : `Cycle ${cy}`}
+                {cy === 0 ? "Other" : `Cycle ${cy}`}
               </h4>
               <ol className="relative space-y-3 border-l border-border pl-6">
                 {acts.map((a) => (
@@ -160,12 +183,15 @@ export function ActivityTimeline({
                     <div className="rounded-lg border border-border bg-surface px-4 py-3 shadow-sm">
                       <div className="flex flex-wrap items-center gap-2 text-sm">
                         <span className="font-medium">
-                          {ACTIVITY_TYPE_LABELS[a.type] || a.type}
+                          {categoryLabels[a.type] || ACTIVITY_TYPE_LABELS[a.type] || a.type}
                         </span>
                         {a.outreach_method && (
                           <span className="text-muted">
                             · {METHOD_LABELS[a.outreach_method] || a.outreach_method}
                           </span>
+                        )}
+                        {a.attendees != null && a.attendees > 0 && (
+                          <span className="text-muted">· {a.attendees} attendees</span>
                         )}
                         {a.status && a.status !== "no_outreach" && (
                           <span className="rounded-full bg-canvas px-2 py-0.5 text-xs text-muted">
@@ -177,9 +203,9 @@ export function ActivityTimeline({
                         </span>
                       </div>
                       {a.notes && (
-                        <p className="mt-1.5 whitespace-pre-wrap text-sm text-ink/90">
-                          {a.notes}
-                        </p>
+                        <div className="mt-1.5">
+                          <TextView value={a.notes} />
+                        </div>
                       )}
                     </div>
                   </li>
@@ -198,13 +224,28 @@ export function ActivityTimeline({
         defaultStatus={logStatus}
         onLog={onLog}
         onFollowUp={onFollowUp}
+        categoryLabels={categoryLabels}
       />
       <CompleteMeetingModal
+        key={scheduledActivity?.date || "complete"}
         open={meetOpen}
         onClose={() => setMeetOpen(false)}
         meetingNumber={meetingNumber}
+        defaultDate={scheduledActivity?.date}
+        defaultMethod={scheduledActivity?.outreach_method || undefined}
         onComplete={completeMeeting}
       />
     </div>
+  );
+}
+
+function NextChip({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
+    >
+      {label}
+    </button>
   );
 }

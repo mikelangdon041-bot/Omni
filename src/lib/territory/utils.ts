@@ -25,16 +25,26 @@ export const RELATIONSHIP_COLORS: Record<RelationshipLevel, string> = {
   advocate: "bg-emerald-100 text-emerald-700",
 };
 
-// "How did you meet?" options. The DB value `unresponsive_emails` is legacy
-// naming from the original app — it means the KOL *responded* to email
-// outreach, so it's labeled that way here.
+// "How did you meet?" options (migration 0016 renames the stored values).
+// Legacy keys are kept in the label map so old rows still display before
+// the migration runs.
+export const HOW_MET_OPTIONS = [
+  "conference",
+  "responded_emails",
+  "commercial_introduction",
+  "clinical_trial_site",
+  "meets_regularly",
+  "other",
+] as const;
+
 export const HOW_MET_LABELS: Record<string, string> = {
   conference: "Conference",
-  unresponsive_emails: "Responded to emails",
+  responded_emails: "Responded to emails",
+  unresponsive_emails: "Responded to emails", // legacy value, pre-0016
   commercial_introduction: "Commercial introduction",
   clinical_trial_site: "Clinical trial site",
   meets_regularly: "Meets regularly",
-  special_program: "Special program",
+  special_program: "Other", // legacy value, pre-0016
   other: "Other",
 };
 

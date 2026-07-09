@@ -2,8 +2,10 @@
 
 import { useState } from "react";
 import { Modal } from "@/components/territory/ui/Modal";
-import { Input, Select, Textarea } from "@/components/territory/ui/Input";
+import { Input, Select } from "@/components/territory/ui/Input";
 import { Button } from "@/components/territory/ui/Button";
+import { RichText } from "@/components/ui/RichText";
+import { stripHtml } from "@/lib/territory/utils";
 import type { DueDatePreset } from "@/lib/territory/types";
 
 export interface CompletedMeeting {
@@ -52,12 +54,14 @@ export function CompleteMeetingModal({
 
   async function submit() {
     setSaving(true);
+    // Rich-text fields: treat markup-only content (empty paragraphs) as empty.
+    const clean = (html: string) => (stripHtml(html) ? html : "");
     await onComplete({
       meeting_method: method,
       date: new Date(date).toISOString(),
-      topics_discussed: discussed.trim(),
-      topics_missed: missed.trim(),
-      follow_up_actions: followUpActions.trim(),
+      topics_discussed: clean(discussed),
+      topics_missed: clean(missed),
+      follow_up_actions: clean(followUpActions),
       followUp,
     });
     setSaving(false);
@@ -78,20 +82,16 @@ export function CompleteMeetingModal({
           value={date}
           onChange={(e) => setDate(e.target.value)}
         />
-        <Textarea
-          label="Topics discussed"
-          value={discussed}
-          onChange={(e) => setDiscussed(e.target.value)}
-        />
-        <Textarea
+        <RichField label="Topics discussed" value={discussed} onChange={setDiscussed} />
+        <RichField
           label="Topics missed / to revisit"
           value={missed}
-          onChange={(e) => setMissed(e.target.value)}
+          onChange={setMissed}
         />
-        <Textarea
+        <RichField
           label="Follow-up actions"
           value={followUpActions}
-          onChange={(e) => setFollowUpActions(e.target.value)}
+          onChange={setFollowUpActions}
           placeholder="One per line"
         />
         <Select
@@ -115,5 +115,29 @@ export function CompleteMeetingModal({
         </div>
       </div>
     </Modal>
+  );
+}
+
+function RichField({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (html: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <div>
+      <p className="mb-1.5 text-sm font-medium text-ink">{label}</p>
+      <RichText
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder || "Start typing…"}
+        minHeight="min-h-20"
+      />
+    </div>
   );
 }

@@ -122,7 +122,7 @@ function Header({
   suggestions,
 }: {
   kol: KOL;
-  update: (partial: Partial<KOL>) => Promise<void>;
+  update: (partial: Partial<KOL>) => Promise<string | null | void>;
   suggestions: Record<string, string[]>;
 }) {
   const [editContact, setEditContact] = useState(false);

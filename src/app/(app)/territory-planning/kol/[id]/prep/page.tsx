@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
@@ -12,10 +12,12 @@ import {
   ListChecks,
   CalendarClock,
   Check,
+  ChevronDown,
 } from "lucide-react";
 import { BackButton } from "@/components/BackButton";
 import { useKOL, useQuarterlyGoals, useMeetings } from "@/lib/territory/hooks";
 import {
+  METHOD_LABELS,
   RELATIONSHIP_COLORS,
   RELATIONSHIP_LABELS,
   cn,
@@ -23,9 +25,10 @@ import {
   kolInitials,
 } from "@/lib/territory/utils";
 import type { MeetingPrep as Prep } from "@/lib/territory/ai";
+import type { Meeting } from "@/lib/territory/types";
 import { Badge } from "@/components/territory/ui/Badge";
 import { EngagementRing } from "@/components/territory/ui/EngagementRing";
-import { RichTextView } from "@/components/ui/RichText";
+import { RichTextView, TextView } from "@/components/ui/RichText";
 
 export default function MeetingPrepPage() {
   const params = useParams<{ id: string }>();
@@ -58,12 +61,6 @@ export default function MeetingPrepPage() {
     }
   }, [params.id]);
 
-  // Auto-generate once the KOL has loaded.
-  useEffect(() => {
-    if (kol && !prep && !busy) void generate();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kol]);
-
   if (loading) return <p className="py-12 text-center text-sm text-muted">Loading…</p>;
   if (!kol) {
     return (
@@ -77,7 +74,6 @@ export default function MeetingPrepPage() {
   }
 
   const openGoals = goals.filter((g) => !g.discussed);
-  const last = meetings[0];
 
   function toggle(key: string) {
     setChecked((prev) => {
@@ -121,16 +117,18 @@ export default function MeetingPrepPage() {
         </div>
         <div className="flex items-center justify-between px-5 py-2.5">
           <p className="text-xs text-muted">
-            AI-generated from this KOL&apos;s profile, goals, and last meeting. Review
-            before using.
+            Your strategy, goals, and meeting history — nothing is sent to the AI
+            until you press the button.
           </p>
-          <button
-            onClick={generate}
-            disabled={busy}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-ink transition hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-60"
-          >
-            <RefreshCw size={13} className={busy ? "animate-spin" : ""} /> {busy ? "Thinking…" : "Regenerate"}
-          </button>
+          {prep && (
+            <button
+              onClick={generate}
+              disabled={busy}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-ink transition hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-60"
+            >
+              <RefreshCw size={13} className={busy ? "animate-spin" : ""} /> {busy ? "Thinking…" : "Regenerate"}
+            </button>
+          )}
         </div>
       </div>
 
@@ -141,9 +139,26 @@ export default function MeetingPrepPage() {
       )}
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1.5fr_1fr]">
-        {/* AI prep */}
+        {/* AI prep — only runs when explicitly requested */}
         <div className="space-y-4">
-          {busy && !prep ? (
+          {!prep && !busy ? (
+            <div className="grid place-items-center gap-3 rounded-xl border border-border bg-surface py-14 text-center shadow-sm">
+              <Sparkles size={22} className="text-[var(--accent)]" />
+              <div>
+                <p className="text-sm font-medium">AI insight</p>
+                <p className="mx-auto mt-1 max-w-sm text-sm text-muted">
+                  Sends this KOL&apos;s strategy, open goals, and meeting history
+                  to the AI and returns an opener, talking points, and follow-ups.
+                </p>
+              </div>
+              <button
+                onClick={generate}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:opacity-90"
+              >
+                <Sparkles size={15} /> Generate AI insight
+              </button>
+            </div>
+          ) : busy && !prep ? (
             <div className="grid place-items-center rounded-xl border border-border bg-surface py-16 text-sm text-muted shadow-sm">
               <Sparkles size={20} className="mb-2 animate-pulse text-[var(--accent)]" />
               Preparing your talking points…
@@ -246,25 +261,19 @@ export default function MeetingPrepPage() {
             )}
           </PrepCard>
 
-          <PrepCard icon={CalendarClock} title="Last meeting">
-            {last ? (
-              <div className="space-y-2 text-sm">
-                <p className="text-xs text-muted">
-                  {last.date ? new Date(last.date).toLocaleDateString() : "—"}
-                  {last.meeting_method ? ` · ${last.meeting_method.replace("_", " ")}` : ""}
-                </p>
-                {last.topics_discussed && (
-                  <p><span className="font-medium">Discussed:</span> {last.topics_discussed}</p>
-                )}
-                {last.topics_missed && (
-                  <p><span className="font-medium">To revisit:</span> {last.topics_missed}</p>
-                )}
-                {last.follow_up_actions && (
-                  <p><span className="font-medium">Follow-ups:</span> {last.follow_up_actions}</p>
-                )}
-              </div>
-            ) : (
+          <PrepCard
+            icon={CalendarClock}
+            title={`Meetings${meetings.length ? ` (${meetings.length})` : ""}`}
+            hint={meetings.length > 1 ? "Tap to expand" : undefined}
+          >
+            {meetings.length === 0 ? (
               <p className="text-sm text-muted">No prior meetings logged yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {meetings.map((m, i) => (
+                  <MeetingHistoryItem key={m.id} meeting={m} defaultOpen={i === 0} />
+                ))}
+              </div>
             )}
           </PrepCard>
         </div>
@@ -308,5 +317,59 @@ function List({ items }: { items: string[] }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+// One past meeting, collapsible. The latest starts expanded.
+function MeetingHistoryItem({
+  meeting: m,
+  defaultOpen,
+}: {
+  meeting: Meeting;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(!!defaultOpen);
+  return (
+    <div className="rounded-lg border border-border">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm"
+      >
+        <span className="font-medium">Meeting #{m.meeting_number}</span>
+        <span className="flex items-center gap-2 text-xs text-muted">
+          {new Date(m.date).toLocaleDateString()}
+          {m.meeting_method && ` · ${METHOD_LABELS[m.meeting_method] || m.meeting_method}`}
+          <ChevronDown
+            size={14}
+            className={cn("transition-transform", open && "rotate-180")}
+          />
+        </span>
+      </button>
+      {open && (
+        <div className="space-y-2 border-t border-border px-3 py-2.5 text-sm">
+          {m.topics_discussed && (
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wide text-muted">Discussed</p>
+              <TextView value={m.topics_discussed} />
+            </div>
+          )}
+          {m.topics_missed && (
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wide text-muted">To revisit</p>
+              <TextView value={m.topics_missed} />
+            </div>
+          )}
+          {m.follow_up_actions && (
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wide text-muted">Follow-ups</p>
+              <TextView value={m.follow_up_actions} />
+            </div>
+          )}
+          {!m.topics_discussed && !m.topics_missed && !m.follow_up_actions && (
+            <p className="text-muted">No notes recorded.</p>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

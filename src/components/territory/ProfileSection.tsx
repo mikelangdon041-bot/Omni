@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Pencil } from "lucide-react";
 import type { KOL } from "@/lib/territory/types";
-import { HOW_MET_LABELS } from "@/lib/territory/utils";
+import { HOW_MET_LABELS, HOW_MET_OPTIONS } from "@/lib/territory/utils";
 import { Button } from "@/components/territory/ui/Button";
 import { Input, Select } from "@/components/territory/ui/Input";
 import { RichText, RichTextView } from "@/components/ui/RichText";
@@ -40,7 +40,7 @@ export function ProfileSection({
   onEditingChange,
 }: {
   kol: KOL;
-  update: (partial: Partial<KOL>) => Promise<void>;
+  update: (partial: Partial<KOL>) => Promise<string | null | void>;
   editing?: boolean;
   onEditingChange?: (v: boolean) => void;
 }) {
@@ -111,7 +111,14 @@ export function ProfileSection({
               // "How did you meet?" is a fixed dropdown (plus a free-text
               // field when "Other" is picked), not a plain input.
               if (field.key === "how_met") {
-                const howMet = value || "other";
+                // Normalize pre-0016 legacy values so the select stays valid.
+                const raw = value || "other";
+                const howMet =
+                  raw === "unresponsive_emails"
+                    ? "responded_emails"
+                    : raw === "special_program"
+                      ? "other"
+                      : raw;
                 const other = (draft.how_met_other ?? kol.how_met_other ?? "") as string;
                 if (!editing) {
                   // Everyone defaults to "other"; only show once it says something.
@@ -134,9 +141,9 @@ export function ProfileSection({
                       value={howMet}
                       onChange={(e) => set("how_met", e.target.value)}
                     >
-                      {Object.entries(HOW_MET_LABELS).map(([v, l]) => (
+                      {HOW_MET_OPTIONS.map((v) => (
                         <option key={v} value={v}>
-                          {l}
+                          {HOW_MET_LABELS[v]}
                         </option>
                       ))}
                     </Select>

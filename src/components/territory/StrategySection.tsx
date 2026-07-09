@@ -25,7 +25,7 @@ export function StrategySection({
   update,
 }: {
   kol: KOL;
-  update: (p: Partial<KOL>) => Promise<void>;
+  update: (p: Partial<KOL>) => Promise<string | null | void>;
 }) {
   const { goals, add, update: updateGoal, remove, carryForward } =
     useQuarterlyGoals(kol.id);
@@ -37,13 +37,20 @@ export function StrategySection({
   // Clinical-trials notes autosave (debounced) so the box works like the
   // other rich-text fields without needing the Edit/Save cycle.
   const [trialsNotes, setTrialsNotes] = useState(kol.trials_interest_notes || "");
+  const [trialsError, setTrialsError] = useState<string | null>(null);
   const trialsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   function onTrialsNotes(html: string) {
     setTrialsNotes(html);
     if (trialsTimer.current) clearTimeout(trialsTimer.current);
-    trialsTimer.current = setTimeout(() => {
-      void update({ trials_interest_notes: html });
+    trialsTimer.current = setTimeout(async () => {
+      const err = await update({ trials_interest_notes: html });
+      if (err) setTrialsError("Couldn't save — run migration 0015 in Supabase.");
     }, 600);
+  }
+  async function onTrialsToggle(checked: boolean) {
+    setTrialsError(null);
+    const err = await update({ interested_in_trials: checked });
+    if (err) setTrialsError("Couldn't save — run migration 0015 in Supabase.");
   }
 
   async function saveFields() {
@@ -111,18 +118,22 @@ export function StrategySection({
           <p className="text-sm text-muted">No strategy notes yet.</p>
         )}
 
-        {/* Interest in clinical trials */}
+        {/* Interest in clinical trials — always visible (view and edit mode);
+            saves immediately, independent of the Edit/Save cycle above. */}
         <div className="mt-4 border-t border-border pt-4">
           <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
             <input
               type="checkbox"
               checked={!!kol.interested_in_trials}
-              onChange={(e) => update({ interested_in_trials: e.target.checked })}
+              onChange={(e) => onTrialsToggle(e.target.checked)}
               className="h-4 w-4 accent-[var(--accent)]"
             />
             <FlaskConical size={15} className="text-[var(--accent)]" />
             Interest in clinical trials
           </label>
+          {trialsError && (
+            <p className="mt-1.5 text-sm text-status-error">{trialsError}</p>
+          )}
           {kol.interested_in_trials && (
             <div className="mt-3">
               <p className="mb-1 text-xs font-medium text-muted">

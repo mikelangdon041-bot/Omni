@@ -155,3 +155,12 @@ export function RichTextView({ html }: { html: string }) {
     />
   );
 }
+
+// Renders stored text that may be either rich HTML (new entries) or plain
+// text with newlines (entries saved before the editors became rich text).
+export function TextView({ value }: { value: string }) {
+  if (!value?.trim()) return null;
+  const isHtml = /<[a-z][^>]*>/i.test(value);
+  if (isHtml) return <RichTextView html={value} />;
+  return <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink/90">{value}</p>;
+}
