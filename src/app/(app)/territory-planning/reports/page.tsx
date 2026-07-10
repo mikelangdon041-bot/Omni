@@ -7,7 +7,7 @@
 // rename the categories company-wide.
 
 import { useMemo, useState } from "react";
-import { BarChart3, Plus, Pencil, Info } from "lucide-react";
+import { BarChart3, Plus, Pencil, Info, Trash2, Link2 } from "lucide-react";
 import { BackButton } from "@/components/BackButton";
 import { Modal } from "@/components/territory/ui/Modal";
 import { Input, Select } from "@/components/territory/ui/Input";
@@ -23,6 +23,8 @@ import {
   useCategoryLabels,
   useOrgRole,
   useTerritoryReport,
+  type Period,
+  type ReportEntry,
 } from "@/lib/territory/reports";
 import { EVENT_TYPES } from "@/lib/territory/activity";
 import { cn, kolFullName } from "@/lib/territory/utils";
@@ -38,7 +40,9 @@ export default function TerritoryReportsPage() {
 
   const [view, setView] = useState<"month" | "quarter">("month");
   const [addOpen, setAddOpen] = useState(false);
+  const [addInit, setAddInit] = useState<{ type?: string; date?: string } | null>(null);
   const [renameOpen, setRenameOpen] = useState(false);
+  const [cell, setCell] = useState<{ catKey: string; period: Period } | null>(null);
 
   const periods = useMemo(
     () => (view === "month" ? lastMonths(12) : lastQuarters(6)),
@@ -140,17 +144,23 @@ export default function TerritoryReportsPage() {
                   {periods.map((p) => {
                     const c = counts[cat.key]?.[p.key];
                     return (
-                      <td key={p.key} className="px-3 py-2.5 text-right tabular-nums">
-                        {c?.n ? (
-                          <span>
-                            {c.n}
-                            {cat.attendees && c.att > 0 && (
-                              <span className="text-xs text-muted"> · {c.att} att</span>
-                            )}
-                          </span>
-                        ) : (
-                          <span className="text-muted/50">—</span>
-                        )}
+                      <td key={p.key} className="px-1 py-1 text-right tabular-nums">
+                        <button
+                          onClick={() => setCell({ catKey: cat.key, period: p })}
+                          className="w-full rounded-md px-2 py-1.5 text-right transition hover:bg-[var(--accent)]/10"
+                          title="View, add, or remove entries"
+                        >
+                          {c?.n ? (
+                            <span>
+                              {c.n}
+                              {cat.attendees && c.att > 0 && (
+                                <span className="text-xs text-muted"> · {c.att} att</span>
+                              )}
+                            </span>
+                          ) : (
+                            <span className="text-muted/50">—</span>
+                          )}
+                        </button>
                       </td>
                     );
                   })}
@@ -168,13 +178,33 @@ export default function TerritoryReportsPage() {
       </p>
 
       <QuickAddModal
+        key={addInit ? `${addInit.type}-${addInit.date}` : "plain"}
         open={addOpen}
-        onClose={() => setAddOpen(false)}
+        onClose={() => {
+          setAddOpen(false);
+          setAddInit(null);
+        }}
         userId={userId}
         kols={kols}
         labels={labels}
+        initial={addInit}
         onAdded={refresh}
       />
+      {cell && (
+        <CellDrilldown
+          catKey={cell.catKey}
+          period={cell.period}
+          entries={entries}
+          labels={labels}
+          onClose={() => setCell(null)}
+          onChanged={refresh}
+          onAdd={(type, date) => {
+            setCell(null);
+            setAddInit({ type, date });
+            setAddOpen(true);
+          }}
+        />
+      )}
       {isAdmin && orgId && (
         <RenameModal
           open={renameOpen}
@@ -203,6 +233,7 @@ function QuickAddModal({
   userId,
   kols,
   labels,
+  initial,
   onAdded,
 }: {
   open: boolean;
@@ -210,15 +241,14 @@ function QuickAddModal({
   userId: string | null;
   kols: { id: string; first_name: string; last_name: string }[];
   labels: Record<string, string>;
+  initial?: { type?: string; date?: string } | null;
   onAdded: () => Promise<void> | void;
 }) {
-  const [type, setType] = useState("clinical_presentation");
+  // A cell drill-down passes `initial` (and the parent remounts via key) to
+  // prefill the category and period being edited.
+  const [type, setType] = useState(initial?.type || "clinical_presentation");
   const [kolId, setKolId] = useState("");
-  const [date, setDate] = useState(() => {
-    const d = new Date();
-    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-    return d.toISOString().slice(0, 16);
-  });
+  const [date, setDate] = useState(() => initial?.date || toLocalInput(new Date()));
   const [attendees, setAttendees] = useState("");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
@@ -308,6 +338,151 @@ function QuickAddModal({
           <Button onClick={submit} disabled={saving}>
             {saving ? "Saving…" : "Add to report"}
           </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ------------------------------------------------------------------
+// Cell drill-down: the entries behind one count — delete manual ones,
+// add another prefilled to this category and period.
+// ------------------------------------------------------------------
+
+// Report category → the activity type to prefill when adding from a cell.
+// KOL meetings need a meeting record too, so they aren't addable here.
+const CELL_ADD_TYPE: Record<string, string | null> = {
+  meeting: null,
+  outbound: "outbound",
+  response: "inbound",
+};
+
+function toLocalInput(d: Date): string {
+  const x = new Date(d);
+  x.setMinutes(x.getMinutes() - x.getTimezoneOffset());
+  return x.toISOString().slice(0, 16);
+}
+
+// Prefill date: today when the period is current, else its first day at noon.
+function defaultDateFor(p: Period): Date {
+  const now = new Date();
+  if (p.contains(now)) return now;
+  const d = new Date(p.start);
+  d.setHours(12, 0, 0, 0);
+  return d;
+}
+
+function CellDrilldown({
+  catKey,
+  period,
+  entries,
+  labels,
+  onClose,
+  onChanged,
+  onAdd,
+}: {
+  catKey: string;
+  period: Period;
+  entries: ReportEntry[];
+  labels: Record<string, string>;
+  onClose: () => void;
+  onChanged: () => Promise<void> | void;
+  onAdd: (type: string, date: string) => void;
+}) {
+  const cat = REPORT_CATEGORIES.find((c) => c.key === catKey);
+  const list = useMemo(
+    () =>
+      entries
+        .filter((e) => e.category === catKey && period.contains(new Date(e.date)))
+        .sort((a, b) => b.date.localeCompare(a.date)),
+    [entries, catKey, period],
+  );
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const addType = catKey in CELL_ADD_TYPE ? CELL_ADD_TYPE[catKey] : catKey;
+
+  async function remove(id: string) {
+    setDeleting(id);
+    setError(null);
+    const { error: err } = await supabase.from("activities").delete().eq("id", id);
+    setDeleting(null);
+    if (err) {
+      setError(err.message);
+      return;
+    }
+    await onChanged();
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`${labels[catKey] || cat?.label || catKey} — ${period.label}`}
+    >
+      <div className="space-y-3">
+        {list.length === 0 ? (
+          <p className="py-4 text-center text-sm text-muted">
+            Nothing logged in this period yet.
+          </p>
+        ) : (
+          <ul className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
+            {list.map((e, i) => (
+              <li
+                key={e.id || `auto-${i}`}
+                className="flex items-center gap-2.5 rounded-lg border border-border bg-canvas/50 px-3 py-2 text-sm"
+              >
+                <span className="whitespace-nowrap font-medium tabular-nums">
+                  {new Date(e.date).toLocaleDateString(undefined, {
+                    month: "short",
+                    day: "numeric",
+                  })}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-muted">
+                  {e.label || "—"}
+                  {e.attendees > 0 && ` · ${e.attendees} att`}
+                </span>
+                {e.auto ? (
+                  <span
+                    className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--accent)]/10 px-2 py-0.5 text-[11px] font-medium text-[var(--accent)]"
+                    title="Linked automatically from Conference Planning"
+                  >
+                    <Link2 size={11} /> Conference
+                  </span>
+                ) : e.id ? (
+                  <button
+                    onClick={() => remove(e.id!)}
+                    disabled={deleting === e.id}
+                    className="shrink-0 rounded-md p-1.5 text-muted transition hover:bg-status-error/10 hover:text-status-error disabled:opacity-50"
+                    title="Delete this entry"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+        {list.some((e) => e.auto) && (
+          <p className="text-xs text-muted">
+            “Conference” entries are auto-linked from Conference Planning key
+            contacts and can&apos;t be deleted here — you can still add your own
+            alongside them.
+          </p>
+        )}
+        {error && <p className="text-sm text-status-error">{error}</p>}
+        <div className="flex items-center justify-between gap-2 border-t border-border pt-4">
+          <Button variant="secondary" onClick={onClose}>
+            Close
+          </Button>
+          {addType ? (
+            <Button onClick={() => onAdd(addType, toLocalInput(defaultDateFor(period)))}>
+              <Plus size={14} /> Add to {period.label}
+            </Button>
+          ) : (
+            <p className="text-xs text-muted">
+              Log meetings from the KOL&apos;s Activity tab.
+            </p>
+          )}
         </div>
       </div>
     </Modal>

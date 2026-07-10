@@ -83,9 +83,11 @@ export function useOrgRole(userId: string | null) {
 // Report entries
 // ------------------------------------------------------------------
 export interface ReportEntry {
+  id?: string; // activities.id — absent on auto (conference-derived) entries
   date: string; // ISO
   category: string; // REPORT_CATEGORIES key
   attendees: number;
+  label?: string; // KOL name or conference name, for the cell drill-down
   auto?: boolean; // derived from Conference Planning attendance
 }
 
@@ -107,6 +109,7 @@ export function useTerritoryReport(userId: string | null, kols: KOL[]) {
 
     // 1) Activities on the rep's KOLs.
     const kolIds = kols.map((k) => k.id);
+    const kolNameById = new Map(kols.map((k) => [k.id, kolFullName(k)]));
     if (kolIds.length > 0) {
       const { data } = await supabase
         .from("activities")
@@ -114,7 +117,14 @@ export function useTerritoryReport(userId: string | null, kols: KOL[]) {
         .in("kol_id", kolIds);
       for (const a of (data as Activity[]) || []) {
         const cat = categoryOf(a);
-        if (cat) out.push({ date: a.date, category: cat, attendees: a.attendees || 0 });
+        if (cat)
+          out.push({
+            id: a.id,
+            date: a.date,
+            category: cat,
+            attendees: a.attendees || 0,
+            label: (a.kol_id && kolNameById.get(a.kol_id)) || "",
+          });
       }
     }
 
@@ -128,7 +138,14 @@ export function useTerritoryReport(userId: string | null, kols: KOL[]) {
         .is("kol_id", null);
       for (const a of (data as Activity[]) || []) {
         const cat = categoryOf(a);
-        if (cat) out.push({ date: a.date, category: cat, attendees: a.attendees || 0 });
+        if (cat)
+          out.push({
+            id: a.id,
+            date: a.date,
+            category: cat,
+            attendees: a.attendees || 0,
+            label: "",
+          });
       }
     } catch {
       // column missing — skip
@@ -159,6 +176,7 @@ export function useTerritoryReport(userId: string | null, kols: KOL[]) {
               date: new Date(conf.start_date).toISOString(),
               category: "congress_activity",
               attendees: 0,
+              label: `${c.name} — ${conf.name}`,
               auto: true,
             });
           }
@@ -185,6 +203,7 @@ export function useTerritoryReport(userId: string | null, kols: KOL[]) {
 export interface Period {
   key: string;
   label: string;
+  start: Date; // first day of the period (for prefilled backfill dates)
   contains: (d: Date) => boolean;
 }
 
@@ -198,6 +217,7 @@ export function lastMonths(n: number): Period[] {
     out.push({
       key: `${y}-${m}`,
       label: d.toLocaleDateString(undefined, { month: "short", year: "2-digit" }),
+      start: d,
       contains: (x) => x.getFullYear() === y && x.getMonth() === m,
     });
   }
@@ -215,6 +235,7 @@ export function lastQuarters(n: number): Period[] {
     out.push({
       key: `${yy}-Q${qq + 1}`,
       label: `Q${qq + 1} ${yy}`,
+      start: new Date(yy, qq * 3, 1),
       contains: (x) =>
         x.getFullYear() === yy && Math.floor(x.getMonth() / 3) === qq,
     });
