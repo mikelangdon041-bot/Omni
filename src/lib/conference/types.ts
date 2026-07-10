@@ -3,6 +3,8 @@
 export type EventType =
   | "booth"
   | "educational"
+  | "symposium"
+  | "cme"
   | "competitor"
   | "contact_meeting"
   | "session"
@@ -313,14 +315,17 @@ export interface Announcement {
 // Constants
 // ------------------------------------------------------------------
 
-// Seven event types, each with a fixed color. Red is reserved for competitor
+// Nine event types, each with a fixed color. Red is reserved for competitor
 // sessions; booth and contact-meeting colors are distinct from priority hues.
+// (symposium/cme require migration 0017 on the conf_events check constraint.)
 export const EVENT_TYPES: Record<
   EventType,
   { label: string; color: string; soft: string }
 > = {
   booth: { label: "Booth", color: "#0d9488", soft: "#ccfbf1" },
   educational: { label: "Educational Session", color: "#4f46e5", soft: "#e0e7ff" },
+  symposium: { label: "Symposium", color: "#db2777", soft: "#fce7f3" },
+  cme: { label: "CME", color: "#65a30d", soft: "#ecfccb" },
   competitor: { label: "Competitor Session", color: "#dc2626", soft: "#fee2e2" },
   contact_meeting: { label: "KOL Meeting", color: "#7c3aed", soft: "#ede9fe" },
   session: { label: "Session", color: "#0284c7", soft: "#e0f2fe" },
@@ -331,6 +336,8 @@ export const EVENT_TYPES: Record<
 export const EVENT_TYPE_ORDER: EventType[] = [
   "booth",
   "educational",
+  "symposium",
+  "cme",
   "competitor",
   "contact_meeting",
   "session",
@@ -339,7 +346,13 @@ export const EVENT_TYPE_ORDER: EventType[] = [
 ];
 
 // Session-like types that get a note-taking detail page.
-export const SESSION_TYPES: EventType[] = ["session", "educational", "competitor"];
+export const SESSION_TYPES: EventType[] = [
+  "session",
+  "educational",
+  "symposium",
+  "cme",
+  "competitor",
+];
 
 export const PRIORITIES: Record<
   ConfirmedPriority,

@@ -1230,7 +1230,16 @@ function gridPreview(wb: XLSX.WorkBook, sheetName: string): string[][] {
 function isImportEventType(v: unknown): v is ImportEventType {
   return (
     typeof v === "string" &&
-    ["booth", "educational", "competitor", "contact_meeting", "session", "custom"].includes(v)
+    [
+      "booth",
+      "educational",
+      "symposium",
+      "cme",
+      "competitor",
+      "contact_meeting",
+      "session",
+      "custom",
+    ].includes(v)
   );
 }
 
