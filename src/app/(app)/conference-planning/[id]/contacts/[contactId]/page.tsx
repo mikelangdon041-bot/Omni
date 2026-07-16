@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { exportKolDocx } from "@/lib/conference/exports";
 import { Button } from "@/components/ui/Button";
-import { useConfirm } from "@/components/ui/Feedback";
+import { useConfirm, useToast } from "@/components/ui/Feedback";
 import { Input } from "@/components/ui/Input";
 import { AutoRichField } from "@/components/ui/AutoRichField";
 import { Avatar } from "@/components/ui/Avatar";
@@ -37,7 +37,18 @@ import {
   CategoryChip,
   GenerateInsightsModal,
 } from "@/components/conference/InsightAI";
-import { TIERS, type Contact, type QuickLink, type Tier } from "@/lib/conference/types";
+import {
+  EditQuestionsButton,
+  QuestionsEditorModal,
+} from "@/components/conference/Questions";
+import {
+  BUILTIN_KOL_KEYS,
+  kolQuestions,
+  TIERS,
+  type Contact,
+  type QuickLink,
+  type Tier,
+} from "@/lib/conference/types";
 import { fmtDayKeyLong, initials, stripHtml } from "@/lib/conference/utils";
 
 export default function ContactDetailPage({
@@ -47,7 +58,8 @@ export default function ContactDetailPage({
 }) {
   const { contactId } = use(params);
   const confirm = useConfirm();
-  const { conference } = useConferenceCtx();
+  const toast = useToast();
+  const { conference, updateConference, canManage } = useConferenceCtx();
   const { contact, loading, update } = useContact(contactId);
   const { meetings, add: addMeeting, update: updateMeeting, remove: removeMeeting } =
     useContactMeetings(conference.id, contactId);
@@ -58,6 +70,8 @@ export default function ContactDetailPage({
   const [aiOpen, setAiOpen] = useState(false);
   const [summaryRunning, setSummaryRunning] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [questionsOpen, setQuestionsOpen] = useState(false);
+  const questions = kolQuestions(conference);
 
   // Deep link: scroll to a specific meeting (?meeting=<id>).
   const meetingRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -120,6 +134,8 @@ export default function ContactDetailPage({
     try {
       const url = await uploadConferenceFile(conference.id, `contacts/${contactId}`, file);
       if (url) await update({ photo_url: url });
+    } catch (e) {
+      toast("error", (e as Error).message);
     } finally {
       setUploadingPhoto(false);
     }
@@ -212,30 +228,54 @@ export default function ContactDetailPage({
         </div>
       </div>
 
-      {/* Rich sections */}
+      {/* Rich sections — organizer-configurable question list (conference
+          settings). Built-ins store into legacy columns; added ones into
+          custom_sections. */}
       <div className="space-y-4 rounded-xl border border-border bg-surface p-5">
-        <AutoRichField
-          label="Background"
-          initialHtml={contact.background}
-          canEdit
-          onSave={async (html) => update({ background: html })}
-          minHeight="min-h-20"
-        />
-        <AutoRichField
-          label="Engagement activities"
-          initialHtml={contact.engagement_activities}
-          canEdit
-          onSave={async (html) => update({ engagement_activities: html })}
-          minHeight="min-h-20"
-        />
-        <AutoRichField
-          label="Meeting objectives"
-          initialHtml={contact.meeting_objectives}
-          canEdit
-          onSave={async (html) => update({ meeting_objectives: html })}
-          minHeight="min-h-20"
-        />
+        {canManage && (
+          <div className="flex justify-end">
+            <EditQuestionsButton onClick={() => setQuestionsOpen(true)} />
+          </div>
+        )}
+        {questions.map((q) => {
+          const builtin = BUILTIN_KOL_KEYS.includes(q.key);
+          const current = builtin
+            ? ((contact[
+                q.key as "background" | "engagement_activities" | "meeting_objectives"
+              ] as string) || "")
+            : contact.custom_sections?.[q.key] || "";
+          return (
+            <AutoRichField
+              key={q.key}
+              label={q.label}
+              initialHtml={current}
+              canEdit
+              onSave={async (html) => {
+                if (builtin) {
+                  await update({ [q.key]: html });
+                } else {
+                  await update({
+                    custom_sections: { ...(contact.custom_sections || {}), [q.key]: html },
+                  });
+                }
+              }}
+              minHeight="min-h-20"
+            />
+          );
+        })}
       </div>
+
+      <QuestionsEditorModal
+        open={questionsOpen}
+        onClose={() => setQuestionsOpen(false)}
+        title="KOL profile questions"
+        questions={questions}
+        onSave={(qs) =>
+          updateConference({
+            settings: { ...(conference.settings || {}), kol_questions: qs },
+          })
+        }
+      />
 
       {/* Quick links + custom fields */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

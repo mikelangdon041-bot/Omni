@@ -18,7 +18,7 @@ import {
   Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
-import { useConfirm } from "@/components/ui/Feedback";
+import { useConfirm, useToast } from "@/components/ui/Feedback";
 import { AutoRichField } from "@/components/ui/AutoRichField";
 import { RichTextView } from "@/components/ui/RichText";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
@@ -47,6 +47,7 @@ export default function PosterDetailPage({
 }) {
   const { posterId } = use(params);
   const confirm = useConfirm();
+  const toast = useToast();
   const { conference, attendees, me, canManage } = useConferenceCtx();
   const { posters, loading, save, remove } = usePosters(conference.id);
   const { notes, upsertMine } = usePosterNotes(conference.id, posterId);
@@ -141,6 +142,8 @@ export default function PosterDetailPage({
       if (urls.length) {
         await upsertMine(me.id, { images: [...(myNote?.images || []), ...urls] });
       }
+    } catch (e) {
+      toast("error", (e as Error).message);
     } finally {
       setUploading(false);
     }

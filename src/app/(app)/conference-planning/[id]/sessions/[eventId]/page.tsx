@@ -9,7 +9,7 @@ import { Loading, ProgressBar } from "@/components/conference/Bits";
 import Link from "next/link";
 import { Clock, ImagePlus, MapPin, Pencil, Sparkles, Trash2, Users } from "lucide-react";
 import { Button } from "@/components/ui/Button";
-import { useConfirm } from "@/components/ui/Feedback";
+import { useConfirm, useToast } from "@/components/ui/Feedback";
 import { AutoRichField } from "@/components/ui/AutoRichField";
 import { RichTextView } from "@/components/ui/RichText";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
@@ -23,6 +23,10 @@ import {
   type EventWithPeople,
 } from "@/lib/conference/hooks";
 import { EventFormModal } from "@/components/conference/EventFormModal";
+import {
+  EditQuestionsButton,
+  QuestionsEditorModal,
+} from "@/components/conference/Questions";
 import { PriorityBanner } from "@/components/conference/Priority";
 import { PresenceAvatars } from "@/components/conference/PresenceAvatars";
 import { RecorderPanel, recordingsText } from "@/components/conference/RecorderPanel";
@@ -30,7 +34,11 @@ import {
   CategoryChip,
   GenerateInsightsModal,
 } from "@/components/conference/InsightAI";
-import { EVENT_TYPES } from "@/lib/conference/types";
+import {
+  BUILTIN_SESSION_KEYS,
+  EVENT_TYPES,
+  sessionQuestions,
+} from "@/lib/conference/types";
 import {
   dateKeyInTz,
   fmtDayKeyLong,
@@ -45,7 +53,8 @@ export default function SessionDetailPage({
 }) {
   const { eventId } = use(params);
   const confirm = useConfirm();
-  const { conference, attendees, me, canManage } = useConferenceCtx();
+  const toast = useToast();
+  const { conference, updateConference, attendees, me, canManage } = useConferenceCtx();
   const { events, save, setPriority, loading } = useEvents(conference.id, me?.id);
   const event = useMemo(
     () => events.find((e) => e.id === eventId) || null,
@@ -62,6 +71,8 @@ export default function SessionDetailPage({
   const [slidesOpen, setSlidesOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadPct, setUploadPct] = useState(0);
+  const [questionsOpen, setQuestionsOpen] = useState(false);
+  const questions = sessionQuestions(conference);
 
   const myNote = useMemo(
     () => notes.find((n) => n.user_id === me?.id) || null,
@@ -115,6 +126,8 @@ export default function SessionDetailPage({
       if (urls.length) {
         await upsertMine(me.id, { images: [...allImages, ...urls] });
       }
+    } catch (e) {
+      toast("error", (e as Error).message);
     } finally {
       setUploading(false);
     }
@@ -274,42 +287,55 @@ export default function SessionDetailPage({
       {/* Lecture recordings */}
       <RecorderPanel eventId={eventId} defaultTitle={`${event.title} — recording`} />
 
-      {/* Post-event notes */}
+      {/* Post-event notes — the question list is organizer-configurable
+          (conference settings). Built-in questions store into their legacy
+          columns; added ones store into custom_answers. */}
       <section className="space-y-4 rounded-xl border border-border bg-surface p-5">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
-          Post-session notes
-        </h2>
-        <AutoRichField
-          label="Attendance"
-          initialHtml={myNote?.attendance || ""}
-          canEdit={!!me}
-          onSave={async (html) => {
-            if (me) await upsertMine(me.id, { attendance: html });
-          }}
-          placeholder="Roughly how many people, who was in the room…"
-          minHeight="min-h-16"
-        />
-        <AutoRichField
-          label="Questions asked"
-          initialHtml={myNote?.questions_asked || ""}
-          canEdit={!!me}
-          onSave={async (html) => {
-            if (me) await upsertMine(me.id, { questions_asked: html });
-          }}
-          placeholder="Notable audience questions…"
-          minHeight="min-h-16"
-        />
-        <AutoRichField
-          label="Impact / relevance"
-          initialHtml={myNote?.impact || ""}
-          canEdit={!!me}
-          onSave={async (html) => {
-            if (me) await upsertMine(me.id, { impact: html });
-          }}
-          placeholder="Why this session matters for us…"
-          minHeight="min-h-16"
-        />
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
+            Post-session notes
+          </h2>
+          {canManage && <EditQuestionsButton onClick={() => setQuestionsOpen(true)} />}
+        </div>
+        {questions.map((q) => {
+          const builtin = BUILTIN_SESSION_KEYS.includes(q.key);
+          const current = builtin
+            ? ((myNote?.[q.key as "attendance" | "questions_asked" | "impact"] as string) || "")
+            : myNote?.custom_answers?.[q.key] || "";
+          return (
+            <AutoRichField
+              key={q.key}
+              label={q.label}
+              initialHtml={current}
+              canEdit={!!me}
+              onSave={async (html) => {
+                if (!me) return;
+                if (builtin) {
+                  await upsertMine(me.id, { [q.key]: html });
+                } else {
+                  await upsertMine(me.id, {
+                    custom_answers: { ...(myNote?.custom_answers || {}), [q.key]: html },
+                  });
+                }
+              }}
+              placeholder={q.placeholder || "Your notes…"}
+              minHeight="min-h-16"
+            />
+          );
+        })}
       </section>
+
+      <QuestionsEditorModal
+        open={questionsOpen}
+        onClose={() => setQuestionsOpen(false)}
+        title="Post-session questions"
+        questions={questions}
+        onSave={(qs) =>
+          updateConference({
+            settings: { ...(conference.settings || {}), session_questions: qs },
+          })
+        }
+      />
 
       {/* Insights */}
       <section className="rounded-xl border border-border bg-surface p-5">

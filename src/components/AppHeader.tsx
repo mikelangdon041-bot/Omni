@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   ArrowLeftRight,
   LayoutGrid,
+  ListTodo,
   LogOut,
   Megaphone,
   Settings,
@@ -14,7 +15,7 @@ import {
 } from "lucide-react";
 import { MODULES, moduleForPath } from "@/lib/modules";
 import { NotificationBell } from "@/components/NotificationBell";
-import { TaskBar } from "@/components/TaskBar";
+import { TasksPanel, useTaskSummary } from "@/components/TaskBar";
 import { useConfHeader } from "@/lib/conference/headerStore";
 
 export function AppHeader({
@@ -28,11 +29,14 @@ export function AppHeader({
   const router = useRouter();
   const [launcher, setLauncher] = useState(false);
   const [menu, setMenu] = useState(false);
+  const [tasksOpen, setTasksOpen] = useState(false);
+  const tasks = useTaskSummary();
 
   // Close overlays on navigation.
   useEffect(() => {
     setLauncher(false);
     setMenu(false);
+    setTasksOpen(false);
   }, [pathname]);
 
   useEffect(() => {
@@ -112,28 +116,19 @@ export function AppHeader({
           </Link>
         )}
 
-        {/* Right: conference actions (when inside one) + tasks + notifications
-            + switch-app launcher + account menu */}
+        {/* Right: notifications + switch-app launcher + account menu (tasks
+            and the conference broadcast moved into the account dropdown —
+            fewer buttons in the bar). */}
         <div className="ml-auto flex items-center gap-1.5">
           {showConf && conf && (
-            <>
-              <button
-                onClick={() => conf.announce?.()}
-                className="rounded-lg p-2 text-muted transition hover:bg-canvas hover:text-ink"
-                title="Announce to the team"
-              >
-                <Megaphone size={17} />
-              </button>
-              <Link
-                href="/conference-planning"
-                className="rounded-lg p-2 text-muted transition hover:bg-canvas hover:text-ink"
-                title="Switch conference"
-              >
-                <ArrowLeftRight size={17} />
-              </Link>
-            </>
+            <Link
+              href="/conference-planning"
+              className="rounded-lg p-2 text-muted transition hover:bg-canvas hover:text-ink"
+              title="Switch conference"
+            >
+              <ArrowLeftRight size={17} />
+            </Link>
           )}
-          <TaskBar />
           <NotificationBell />
           <button
             onClick={() => setLauncher(true)}
@@ -147,10 +142,20 @@ export function AppHeader({
           <div className="relative">
             <button
               onClick={() => setMenu((v) => !v)}
-              className="grid h-8 w-8 place-items-center rounded-full bg-accent-soft text-sm font-semibold text-accent transition hover:opacity-90"
+              className="relative grid h-8 w-8 place-items-center rounded-full bg-accent-soft text-sm font-semibold text-accent transition hover:opacity-90"
               aria-label="Account menu"
             >
               {username.slice(0, 1).toUpperCase()}
+              {/* Task bubble: red when something is overdue/due today. */}
+              {tasks.openCount > 0 && (
+                <span
+                  className={`absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full px-1 text-[10px] font-bold leading-none text-white ${
+                    tasks.dueNow > 0 ? "bg-status-error" : "bg-[var(--accent,#4f46e5)]"
+                  }`}
+                >
+                  {tasks.openCount > 9 ? "9+" : tasks.openCount}
+                </span>
+              )}
             </button>
             {menu && (
               <>
@@ -163,6 +168,35 @@ export function AppHeader({
                     <p className="text-xs text-muted">Signed in as</p>
                     <p className="truncate text-sm font-medium">{username}</p>
                   </div>
+                  <button
+                    onClick={() => {
+                      setMenu(false);
+                      setTasksOpen(true);
+                    }}
+                    className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm text-ink transition hover:bg-canvas"
+                  >
+                    <ListTodo size={16} /> Tasks
+                    {tasks.openCount > 0 && (
+                      <span
+                        className={`ml-auto grid h-5 min-w-5 place-items-center rounded-full px-1.5 text-[11px] font-semibold text-white ${
+                          tasks.dueNow > 0 ? "bg-status-error" : "bg-[var(--accent,#4f46e5)]"
+                        }`}
+                      >
+                        {tasks.openCount}
+                      </span>
+                    )}
+                  </button>
+                  {showConf && conf && (
+                    <button
+                      onClick={() => {
+                        setMenu(false);
+                        conf.announce?.();
+                      }}
+                      className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm text-ink transition hover:bg-canvas"
+                    >
+                      <Megaphone size={16} /> Announce to team
+                    </button>
+                  )}
                   {isAdmin && (
                     <Link
                       href="/admin"
@@ -189,6 +223,8 @@ export function AppHeader({
           </div>
         </div>
       </header>
+
+      <TasksPanel open={tasksOpen} onClose={() => setTasksOpen(false)} />
 
       {/* App launcher — centered grid (Google/Office style) */}
       {launcher && (

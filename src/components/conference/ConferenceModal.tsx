@@ -6,11 +6,17 @@
 
 import { useEffect, useRef, useState } from "react";
 import * as XLSX from "xlsx";
+import { createClient } from "@/lib/supabase/client";
 import { FileSpreadsheet, Sparkles } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Input, Select } from "@/components/ui/Input";
-import { COMMON_TIMEZONES, type Conference } from "@/lib/conference/types";
+import {
+  COMMON_TIMEZONES,
+  CONF_TABS,
+  enabledTabs,
+  type Conference,
+} from "@/lib/conference/types";
 import { slugify } from "@/lib/conference/utils";
 
 export function ConferenceModal({
@@ -38,6 +44,8 @@ export function ConferenceModal({
   const [saving, setSaving] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [extractNote, setExtractNote] = useState("");
+  const [tabs, setTabs] = useState<string[]>([]);
+  const [saveNote, setSaveNote] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -49,6 +57,8 @@ export function ConferenceModal({
     setStartDate(conference?.start_date || "");
     setEndDate(conference?.end_date || "");
     setExtractNote("");
+    setSaveNote("");
+    setTabs(conference ? [...enabledTabs(conference)] : CONF_TABS.map((t) => t.seg));
   }, [open, conference, browserTz]);
 
   // Read a schedule workbook, send a compact excerpt to the AI, and prefill
@@ -121,6 +131,7 @@ export function ConferenceModal({
   async function save() {
     if (!name.trim() || !startDate || !endDate) return;
     setSaving(true);
+    setSaveNote("");
     await onSave({
       name: name.trim(),
       slug: slugify(name),
@@ -130,6 +141,24 @@ export function ConferenceModal({
       start_date: startDate,
       end_date: endDate <= startDate ? startDate : endDate,
     });
+
+    // Tabs are saved separately so a pending migration (settings column)
+    // can't sink the whole edit — and we can tell the user what's wrong.
+    if (conference) {
+      const all = CONF_TABS.every((t) => tabs.includes(t.seg));
+      const next = { ...(conference.settings || {}), enabled_tabs: all ? [] : tabs };
+      const { error } = await createClient()
+        .from("conferences")
+        .update({ settings: next })
+        .eq("id", conference.id);
+      if (error) {
+        setSaving(false);
+        setSaveNote(
+          "Details saved, but tab settings need the 0018_conference_settings migration to be applied in Supabase first.",
+        );
+        return;
+      }
+    }
     setSaving(false);
     onClose();
   }
@@ -218,6 +247,40 @@ export function ConferenceModal({
             All event times use this timezone, no matter where team members are.
           </p>
         </div>
+        {conference && (
+          <div>
+            <p className="mb-1.5 text-sm font-medium">Tabs for this conference</p>
+            <div className="flex flex-wrap gap-1.5">
+              {CONF_TABS.map((t) => {
+                const on = tabs.includes(t.seg);
+                return (
+                  <button
+                    key={t.seg}
+                    disabled={t.always}
+                    onClick={() =>
+                      setTabs((prev) =>
+                        on ? prev.filter((s) => s !== t.seg) : [...prev, t.seg],
+                      )
+                    }
+                    className={`rounded-full border px-3 py-1.5 text-xs font-medium transition disabled:opacity-60 ${
+                      on
+                        ? "border-transparent bg-[var(--accent)] text-white"
+                        : "border-border bg-surface text-muted hover:text-ink"
+                    }`}
+                    title={t.always ? "Always on" : undefined}
+                  >
+                    {t.label}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-1.5 text-xs text-muted">
+              Switch off what this conference doesn&apos;t need (e.g. no Map or
+              Food). Team and Schedule are always on.
+            </p>
+          </div>
+        )}
+        {saveNote && <p className="text-xs text-amber-700">{saveNote}</p>}
         <div className="flex justify-end gap-2 pt-1">
           <Button variant="secondary" onClick={onClose}>
             Cancel

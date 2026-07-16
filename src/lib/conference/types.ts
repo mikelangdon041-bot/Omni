@@ -18,6 +18,22 @@ export type Meal = "breakfast" | "lunch" | "dinner" | "snack" | "coffee";
 export type FoodStatus = "open" | "closed" | "ordered" | "delivered";
 export type PinType = "meeting_point" | "team_hub" | "custom";
 
+// Organizer-editable question shown on a session or KOL page. Built-in
+// questions keep their legacy column key; custom ones get a generated key and
+// their answers live in a jsonb column (custom_answers / custom_sections).
+export interface QuestionDef {
+  key: string;
+  label: string;
+  placeholder?: string;
+}
+
+// Per-conference JSON config (conferences.settings — migration 0018).
+export interface ConferenceSettings {
+  enabled_tabs?: string[]; // tab segs; missing/empty = all tabs on
+  session_questions?: QuestionDef[];
+  kol_questions?: QuestionDef[];
+}
+
 export interface Conference {
   id: string;
   org_id: string;
@@ -30,6 +46,7 @@ export interface Conference {
   timezone: string;
   floor_plan_url: string;
   active: boolean;
+  settings?: ConferenceSettings | null; // undefined until migration 0018 runs
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -100,6 +117,7 @@ export interface SessionNote {
   attendance: string;
   questions_asked: string;
   impact: string;
+  custom_answers?: Record<string, string>; // organizer-added questions
   created_at: string;
   updated_at: string;
 }
@@ -126,6 +144,7 @@ export interface Contact {
   meeting_objectives: string;
   links: QuickLink[];
   custom_fields: Record<string, string>;
+  custom_sections?: Record<string, string>; // organizer-added KOL questions
   ai_summary: string;
   archived: boolean;
   created_at: string;
@@ -213,6 +232,9 @@ export interface Insight {
   insight_date: string | null;
   suspected_priority: Priority | null;
   confirmed_priority: ConfirmedPriority | null;
+  // Display name of the author when they have no auth user in this project
+  // (e.g. data imported from another system).
+  created_by_name?: string;
   created_at: string;
   updated_at: string;
 }
@@ -435,6 +457,62 @@ export const TIERS: Record<Tier, { label: string; color: string; soft: string }>
   medium: { label: "Medium", color: "#d97706", soft: "#fef3c7" },
   low: { label: "Low", color: "#0284c7", soft: "#e0f2fe" },
 };
+
+// ------------------------------------------------------------------
+// Configurable tabs + questions (conferences.settings)
+// ------------------------------------------------------------------
+
+// Tabs the organizer can switch off per conference. Team + Schedule are the
+// backbone and always stay on.
+export const CONF_TABS: { seg: string; label: string; always?: boolean }[] = [
+  { seg: "team", label: "Team", always: true },
+  { seg: "schedule", label: "Schedule", always: true },
+  { seg: "sessions", label: "Sessions" },
+  { seg: "contacts", label: "KOLs" },
+  { seg: "posters", label: "Posters" },
+  { seg: "insights", label: "Insights" },
+  { seg: "food", label: "Food" },
+  { seg: "map", label: "Map" },
+  { seg: "recap", label: "Recap" },
+];
+
+export function enabledTabs(conf: Conference): Set<string> {
+  const chosen = conf.settings?.enabled_tabs;
+  if (!chosen || chosen.length === 0) return new Set(CONF_TABS.map((t) => t.seg));
+  const set = new Set(chosen);
+  for (const t of CONF_TABS) if (t.always) set.add(t.seg);
+  return set;
+}
+
+// Built-in question keys map to legacy columns; custom keys answer into the
+// jsonb custom_answers / custom_sections.
+export const DEFAULT_SESSION_QUESTIONS: QuestionDef[] = [
+  { key: "attendance", label: "Attendance", placeholder: "Roughly how many people, who was in the room…" },
+  { key: "questions_asked", label: "Questions asked", placeholder: "Notable audience questions…" },
+  { key: "impact", label: "Impact / relevance", placeholder: "Why this session matters for us…" },
+];
+export const BUILTIN_SESSION_KEYS = ["attendance", "questions_asked", "impact"];
+
+export const DEFAULT_KOL_QUESTIONS: QuestionDef[] = [
+  { key: "background", label: "Background" },
+  { key: "engagement_activities", label: "Engagement activities" },
+  { key: "meeting_objectives", label: "Meeting objectives" },
+];
+export const BUILTIN_KOL_KEYS = [
+  "background",
+  "engagement_activities",
+  "meeting_objectives",
+];
+
+export function sessionQuestions(conf: Conference): QuestionDef[] {
+  const q = conf.settings?.session_questions;
+  return Array.isArray(q) && q.length ? q : DEFAULT_SESSION_QUESTIONS;
+}
+
+export function kolQuestions(conf: Conference): QuestionDef[] {
+  const q = conf.settings?.kol_questions;
+  return Array.isArray(q) && q.length ? q : DEFAULT_KOL_QUESTIONS;
+}
 
 export const COMMON_TIMEZONES = [
   "America/New_York",

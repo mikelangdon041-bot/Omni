@@ -40,13 +40,14 @@ import {
   useRealtime,
   type Me,
 } from "@/lib/conference/hooks";
-import type { Attendee, Conference } from "@/lib/conference/types";
+import { enabledTabs, type Attendee, type Conference } from "@/lib/conference/types";
 import { conferenceStatus, daysAway, fmtDateRange } from "@/lib/conference/utils";
 import { setConfHeader } from "@/lib/conference/headerStore";
 
 interface ConferenceCtx {
   conference: Conference;
-  updateConference: (partial: Partial<Conference>) => Promise<void>;
+  // Resolves to the DB error message on failure, null on success.
+  updateConference: (partial: Partial<Conference>) => Promise<string | null>;
   attendees: Attendee[];
   attendeesLoading: boolean;
   refreshAttendees: () => void;
@@ -207,50 +208,67 @@ export function ConferenceProvider({
     return rest.split("/")[0] || "";
   })();
 
+  const onTabs = enabledTabs(conference);
+  const visibleTabs = TABS.filter((t) => onTabs.has(t.seg));
+
   return (
     <Ctx.Provider value={value}>
-      {/* Single-row conference strip: tabs + meta + actions, full-bleed and
-          flush under the app bar (the conference NAME lives in the app bar
-          itself via the header store — one merged piece of chrome). */}
-      <div className="-mx-3 -mt-5 mb-5 flex items-center gap-1 border-b border-border bg-surface px-3 sm:-mx-8 sm:-mt-8 sm:px-8">
-        <div className="flex min-w-0 flex-1 pb-px pt-0.5 md:gap-1">
-        {TABS.map((t) => {
-          const href = t.seg ? `${base}/${t.seg}` : base;
-          const active = activeSeg === t.seg;
-          return (
-            <Link
-              key={t.seg}
-              href={href}
-              title={t.label}
-              className={cn(
-                "-mb-px relative inline-flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap border-b-2 px-1 py-2.5 text-sm font-medium transition md:flex-none md:justify-start md:px-3",
-                active
-                  ? "border-[var(--accent)] text-[var(--accent)]"
-                  : "border-transparent text-muted hover:text-ink",
-              )}
-            >
-              <t.icon size={17} className="md:hidden" />
-              <t.icon size={15} className="hidden md:block" />
-              <span className="hidden md:inline">{t.label}</span>
-              {t.seg === "food" && foodUnread > 0 && (
-                <span className="absolute -top-0.5 right-0 grid h-4 min-w-4 place-items-center rounded-full bg-red-500 px-1 text-[10px] font-bold leading-none text-white md:static">
-                  {foodUnread > 99 ? "99+" : foodUnread}
-                </span>
-              )}
-            </Link>
-          );
-        })}
-        </div>
-        <span className="hidden shrink-0 items-center gap-x-3 pl-2 text-xs text-muted lg:flex">
-          <span className="inline-flex items-center gap-1">
-            <CalendarDays size={12} /> {fmtDateRange(conference)}
-          </span>
-          {conference.location && (
-            <span className="inline-flex items-center gap-1">
-              <MapPin size={12} /> {conference.location}
+      {/* Conference strip: tabs + meta, truly full-bleed (it escapes the
+          centered max-w container with the 50vw margin trick) and flush under
+          the app bar. The conference NAME lives in the app bar itself via the
+          header store — one merged piece of chrome. Tabs scroll horizontally
+          instead of ever overlapping the date/location meta. */}
+      <div className="-mt-5 mb-5 border-b border-border bg-surface sm:-mt-8 mx-[calc(50%-50vw)]">
+        <div className="relative mx-auto flex max-w-5xl items-center gap-1 px-3 sm:px-8">
+          {/* faint identity wash so the strip doesn't read as a plain bar */}
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0"
+            style={{
+              backgroundImage:
+                "linear-gradient(90deg, var(--accent-soft) 0%, transparent 45%)",
+              opacity: 0.45,
+            }}
+          />
+          <div className="relative flex min-w-0 flex-1 overflow-x-auto pb-px pt-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:gap-1">
+          {visibleTabs.map((t) => {
+            const href = t.seg ? `${base}/${t.seg}` : base;
+            const active = activeSeg === t.seg;
+            return (
+              <Link
+                key={t.seg}
+                href={href}
+                title={t.label}
+                className={cn(
+                  "-mb-px relative inline-flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap border-b-2 px-1.5 py-2.5 text-sm font-medium transition md:flex-none md:justify-start md:px-3",
+                  active
+                    ? "border-[var(--accent)] text-[var(--accent)]"
+                    : "border-transparent text-muted hover:text-ink",
+                )}
+              >
+                <t.icon size={17} className="md:hidden" />
+                <t.icon size={15} className="hidden md:block" />
+                <span className="hidden md:inline">{t.label}</span>
+                {t.seg === "food" && foodUnread > 0 && (
+                  <span className="absolute -top-0.5 right-0 grid h-4 min-w-4 place-items-center rounded-full bg-red-500 px-1 text-[10px] font-bold leading-none text-white md:static">
+                    {foodUnread > 99 ? "99+" : foodUnread}
+                  </span>
+                )}
+              </Link>
+            );
+          })}
+          </div>
+          <span className="relative hidden shrink-0 items-center gap-x-3 pl-3 text-xs text-muted lg:flex">
+            <span className="inline-flex items-center gap-1 rounded-full bg-canvas px-2.5 py-1">
+              <CalendarDays size={12} /> {fmtDateRange(conference)}
             </span>
-          )}
-        </span>
+            {conference.location && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-canvas px-2.5 py-1">
+                <MapPin size={12} /> {conference.location}
+              </span>
+            )}
+          </span>
+        </div>
       </div>
 
       {children}

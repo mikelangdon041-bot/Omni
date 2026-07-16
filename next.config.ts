@@ -9,6 +9,7 @@ const nextConfig: NextConfig = {
   // ...and make sure the binary actually ships in the function bundle.
   outputFileTracingIncludes: {
     "/api/recordings/[id]/uploaded": ["./node_modules/ffmpeg-static/**"],
+    "/api/conference/transcribe": ["./node_modules/ffmpeg-static/**"],
   },
 };
 

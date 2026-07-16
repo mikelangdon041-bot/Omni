@@ -12,6 +12,7 @@ import {
   ChevronDown,
   Download,
   Landmark,
+  Mail,
   Mic2,
   NotebookPen,
   Plus,
@@ -61,6 +62,7 @@ import {
 
 export default function InsightsPage() {
   const confirm = useConfirm();
+  const toast = useToast();
   const { conference, attendees, me } = useConferenceCtx();
   const insightsApi = useInsights(conference.id);
   const { parents, childrenOf, loading, add, update, remove } = insightsApi;
@@ -99,9 +101,16 @@ export default function InsightsPage() {
   const userName = (userId: string | null) =>
     attendees.find((a) => a.user_id === userId)?.name || "";
 
+  // Author display name: linked attendee first, else the imported name.
+  const authorOf = (i: Insight) => userName(i.user_id) || i.created_by_name || "";
+
   const filtered = useMemo(() => {
     return parents.filter((i) => {
-      if (personFilter !== "all" && i.user_id !== personFilter) return false;
+      if (personFilter !== "all") {
+        if (personFilter.startsWith("name:")) {
+          if ((i.created_by_name || "") !== personFilter.slice(5)) return false;
+        } else if (i.user_id !== personFilter) return false;
+      }
       if (dayFilter !== "all" && dayOf(i) !== dayFilter) return false;
       if (catFilter.length) {
         const all = [i, ...childrenOf(i.id)];
@@ -132,6 +141,14 @@ export default function InsightsPage() {
     () => attendees.filter((a) => a.user_id && parents.some((p) => p.user_id === a.user_id)),
     [attendees, parents],
   );
+  // Authors that exist only as imported names (no auth user here).
+  const namedAuthors = useMemo(
+    () =>
+      [...new Set(parents.map((p) => (!p.user_id && p.created_by_name) || ""))]
+        .filter(Boolean)
+        .sort(),
+    [parents],
+  );
   const days = listDays(conference.start_date, conference.end_date);
 
   function sourceChip(i: Insight) {
@@ -158,6 +175,43 @@ export default function InsightsPage() {
     if (i.contact_id) return `${base}/contacts/${i.contact_id}`;
     if (i.poster_id) return `${base}/posters/${i.poster_id}`;
     return null;
+  }
+
+  // Plain-text digest of the currently filtered insights (for email).
+  function digestText(): string {
+    const lines: string[] = [];
+    for (const [day, list] of groups) {
+      lines.push(day === "No date" ? "No date" : fmtDayKeyLong(day));
+      for (const i of list) {
+        lines.push(`- ${i.title}${i.source_type ? ` (${i.source_type})` : ""}`);
+        if (i.notes) lines.push(`  ${stripHtml(i.notes)}`);
+        for (const c of childrenOf(i.id)) lines.push(`  - ${c.title}`);
+      }
+      lines.push("");
+    }
+    return lines.join("\n").trim();
+  }
+
+  async function emailInsights() {
+    const subject = `${conference.name} — field insights${
+      dayFilter !== "all" ? `, ${fmtDayKeyLong(dayFilter)}` : ""
+    }`;
+    const body = digestText();
+    if (!body) {
+      toast("info", "No insights to send with these filters.");
+      return;
+    }
+    // mailto URLs truncate long bodies — put the full digest on the clipboard
+    // and open the email app with as much as fits.
+    try {
+      await navigator.clipboard.writeText(`${subject}\n\n${body}`);
+      toast("success", "Full digest copied — paste it if the email is cut off.");
+    } catch {
+      // clipboard denied — the mailto still carries the truncated body
+    }
+    window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(
+      body.slice(0, 1800),
+    )}`;
   }
 
   return (
@@ -187,6 +241,11 @@ export default function InsightsPage() {
               {a.name}
             </option>
           ))}
+          {namedAuthors.map((n) => (
+            <option key={`name:${n}`} value={`name:${n}`}>
+              {n}
+            </option>
+          ))}
         </select>
         <div className="-mx-1 flex w-full flex-nowrap gap-1 overflow-x-auto px-1 pb-1 md:mx-0 md:w-auto md:flex-wrap md:overflow-visible md:px-0 md:pb-0">
           {categories.map((c) => (
@@ -212,6 +271,20 @@ export default function InsightsPage() {
           ))}
         </div>
         <span className="flex-1" />
+        <Link
+          href={`/conference-planning/${conference.id}/recap`}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-muted transition hover:text-ink"
+          title="Everything captured, day by day, per MSL"
+        >
+          <NotebookPen size={15} /> MSL Recap
+        </Link>
+        <button
+          onClick={emailInsights}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-muted transition hover:text-ink"
+          title="Email the filtered insights"
+        >
+          <Mail size={15} /> Send email
+        </button>
         <div className="relative">
           <select
             value=""
@@ -258,6 +331,8 @@ export default function InsightsPage() {
                   setPhotoPct(((i + 1) / files.length) * 100);
                 }
                 if (urls.length) setPhotoUrls(urls);
+              } catch (err) {
+                toast("error", (err as Error).message);
               } finally {
                 setPhotoBusy(false);
               }
@@ -344,7 +419,7 @@ export default function InsightsPage() {
                               <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
                                 {sourceChip(i)}
                                 <span>{i.source_type || "Unspecified source"}</span>
-                                {userName(i.user_id) && <span>· {userName(i.user_id)}</span>}
+                                {authorOf(i) && <span>· {authorOf(i)}</span>}
                                 {children.length > 0 && (
                                   <span>· {children.length} bullet{children.length === 1 ? "" : "s"}</span>
                                 )}

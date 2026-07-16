@@ -204,12 +204,11 @@ export default function ContactsPage() {
       <AddContactModal
         open={showAdd}
         onClose={() => setShowAdd(false)}
-        onCreate={async (partial) => {
-          const created = await add(partial);
-          if (created) {
-            router.push(`/conference-planning/${conference.id}/contacts/${created.id}`);
-          }
-        }}
+        existing={contacts}
+        onCreate={add}
+        onCreated={(created) =>
+          router.push(`/conference-planning/${conference.id}/contacts/${created.id}`)
+        }
       />
     </div>
   );
@@ -217,6 +216,7 @@ export default function ContactsPage() {
 
 interface TerritoryKol {
   id: string;
+  user_id: string;
   first_name: string;
   last_name: string;
   institution: string;
@@ -224,16 +224,30 @@ interface TerritoryKol {
   phone: string;
   title_position: string;
   photo_url: string;
+  address: string;
+  list_name: string;
+}
+
+// Best-effort US state from a free-text address ("… Chicago, IL 60601").
+function stateFromAddress(address: string): string {
+  const m = /,\s*([A-Z]{2})(?:\s+\d{5}(?:-\d{4})?)?\s*(?:,\s*USA?)?\s*$/.exec(
+    (address || "").trim(),
+  );
+  return m ? m[1] : "";
 }
 
 function AddContactModal({
   open,
   onClose,
+  existing,
   onCreate,
+  onCreated,
 }: {
   open: boolean;
   onClose: () => void;
-  onCreate: (partial: Partial<Contact>) => Promise<void>;
+  existing: Contact[];
+  onCreate: (partial: Partial<Contact>) => Promise<Contact | null>;
+  onCreated: (created: Contact) => void; // navigate — used for single adds only
 }) {
   const { conference, me } = useConferenceCtx();
   const [tab, setTab] = useState<"new" | "territory" | "past">("new");
@@ -245,20 +259,37 @@ function AddContactModal({
   const [phone, setPhone] = useState("");
   const [saving, setSaving] = useState(false);
   const [territoryKols, setTerritoryKols] = useState<TerritoryKol[]>([]);
+  const [owners, setOwners] = useState<Record<string, string>>({}); // user_id → MSL name
   const [pastContacts, setPastContacts] = useState<Contact[]>([]);
   const [importSearch, setImportSearch] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [mslFilter, setMslFilter] = useState("all");
+  const [stateFilter, setStateFilter] = useState("all");
+  const [instFilter, setInstFilter] = useState("all");
+  const [listFilter, setListFilter] = useState("all");
 
-  // Load import sources when the modal opens: my shared-KOL directory
-  // (territory) and this org's KOLs from past conferences (deduped by name,
-  // best-populated record wins).
+  // Load import sources when the modal opens: the org's shared-KOL directory
+  // (everyone's territory KOLs — falls back to just mine until the org-read
+  // policy from migration 0018 is applied) and this org's KOLs from past
+  // conferences (deduped by name, best-populated record wins).
   useEffect(() => {
     if (!open || !me) return;
+    setSelected(new Set());
     supabase
       .from("kols")
-      .select("id, first_name, last_name, institution, email, phone, title_position, photo_url")
-      .eq("user_id", me.id)
+      .select(
+        "id, user_id, first_name, last_name, institution, email, phone, title_position, photo_url, address, list_name",
+      )
       .order("last_name")
       .then(({ data }) => setTerritoryKols((data as TerritoryKol[]) || []));
+    supabase
+      .from("profiles")
+      .select("id, display_name, username")
+      .then(({ data }) => {
+        const map: Record<string, string> = {};
+        for (const p of data || []) map[p.id] = p.display_name || p.username || "Teammate";
+        setOwners(map);
+      });
     supabase
       .from("conf_contacts")
       .select("*")
@@ -277,10 +308,16 @@ function AddContactModal({
       });
   }, [open, me, conference.id]);
 
+  const alreadyIn = useMemo(() => {
+    const kolIds = new Set(existing.filter((c) => c.kol_id).map((c) => c.kol_id));
+    const names = new Set(existing.map((c) => c.name.trim().toLowerCase()));
+    return { kolIds, names };
+  }, [existing]);
+
   async function save() {
     if (!name.trim()) return;
     setSaving(true);
-    await onCreate({
+    const created = await onCreate({
       name: name.trim(),
       tier,
       institution: institution.trim(),
@@ -295,11 +332,11 @@ function AddContactModal({
     setEmail("");
     setPhone("");
     onClose();
+    if (created) onCreated(created);
   }
 
-  async function importTerritory(k: TerritoryKol) {
-    setSaving(true);
-    await onCreate({
+  function territoryPartial(k: TerritoryKol): Partial<Contact> {
+    return {
       kol_id: k.id,
       name: `${k.first_name} ${k.last_name}`.trim(),
       institution: k.institution || "",
@@ -307,8 +344,17 @@ function AddContactModal({
       email: k.email || "",
       phone: k.phone || "",
       photo_url: k.photo_url || "",
-    });
+    };
+  }
+
+  // Multi-import: add every selected KOL, stay on the list.
+  async function importSelected() {
+    const picked = territoryKols.filter((k) => selected.has(k.id));
+    if (!picked.length) return;
+    setSaving(true);
+    for (const k of picked) await onCreate(territoryPartial(k));
     setSaving(false);
+    setSelected(new Set());
     onClose();
   }
 
@@ -334,24 +380,73 @@ function AddContactModal({
     onClose();
   }
 
+  // Filter option lists (from the loaded directory).
+  const mslOptions = useMemo(
+    () => [...new Set(territoryKols.map((k) => k.user_id))],
+    [territoryKols],
+  );
+  const stateOptions = useMemo(
+    () =>
+      [...new Set(territoryKols.map((k) => stateFromAddress(k.address)).filter(Boolean))].sort(),
+    [territoryKols],
+  );
+  const instOptions = useMemo(
+    () => [...new Set(territoryKols.map((k) => k.institution.trim()).filter(Boolean))].sort(),
+    [territoryKols],
+  );
+  const listOptions = useMemo(
+    () => [...new Set(territoryKols.map((k) => k.list_name.trim()).filter(Boolean))].sort(),
+    [territoryKols],
+  );
+
   const q = importSearch.trim().toLowerCase();
-  const filteredTerritory = q
-    ? territoryKols.filter((k) =>
-        `${k.first_name} ${k.last_name} ${k.institution}`.toLowerCase().includes(q),
-      )
-    : territoryKols;
+  const filteredTerritory = territoryKols.filter((k) => {
+    if (mslFilter !== "all" && k.user_id !== mslFilter) return false;
+    if (stateFilter !== "all" && stateFromAddress(k.address) !== stateFilter) return false;
+    if (instFilter !== "all" && k.institution.trim() !== instFilter) return false;
+    if (listFilter !== "all" && k.list_name.trim() !== listFilter) return false;
+    if (q && !`${k.first_name} ${k.last_name} ${k.institution}`.toLowerCase().includes(q))
+      return false;
+    return true;
+  });
   const filteredPast = q
     ? pastContacts.filter((c) => `${c.name} ${c.institution}`.toLowerCase().includes(q))
     : pastContacts;
 
+  const selectableFiltered = filteredTerritory.filter(
+    (k) =>
+      !alreadyIn.kolIds.has(k.id) &&
+      !alreadyIn.names.has(`${k.first_name} ${k.last_name}`.trim().toLowerCase()),
+  );
+
+  const filterSelect = (
+    value: string,
+    onChange: (v: string) => void,
+    allLabel: string,
+    options: { value: string; label: string }[],
+  ) => (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="max-w-40 truncate rounded-full border border-border bg-surface px-2.5 py-1.5 text-xs font-medium outline-none focus:border-[var(--accent)]"
+    >
+      <option value="all">{allLabel}</option>
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  );
+
   return (
-    <Modal open={open} onClose={onClose} title="Add KOL">
+    <Modal open={open} onClose={onClose} title="Add KOL" size="lg">
       <div className="space-y-4">
         <div className="flex gap-1 border-b border-border">
           {(
             [
               ["new", "New"],
-              ["territory", `My Territory KOLs (${territoryKols.length})`],
+              ["territory", `Territory KOLs (${territoryKols.length})`],
               ["past", `Past conferences (${pastContacts.length})`],
             ] as const
           ).map(([key, label]) => (
@@ -403,6 +498,116 @@ function AddContactModal({
               </Button>
             </div>
           </>
+        ) : tab === "territory" ? (
+          <>
+            <Input
+              value={importSearch}
+              onChange={(e) => setImportSearch(e.target.value)}
+              placeholder="Search name or institution…"
+            />
+            <div className="flex flex-wrap gap-1.5">
+              {mslOptions.length > 1 &&
+                filterSelect(mslFilter, setMslFilter, "All MSLs",
+                  mslOptions.map((id) => ({
+                    value: id,
+                    label: id === me?.id ? "My KOLs" : owners[id] || "Teammate",
+                  })),
+                )}
+              {stateOptions.length > 0 &&
+                filterSelect(stateFilter, setStateFilter, "All states",
+                  stateOptions.map((s) => ({ value: s, label: s })),
+                )}
+              {instOptions.length > 0 &&
+                filterSelect(instFilter, setInstFilter, "All institutions",
+                  instOptions.map((s) => ({ value: s, label: s })),
+                )}
+              {listOptions.length > 0 &&
+                filterSelect(listFilter, setListFilter, "All lists",
+                  listOptions.map((s) => ({ value: s, label: s })),
+                )}
+            </div>
+            <div className="flex items-center justify-between">
+              <label className="inline-flex items-center gap-2 text-xs font-medium text-muted">
+                <input
+                  type="checkbox"
+                  checked={
+                    selectableFiltered.length > 0 &&
+                    selectableFiltered.every((k) => selected.has(k.id))
+                  }
+                  onChange={(e) =>
+                    setSelected(
+                      e.target.checked
+                        ? new Set([...selected, ...selectableFiltered.map((k) => k.id)])
+                        : new Set(
+                            [...selected].filter(
+                              (id) => !selectableFiltered.some((k) => k.id === id),
+                            ),
+                          ),
+                    )
+                  }
+                />
+                Select all shown ({selectableFiltered.length})
+              </label>
+              <Button size="sm" onClick={importSelected} disabled={saving || selected.size === 0}>
+                <Plus size={13} /> {saving ? "Adding…" : `Add selected (${selected.size})`}
+              </Button>
+            </div>
+            <div className="max-h-72 space-y-1 overflow-y-auto">
+              {filteredTerritory.length === 0 ? (
+                <p className="py-6 text-center text-sm text-muted">
+                  No Territory Planning KOLs match — they import here automatically once added there.
+                </p>
+              ) : (
+                filteredTerritory.map((k) => {
+                  const dup =
+                    alreadyIn.kolIds.has(k.id) ||
+                    alreadyIn.names.has(`${k.first_name} ${k.last_name}`.trim().toLowerCase());
+                  const st = stateFromAddress(k.address);
+                  return (
+                    <label
+                      key={k.id}
+                      className={cn(
+                        "flex w-full cursor-pointer items-center gap-3 rounded-lg border border-border px-3 py-2 text-left text-sm transition",
+                        dup ? "opacity-50" : "hover:border-[var(--accent)]",
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        disabled={dup || saving}
+                        checked={selected.has(k.id)}
+                        onChange={(e) =>
+                          setSelected((prev) => {
+                            const next = new Set(prev);
+                            if (e.target.checked) next.add(k.id);
+                            else next.delete(k.id);
+                            return next;
+                          })
+                        }
+                      />
+                      <Avatar
+                        src={k.photo_url || null}
+                        initials={initials(`${k.first_name} ${k.last_name}`)}
+                        size={32}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium">
+                          {k.first_name} {k.last_name}
+                        </span>
+                        <span className="block truncate text-xs text-muted">
+                          {[k.institution, st, owners[k.user_id]].filter(Boolean).join(" · ")}
+                        </span>
+                      </span>
+                      {dup && (
+                        <span className="shrink-0 rounded-full bg-canvas px-2 py-0.5 text-[10px] font-semibold text-muted">
+                          Added
+                        </span>
+                      )}
+                    </label>
+                  );
+                })
+              )}
+            </div>
+          </>
         ) : (
           <>
             <Input
@@ -411,64 +616,34 @@ function AddContactModal({
               placeholder="Search…"
             />
             <div className="max-h-72 space-y-1 overflow-y-auto">
-              {tab === "territory" &&
-                (filteredTerritory.length === 0 ? (
-                  <p className="py-6 text-center text-sm text-muted">
-                    No Territory Planning KOLs yet — they import here automatically once you add them there.
-                  </p>
-                ) : (
-                  filteredTerritory.map((k) => (
-                    <button
-                      key={k.id}
-                      onClick={() => importTerritory(k)}
-                      disabled={saving}
-                      className="flex w-full items-center gap-3 rounded-lg border border-border px-3 py-2 text-left text-sm transition hover:border-[var(--accent)]"
+              {filteredPast.length === 0 ? (
+                <p className="py-6 text-center text-sm text-muted">
+                  No KOLs from previous conferences yet.
+                </p>
+              ) : (
+                filteredPast.map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => importPast(c)}
+                    disabled={saving}
+                    className="flex w-full items-center gap-3 rounded-lg border border-border px-3 py-2 text-left text-sm transition hover:border-[var(--accent)]"
+                  >
+                    <Avatar src={c.photo_url || null} initials={initials(c.name)} size={32} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium">{c.name}</span>
+                      {c.institution && (
+                        <span className="block truncate text-xs text-muted">{c.institution}</span>
+                      )}
+                    </span>
+                    <span
+                      className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold"
+                      style={{ background: TIERS[c.tier].soft, color: TIERS[c.tier].color }}
                     >
-                      <Avatar
-                        src={k.photo_url || null}
-                        initials={initials(`${k.first_name} ${k.last_name}`)}
-                        size={32}
-                      />
-                      <span className="min-w-0">
-                        <span className="block truncate font-medium">
-                          {k.first_name} {k.last_name}
-                        </span>
-                        {k.institution && (
-                          <span className="block truncate text-xs text-muted">{k.institution}</span>
-                        )}
-                      </span>
-                    </button>
-                  ))
-                ))}
-              {tab === "past" &&
-                (filteredPast.length === 0 ? (
-                  <p className="py-6 text-center text-sm text-muted">
-                    No KOLs from previous conferences yet.
-                  </p>
-                ) : (
-                  filteredPast.map((c) => (
-                    <button
-                      key={c.id}
-                      onClick={() => importPast(c)}
-                      disabled={saving}
-                      className="flex w-full items-center gap-3 rounded-lg border border-border px-3 py-2 text-left text-sm transition hover:border-[var(--accent)]"
-                    >
-                      <Avatar src={c.photo_url || null} initials={initials(c.name)} size={32} />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate font-medium">{c.name}</span>
-                        {c.institution && (
-                          <span className="block truncate text-xs text-muted">{c.institution}</span>
-                        )}
-                      </span>
-                      <span
-                        className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold"
-                        style={{ background: TIERS[c.tier].soft, color: TIERS[c.tier].color }}
-                      >
-                        {TIERS[c.tier].label}
-                      </span>
-                    </button>
-                  ))
-                ))}
+                      {TIERS[c.tier].label}
+                    </span>
+                  </button>
+                ))
+              )}
             </div>
           </>
         )}

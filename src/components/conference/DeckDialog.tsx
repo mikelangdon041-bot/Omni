@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import {
+  ChevronDown,
   FileUp,
   Presentation,
   Sparkles,
@@ -303,6 +304,8 @@ export function DeckDialog({ open, onClose }: { open: boolean; onClose: () => vo
       setTplFile(null);
       setTplParsed(null);
       setProposal(null);
+    } catch (e) {
+      setError((e as Error).message);
     } finally {
       setTplBusy(false);
     }
@@ -581,8 +584,16 @@ export function DeckDialog({ open, onClose }: { open: boolean; onClose: () => vo
             </CurationSection>
           )}
 
-          <ItemCuration title={`Sessions (${sessions.length})`} items={sessions} setItems={setSessions} />
-          <ItemCuration title={`Posters (${posters.length})`} items={posters} setItems={setPosters} />
+          <ItemCuration
+            title="Sessions"
+            items={sessions}
+            setItems={setSessions}
+          />
+          <ItemCuration
+            title="Posters"
+            items={posters}
+            setItems={setPosters}
+          />
 
           {error && <p className="text-sm text-red-600">{error}</p>}
           <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
@@ -656,11 +667,34 @@ function TemplateChip({
   );
 }
 
-function CurationSection({ title, children }: { title: string; children: React.ReactNode }) {
+// Collapsible so the dialog stays navigable — long session/poster lists start
+// closed, the short sections start open.
+function CurationSection({
+  title,
+  subtitle,
+  defaultOpen = true,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
-    <section>
-      <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">{title}</p>
-      <div className="space-y-1.5">{children}</div>
+    <section className="rounded-lg border border-border">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-3 py-2.5 text-left"
+      >
+        <ChevronDown
+          size={14}
+          className={cn("shrink-0 text-muted transition-transform", !open && "-rotate-90")}
+        />
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted">{title}</span>
+        {subtitle && <span className="ml-auto text-xs text-muted">{subtitle}</span>}
+      </button>
+      {open && <div className="space-y-1.5 border-t border-border p-3">{children}</div>}
     </section>
   );
 }
@@ -675,8 +709,13 @@ function ItemCuration({
   setItems: React.Dispatch<React.SetStateAction<DeckItem[]>>;
 }) {
   if (items.length === 0) return null;
+  const picked = items.filter((i) => i.checked).length;
   return (
-    <CurationSection title={title}>
+    <CurationSection
+      title={`${title} (${items.length})`}
+      subtitle={`${picked} selected`}
+      defaultOpen={false}
+    >
       {items.map((it) => (
         <div
           key={it.id}

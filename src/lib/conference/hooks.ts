@@ -191,10 +191,13 @@ export function useConference(id: string) {
     void refresh();
   }, [refresh]);
 
+  // Optimistic; returns the DB error message (if any) so callers can surface
+  // silent failures (e.g. a column that needs a pending migration).
   const update = useCallback(
     async (partial: Partial<Conference>) => {
       setConference((prev) => (prev ? { ...prev, ...partial } : prev));
-      await supabase.from("conferences").update(partial).eq("id", id);
+      const { error } = await supabase.from("conferences").update(partial).eq("id", id);
+      return error?.message ?? null;
     },
     [id],
   );
@@ -1416,6 +1419,8 @@ export function useAnnouncements(conferenceId: string | null) {
 
 // ------------------------------------------------------------------
 // Storage helper: upload a file to the public "conference" bucket.
+// Throws with the storage error — a silent null here made every photo/file
+// upload look like it "did nothing" when RLS or the network rejected it.
 // ------------------------------------------------------------------
 export async function uploadConferenceFile(
   conferenceId: string,
@@ -1428,7 +1433,9 @@ export async function uploadConferenceFile(
     cacheControl: "3600",
     upsert: false,
   });
-  if (error) return null;
+  if (error) {
+    throw new Error(`Upload failed: ${error.message}`);
+  }
   const { data } = supabase.storage.from("conference").getPublicUrl(path);
   return data.publicUrl || null;
 }

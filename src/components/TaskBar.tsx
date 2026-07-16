@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ListTodo, Plus, Check, Trash2, X } from "lucide-react";
+import { Plus, Check, Trash2, X } from "lucide-react";
 import { useUserId } from "@/lib/interview/hooks";
 import { useTasks, type Task } from "@/lib/tasks/hooks";
 
@@ -26,10 +26,22 @@ function dueClass(due: string | null): string {
   return "text-muted";
 }
 
-export function TaskBar() {
+// Open-task counts for badges (e.g. the account-menu avatar bubble).
+// dueNow = overdue or due within the next 24h.
+export function useTaskSummary() {
+  const { userId } = useUserId();
+  const { open, overdue } = useTasks(userId);
+  const dueNow = open.filter(
+    (t) => t.due_date && new Date(t.due_date).getTime() < Date.now() + 86400000,
+  ).length;
+  return { openCount: open.length, overdue, dueNow };
+}
+
+// The tasks panel, controlled by the caller (lives in the account dropdown
+// now, not as its own top-bar button).
+export function TasksPanel({ open: show, onClose }: { open: boolean; onClose: () => void }) {
   const { userId } = useUserId();
   const { open, overdue, add, toggle, remove } = useTasks(userId);
-  const [panel, setPanel] = useState(false);
   const [title, setTitle] = useState("");
   const [due, setDue] = useState("");
 
@@ -44,35 +56,17 @@ export function TaskBar() {
     setDue("");
   }
 
-  return (
-    <div className="relative">
-      <button
-        onClick={() => setPanel((v) => !v)}
-        className="relative grid h-9 w-9 place-items-center rounded-lg text-muted transition hover:bg-canvas hover:text-ink"
-        aria-label="Tasks"
-        title="Tasks"
-      >
-        <ListTodo size={18} />
-        {open.length > 0 && (
-          <span
-            className={`absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full px-1 text-[10px] font-semibold text-white ${
-              overdue > 0 ? "bg-status-error" : "bg-[var(--accent,#4f46e5)]"
-            }`}
-          >
-            {open.length > 9 ? "9+" : open.length}
-          </span>
-        )}
-      </button>
+  if (!show) return null;
 
-      {panel && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setPanel(false)} />
-          <div className="absolute right-0 top-11 z-50 w-96 overflow-hidden rounded-xl border border-border bg-surface shadow-lg">
+  return (
+    <>
+      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div className="fixed right-3 top-14 z-50 w-96 max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-xl border border-border bg-surface shadow-lg">
             <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
               <p className="text-sm font-semibold">
                 Tasks{overdue > 0 && <span className="ml-2 text-xs text-status-error">{overdue} overdue</span>}
               </p>
-              <button onClick={() => setPanel(false)} className="text-muted hover:text-ink">
+              <button onClick={onClose} className="text-muted hover:text-ink">
                 <X size={16} />
               </button>
             </div>
@@ -108,14 +102,12 @@ export function TaskBar() {
             ) : (
               <ul className="max-h-96 overflow-y-auto">
                 {open.map((t) => (
-                  <TaskRow key={t.id} task={t} onToggle={() => toggle(t.id, true)} onRemove={() => remove(t.id)} onClose={() => setPanel(false)} />
+                  <TaskRow key={t.id} task={t} onToggle={() => toggle(t.id, true)} onRemove={() => remove(t.id)} onClose={onClose} />
                 ))}
               </ul>
             )}
-          </div>
-        </>
-      )}
-    </div>
+      </div>
+    </>
   );
 }
 

@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { useToast } from "@/components/ui/Feedback";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
 import { uploadConferenceFile, usePins } from "@/lib/conference/hooks";
 import {
@@ -21,6 +22,7 @@ import { mapsUrl } from "@/lib/conference/utils";
 import { cn } from "@/lib/ui";
 
 export default function VenueMapPage() {
+  const toast = useToast();
   const { conference, updateConference } = useConferenceCtx();
   const { pins, add, remove } = usePins(conference.id);
   const imgRef = useRef<HTMLDivElement>(null);
@@ -37,6 +39,8 @@ export default function VenueMapPage() {
     try {
       const url = await uploadConferenceFile(conference.id, "floorplan", file);
       if (url) await updateConference({ floor_plan_url: url });
+    } catch (e) {
+      toast("error", (e as Error).message);
     } finally {
       setUploading(false);
     }
