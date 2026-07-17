@@ -80,6 +80,10 @@ export function DeckDialog({ open, onClose }: { open: boolean; onClose: () => vo
 
   // Templates.
   const [templates, setTemplates] = useState<TemplateRow[]>([]);
+  // Slide Studio templates ("sl:<id>" as templateId) contribute their theme.
+  const [slTemplates, setSlTemplates] = useState<
+    { id: string; title: string; theme: Partial<DeckTheme> }[]
+  >([]);
   const [templateId, setTemplateId] = useState<string>(""); // "" = default look
   const [tplStep, setTplStep] = useState<"none" | "guidance" | "proposal">("none");
   const [tplFile, setTplFile] = useState<File | null>(null);
@@ -213,6 +217,16 @@ export function DeckDialog({ open, onClose }: { open: boolean; onClose: () => vo
     );
 
     setTemplates((tplRes.data as TemplateRow[]) || []);
+
+    // The user's Slide Studio templates (RLS scopes to their own decks).
+    const { data: slTpl } = await supabase
+      .from("sl_decks")
+      .select("id, title, theme")
+      .eq("is_template", true)
+      .order("updated_at", { ascending: false });
+    setSlTemplates(
+      (slTpl as { id: string; title: string; theme: Partial<DeckTheme> }[]) || [],
+    );
     setLoading(false);
   }, [conference.id, conference.start_date, tz]);
 
@@ -312,6 +326,10 @@ export function DeckDialog({ open, onClose }: { open: boolean; onClose: () => vo
   }
 
   function themeFor(id: string): DeckTheme {
+    if (id.startsWith("sl:")) {
+      const s = slTemplates.find((x) => `sl:${x.id}` === id);
+      return s ? { ...DEFAULT_THEME, ...s.theme } : DEFAULT_THEME;
+    }
     const t = templates.find((x) => x.id === id);
     if (!t) return DEFAULT_THEME;
     const m = t.mapping || {};
@@ -437,6 +455,15 @@ export function DeckDialog({ open, onClose }: { open: boolean; onClose: () => vo
                     setTemplates((prev) => prev.filter((x) => x.id !== t.id));
                     if (templateId === t.id) setTemplateId("");
                   }}
+                />
+              ))}
+              {slTemplates.map((t) => (
+                <TemplateChip
+                  key={`sl:${t.id}`}
+                  label={`${t.title} · Slide Studio`}
+                  active={templateId === `sl:${t.id}`}
+                  theme={themeFor(`sl:${t.id}`)}
+                  onClick={() => setTemplateId(`sl:${t.id}`)}
                 />
               ))}
             </div>

@@ -6,6 +6,8 @@ import {
   CalendarClock,
   MapPin,
   Presentation,
+  PenLine,
+  MonitorPlay,
   type LucideIcon,
 } from "lucide-react";
 
@@ -74,9 +76,27 @@ export const MODULES: ModuleDef[] = [
     href: "/meeting-prep",
     label: "Meeting Prep",
     icon: CalendarClock,
-    blurb: "Brief yourself before every KOL meeting.",
-    ready: false,
+    blurb: "Walk into every meeting fully briefed and rehearsed.",
+    ready: true,
     theme: t("#0284c7", "#0369a1", "#e0f2fe", "#0ea5e9", "#3b82f6", "#6366f1"),
+  },
+  {
+    slug: "writing-studio",
+    href: "/writing-studio",
+    label: "Writing Studio",
+    icon: PenLine,
+    blurb: "Draft or polish emails, docs, and messages in your voice.",
+    ready: true,
+    theme: t("#059669", "#047857", "#d1fae5", "#10b981", "#059669", "#0d9488"),
+  },
+  {
+    slug: "slide-studio",
+    href: "/slide-studio",
+    label: "Slide Studio",
+    icon: MonitorPlay,
+    blurb: "Build, polish, and rehearse presentations.",
+    ready: true,
+    theme: t("#c026d3", "#a21caf", "#fae8ff", "#d946ef", "#c026d3", "#9333ea"),
   },
   {
     slug: "conference-planning",
