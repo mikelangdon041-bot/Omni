@@ -63,10 +63,25 @@ export function useDecks(userId: string | null) {
   return { decks, loading, add, remove, refresh };
 }
 
+// Direct insert used by the full-page creation flow (no list needed).
+export async function createDeck(
+  userId: string,
+  partial: Partial<SlideDeck>,
+): Promise<SlideDeck | null> {
+  const { data, error } = await supabase
+    .from("sl_decks")
+    .insert({ ...partial, user_id: userId })
+    .select("*")
+    .single();
+  if (error) throw new Error(error.message);
+  return data ? normalize(data as SlideDeck) : null;
+}
+
 // One deck with debounced autosave (slides JSON changes on every drag).
 export function useDeck(id: string) {
   const [deck, setDeck] = useState<SlideDeck | null>(null);
   const [loading, setLoading] = useState(true);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
 
   useEffect(() => {
     let active = true;
@@ -93,13 +108,17 @@ export function useDeck(id: string) {
     timerRef.current = null;
     const p = pendingRef.current;
     pendingRef.current = {};
-    if (Object.keys(p).length) await supabase.from("sl_decks").update(p).eq("id", id);
+    if (Object.keys(p).length) {
+      await supabase.from("sl_decks").update(p).eq("id", id);
+      setSaveState("saved");
+    }
   }, [id]);
 
   const save = useCallback(
     (partial: Partial<SlideDeck>) => {
       setDeck((prev) => (prev ? { ...prev, ...partial } : prev));
       pendingRef.current = { ...pendingRef.current, ...partial };
+      setSaveState("saving");
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => void flush(), 900);
     },
@@ -129,7 +148,7 @@ export function useDeck(id: string) {
     return (data as DeckVersion[]) || [];
   }, [id]);
 
-  return { deck, loading, save, flush, snapshot, listVersions };
+  return { deck, loading, save, flush, snapshot, listVersions, saveState };
 }
 
 export function usePracticeRuns(deckId: string, userId: string | null) {

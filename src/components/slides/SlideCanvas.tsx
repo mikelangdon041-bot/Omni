@@ -5,9 +5,12 @@
 // read-only for thumbnails, and large for practice mode.
 
 import { useRef } from "react";
+import { ImageIcon } from "lucide-react";
 import {
   SLIDE_H,
   SLIDE_W,
+  isDarkHex,
+  type ShapeKind,
   type Slide,
   type SlideElement,
   type SlideTheme,
@@ -126,6 +129,19 @@ function clamp(v: number, min: number, max: number) {
   return Math.min(max, Math.max(min, v));
 }
 
+// SVG outlines for the non-css shapes, in a 100×100 viewBox.
+export const SHAPE_POINTS: Partial<Record<ShapeKind, string>> = {
+  triangle: "50,4 96,96 4,96",
+  diamond: "50,2 98,50 50,98 2,50",
+  rightArrow: "2,30 62,30 62,8 98,50 62,92 62,70 2,70",
+  leftArrow: "98,30 38,30 38,8 2,50 38,92 38,70 98,70",
+  upArrow: "30,98 30,38 8,38 50,2 92,38 70,38 70,98",
+  downArrow: "30,2 30,62 8,62 50,98 92,62 70,62 30,62 30,2 70,2 70,62",
+  chevron: "2,4 72,4 98,50 72,96 2,96 28,50",
+  pentagon: "50,2 98,38 79,96 21,96 2,38",
+  star: "50,2 61,36 98,36 68,58 79,94 50,72 21,94 32,58 2,36 39,36",
+};
+
 function ElementView({
   el,
   theme,
@@ -171,9 +187,17 @@ function ElementView({
         }}
       >
         {(el.bullets || []).map((b, i) => (
-          <li key={i} style={{ marginBottom: px(6) }}>
-            <span style={{ color: `#${theme.primary}`, marginRight: px(6) }}>•</span>
-            {b}
+          <li key={i} style={{ marginBottom: px(6), display: "flex" }}>
+            <span
+              style={{
+                color: `#${el.color || theme.primary}` === `#${theme.text}` ? `#${theme.primary}` : `#${el.color || theme.primary}`,
+                marginRight: px(7),
+                flexShrink: 0,
+              }}
+            >
+              •
+            </span>
+            <span>{b}</span>
           </li>
         ))}
       </ul>
@@ -183,76 +207,144 @@ function ElementView({
   if (el.type === "image") {
     return el.src ? (
       // eslint-disable-next-line @next/next/no-img-element
-      <img src={el.src} alt="" className="h-full w-full object-cover" draggable={false} />
+      <img
+        src={el.src}
+        alt=""
+        className="h-full w-full rounded-[2px] object-cover"
+        draggable={false}
+      />
     ) : (
-      <div className="grid h-full w-full place-items-center border border-dashed border-border text-xs text-muted">
-        image
+      <div
+        className="grid h-full w-full place-items-center rounded-[2px] border border-dashed"
+        style={{
+          borderColor: `#${theme.secondary}66`,
+          background: isDarkHex(theme.bg) ? "#ffffff0d" : "#00000006",
+          color: `#${theme.secondary}`,
+        }}
+      >
+        <div className="flex flex-col items-center gap-1 p-1 text-center">
+          <ImageIcon size={Math.max(12, Math.min(28, scale * 0.45))} />
+          {scale > 45 && (
+            <span style={{ fontSize: Math.max(8, scale * 0.14) }}>
+              {el.prompt ? "Image slot — generate or upload" : "image"}
+            </span>
+          )}
+        </div>
       </div>
     );
   }
 
   if (el.type === "shape") {
-    if (el.shape === "line") {
+    const fill = `#${el.fill || theme.primary}`;
+    const stroke = el.lineColor ? `#${el.lineColor}` : undefined;
+    const strokeW = el.lineWidth ? Math.max(1, px(el.lineWidth)) : 0;
+    const kind = el.shape || "rect";
+    const label = el.text ? (
+      <span
+        className="pointer-events-none absolute inset-0 grid place-items-center overflow-hidden text-center"
+        style={{
+          fontSize: px(el.fontSize || 14),
+          fontWeight: el.bold ? 700 : 500,
+          color: `#${el.color || (isDarkHex(el.fill || theme.primary) ? "FFFFFF" : "1F2937")}`,
+          fontFamily: theme.bodyFont,
+          lineHeight: 1.2,
+          padding: "6%",
+        }}
+      >
+        {el.text}
+      </span>
+    ) : null;
+
+    if (kind === "line") {
       return (
-        <div
-          className="w-full"
-          style={{
-            height: Math.max(2, px(2)),
-            marginTop: "auto",
-            background: `#${el.fill || theme.primary}`,
-          }}
-        />
+        <div className="relative flex h-full w-full items-center">
+          <div
+            className="w-full"
+            style={{ height: Math.max(2, px(el.lineWidth || 2)), background: fill }}
+          />
+        </div>
       );
     }
+
+    if (kind === "rect" || kind === "roundRect" || kind === "ellipse") {
+      return (
+        <div className="relative h-full w-full">
+          <div
+            className="h-full w-full"
+            style={{
+              background: fill,
+              borderRadius:
+                kind === "ellipse" ? "50%" : kind === "roundRect" ? Math.max(4, scale * 0.12) : 0,
+              border: strokeW ? `${strokeW}px solid ${stroke || fill}` : undefined,
+            }}
+          />
+          {label}
+        </div>
+      );
+    }
+
+    const pts = SHAPE_POINTS[kind];
     return (
-      <div
-        className="h-full w-full"
-        style={{
-          background: `#${el.fill || theme.primary}`,
-          borderRadius: el.shape === "ellipse" ? "50%" : 0,
-        }}
-      />
+      <div className="relative h-full w-full">
+        <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full">
+          <polygon
+            points={pts || SHAPE_POINTS.pentagon}
+            fill={fill}
+            stroke={stroke}
+            strokeWidth={strokeW ? (strokeW / (el.w * scale)) * 100 : 0}
+          />
+        </svg>
+        {label}
+      </div>
     );
   }
 
   if (el.type === "chart") {
-    return <MiniChart el={el} theme={theme} />;
+    return <MiniChart el={el} theme={theme} scale={scale} />;
   }
 
   return null;
 }
 
 // Faithful-enough preview of the native pptx chart that export produces.
-function MiniChart({ el, theme }: { el: SlideElement; theme: SlideTheme }) {
+function MiniChart({ el, theme, scale }: { el: SlideElement; theme: SlideTheme; scale: number }) {
   const series = el.series || [];
   const labels = el.labels || [];
-  const colors = [theme.primary, theme.secondary, "94A3B8", "F59E0B", "10B981"];
-  const W = 200;
-  const H = 112;
+  const colors = [theme.primary, theme.secondary, "94A3B8", "F59E0B", "10B981", "3B82F6"];
+  const W = 220;
+  const H = 124;
+  const showLabels = scale > 40 && labels.length > 0;
 
   if (!series.length || !series[0].values.length) {
     return (
-      <div className="grid h-full w-full place-items-center border border-dashed border-border text-xs text-muted">
-        chart
+      <div
+        className="grid h-full w-full place-items-center rounded-[2px] border border-dashed text-xs"
+        style={{ borderColor: `#${theme.secondary}66`, color: `#${theme.secondary}` }}
+      >
+        chart — add data
       </div>
     );
   }
 
-  if (el.chartType === "pie") {
+  if (el.chartType === "pie" || el.chartType === "doughnut") {
     const values = series[0].values;
     const total = values.reduce((a, b) => a + b, 0) || 1;
-    let angle = -Math.PI / 2;
     const cx = 56;
     const cy = 56;
     const r = 48;
+    // Cumulative start angle per slice (no mutation during render).
+    const starts = values.reduce<number[]>(
+      (acc, v) => [...acc, acc[acc.length - 1] + (v / total) * Math.PI * 2],
+      [-Math.PI / 2],
+    );
     const paths = values.map((v, i) => {
-      const a0 = angle;
-      angle += (v / total) * Math.PI * 2;
+      const a0 = starts[i];
+      const a1 = starts[i + 1];
       const x0 = cx + r * Math.cos(a0);
       const y0 = cy + r * Math.sin(a0);
-      const x1 = cx + r * Math.cos(angle);
-      const y1 = cy + r * Math.sin(angle);
-      const large = (angle - a0) % (Math.PI * 2) > Math.PI ? 1 : 0;
+      const x1 = cx + r * Math.cos(a1);
+      const y1 = cy + r * Math.sin(a1);
+      const large = (a1 - a0) % (Math.PI * 2) > Math.PI ? 1 : 0;
       return (
         <path
           key={i}
@@ -264,6 +356,7 @@ function MiniChart({ el, theme }: { el: SlideElement; theme: SlideTheme }) {
     return (
       <svg viewBox="0 0 112 112" className="h-full w-full" preserveAspectRatio="xMidYMid meet">
         {paths}
+        {el.chartType === "doughnut" && <circle cx={cx} cy={cy} r={r * 0.55} fill={`#${theme.bg}`} />}
       </svg>
     );
   }
@@ -271,45 +364,84 @@ function MiniChart({ el, theme }: { el: SlideElement; theme: SlideTheme }) {
   const all = series.flatMap((s) => s.values);
   const max = Math.max(...all, 1);
   const n = Math.max(...series.map((s) => s.values.length), labels.length, 1);
+  const axis = `#${theme.text}40`;
+  const bottom = showLabels ? H - 14 : H - 6;
 
-  if (el.chartType === "line") {
+  const frame = (
+    <>
+      <line x1={8} y1={4} x2={8} y2={bottom} stroke={axis} strokeWidth={1} />
+      <line x1={8} y1={bottom} x2={W - 4} y2={bottom} stroke={axis} strokeWidth={1} />
+    </>
+  );
+
+  const xFor = (i: number) => 12 + (i / Math.max(1, n - 1)) * (W - 22);
+  const yFor = (v: number) => bottom - 2 - (v / max) * (bottom - 10);
+
+  const labelRow = showLabels ? (
+    <>
+      {labels.slice(0, n).map((l, i) => (
+        <text
+          key={i}
+          x={el.chartType === "line" || el.chartType === "area" ? xFor(i) : 10 + ((i + 0.5) * (W - 22)) / n}
+          y={H - 3}
+          fontSize={7}
+          textAnchor="middle"
+          fill={`#${theme.text}99`}
+        >
+          {l.slice(0, 8)}
+        </text>
+      ))}
+    </>
+  ) : null;
+
+  if (el.chartType === "line" || el.chartType === "area") {
     return (
       <svg viewBox={`0 0 ${W} ${H}`} className="h-full w-full" preserveAspectRatio="none">
-        {series.map((s, si) => (
-          <polyline
-            key={si}
-            fill="none"
-            stroke={`#${colors[si % colors.length]}`}
-            strokeWidth={2}
-            points={s.values
-              .map(
-                (v, i) =>
-                  `${(i / Math.max(1, n - 1)) * (W - 12) + 6},${H - 8 - (v / max) * (H - 16)}`,
-              )
-              .join(" ")}
-          />
-        ))}
+        {frame}
+        {series.map((s, si) => {
+          const pts = s.values.map((v, i) => `${xFor(i)},${yFor(v)}`).join(" ");
+          return (
+            <g key={si}>
+              {el.chartType === "area" && (
+                <polygon
+                  points={`12,${bottom - 2} ${pts} ${xFor(s.values.length - 1)},${bottom - 2}`}
+                  fill={`#${colors[si % colors.length]}33`}
+                />
+              )}
+              <polyline
+                fill="none"
+                stroke={`#${colors[si % colors.length]}`}
+                strokeWidth={2}
+                points={pts}
+              />
+            </g>
+          );
+        })}
+        {labelRow}
       </svg>
     );
   }
 
   // bar
-  const groupW = (W - 12) / n;
+  const groupW = (W - 22) / n;
   const barW = Math.max(3, (groupW - 4) / series.length);
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="h-full w-full" preserveAspectRatio="none">
+      {frame}
       {series.map((s, si) =>
         s.values.map((v, i) => (
           <rect
             key={`${si}-${i}`}
-            x={6 + i * groupW + si * barW}
-            y={H - 8 - (v / max) * (H - 16)}
+            x={10 + i * groupW + si * barW}
+            y={yFor(v)}
             width={barW - 1}
-            height={(v / max) * (H - 16)}
+            height={bottom - 2 - yFor(v)}
+            rx={1}
             fill={`#${colors[si % colors.length]}`}
           />
         )),
       )}
+      {labelRow}
     </svg>
   );
 }

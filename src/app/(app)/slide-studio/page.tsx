@@ -1,27 +1,41 @@
 "use client";
 
-// Slide Studio home: your decks and templates, the new-deck flows, and the
-// zero-design-loss Touch-up mode for existing files.
+// Slide Studio home: your decks and templates, the full-page new-deck flow,
+// and the zero-design-loss Touch-up mode for existing files.
 
-import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { LayoutTemplate, MonitorPlay, Pencil, Plus, Trash2 } from "lucide-react";
+import {
+  FileText,
+  FileUp,
+  LayoutTemplate,
+  MonitorPlay,
+  Pencil,
+  Plus,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
 import { ModuleHero } from "@/components/ui/ModuleHero";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/Button";
 import { useConfirm } from "@/components/ui/Feedback";
 import { SlideCanvas } from "@/components/slides/SlideCanvas";
-import { NewDeckModal } from "@/components/slides/NewDeckModal";
 import { useDecks, useUserId } from "@/lib/slides/hooks";
-import type { SlideDeck } from "@/lib/slides/types";
+import type { DeckSource, SlideDeck } from "@/lib/slides/types";
+
+const SOURCE_BADGE: Record<DeckSource, { label: string; cls: string; icon?: React.ReactNode }> = {
+  topic: { label: "From topic", cls: "bg-fuchsia-100 text-fuchsia-700", icon: <Sparkles size={10} /> },
+  document: { label: "From document", cls: "bg-sky-100 text-sky-700", icon: <FileText size={10} /> },
+  import: { label: "Imported", cls: "bg-emerald-100 text-emerald-700", icon: <FileUp size={10} /> },
+  template: { label: "From template", cls: "bg-violet-100 text-violet-700", icon: <LayoutTemplate size={10} /> },
+  scratch: { label: "Built by hand", cls: "bg-amber-100 text-amber-700" },
+};
 
 export default function SlideStudioPage() {
   const router = useRouter();
   const confirm = useConfirm();
   const { userId } = useUserId();
-  const { decks, loading, add, remove } = useDecks(userId);
-  const [showNew, setShowNew] = useState(false);
+  const { decks, loading, remove } = useDecks(userId);
 
   const templates = decks.filter((d) => d.is_template);
   const regular = decks.filter((d) => !d.is_template);
@@ -45,12 +59,12 @@ export default function SlideStudioPage() {
             >
               <Pencil size={16} /> Touch-up a file
             </Link>
-            <Button
-              className="!bg-white !text-[var(--accent)] hover:!bg-white/90"
-              onClick={() => setShowNew(true)}
+            <Link
+              href="/slide-studio/new"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-white px-4 py-2.5 text-sm font-medium text-[var(--accent)] shadow-sm transition hover:bg-white/90"
             >
               <Plus size={16} /> New deck
-            </Button>
+            </Link>
           </div>
         }
       />
@@ -62,7 +76,7 @@ export default function SlideStudioPage() {
           title="No decks yet"
           hint="Start from a topic, a document, or import an existing .pptx to remix."
           action={
-            <Button onClick={() => setShowNew(true)}>
+            <Button onClick={() => router.push("/slide-studio/new")}>
               <Plus size={16} /> New deck
             </Button>
           }
@@ -104,19 +118,6 @@ export default function SlideStudioPage() {
           )}
         </div>
       )}
-
-      <NewDeckModal
-        open={showNew}
-        onClose={() => setShowNew(false)}
-        templates={templates}
-        onCreate={async ({ title, slides, theme, source }) => {
-          const deck = await add({ title, slides, theme, source });
-          if (deck) {
-            setShowNew(false);
-            router.push(`/slide-studio/${deck.id}`);
-          }
-        }}
-      />
     </>
   );
 }
@@ -140,44 +141,53 @@ function DeckGrid({
         {title}
       </h2>
       <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {decks.map((d) => (
-          <li
-            key={d.id}
-            className="group cursor-pointer overflow-hidden rounded-xl border border-border bg-surface shadow-sm transition hover:border-[var(--accent)]/50"
-            onClick={() => onOpen(d.id)}
-          >
-            <div className="pointer-events-none border-b border-border bg-canvas p-2">
-              {d.slides[0] ? (
-                <SlideCanvas slide={d.slides[0]} theme={d.theme} width={280} />
-              ) : (
-                <div className="grid h-[157px] place-items-center text-xs text-muted">
-                  Empty deck
-                </div>
-              )}
-            </div>
-            <div className="flex items-center gap-2 px-3 py-2.5">
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium">{d.title}</p>
-                <p className="text-xs text-muted">
-                  {d.slides.length} slide{d.slides.length === 1 ? "" : "s"} ·{" "}
-                  {new Date(d.updated_at).toLocaleDateString(undefined, {
-                    month: "short",
-                    day: "numeric",
-                  })}
-                </p>
+        {decks.map((d) => {
+          const badge = SOURCE_BADGE[d.source] || SOURCE_BADGE.scratch;
+          return (
+            <li
+              key={d.id}
+              className="group cursor-pointer overflow-hidden rounded-xl border border-border bg-surface shadow-sm transition hover:-translate-y-0.5 hover:border-[var(--accent)]/50 hover:shadow-md"
+              onClick={() => onOpen(d.id)}
+            >
+              <div className="pointer-events-none relative border-b border-border bg-canvas p-2">
+                {d.slides[0] ? (
+                  <SlideCanvas slide={d.slides[0]} theme={d.theme} width={280} />
+                ) : (
+                  <div className="grid h-[157px] place-items-center text-xs text-muted">
+                    Empty deck
+                  </div>
+                )}
+                <span
+                  className={`absolute right-3 top-3 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${badge.cls}`}
+                >
+                  {badge.icon}
+                  {badge.label}
+                </span>
               </div>
-              <button
-                className="rounded p-1 text-muted opacity-0 transition hover:text-red-600 group-hover:opacity-100"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDelete(d);
-                }}
-              >
-                <Trash2 size={13} />
-              </button>
-            </div>
-          </li>
-        ))}
+              <div className="flex items-center gap-2 px-3 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">{d.title}</p>
+                  <p className="text-xs text-muted">
+                    {d.slides.length} slide{d.slides.length === 1 ? "" : "s"} ·{" "}
+                    {new Date(d.updated_at).toLocaleDateString(undefined, {
+                      month: "short",
+                      day: "numeric",
+                    })}
+                  </p>
+                </div>
+                <button
+                  className="rounded p-1 text-muted opacity-0 transition hover:text-red-600 group-hover:opacity-100"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete(d);
+                  }}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            </li>
+          );
+        })}
       </ul>
     </section>
   );

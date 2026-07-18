@@ -1,15 +1,16 @@
 "use client";
 
 // Right-hand inspector: edit the selected element's content, geometry, and
-// style; generate/upload images; edit chart data. Plus add-element buttons.
+// style; generate/upload images; open the chart data editor; full shape
+// gallery with fill/border/label. Plus the add-element toolbar.
 
 import { useState } from "react";
 import {
   BarChart3,
   Image as ImageIcon,
   List,
+  Shapes,
   Sparkles,
-  Square,
   Trash2,
   Type,
   Upload,
@@ -17,12 +18,89 @@ import {
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 import { useToast } from "@/components/ui/Feedback";
-import { uid, type SlideElement, type SlideTheme } from "@/lib/slides/types";
+import { SHAPE_POINTS } from "./SlideCanvas";
+import { uid, type ShapeKind, type SlideElement, type SlideTheme } from "@/lib/slides/types";
 
-export function AddElementBar({ onAdd }: { onAdd: (el: SlideElement) => void }) {
+export const SHAPE_LIBRARY: { kind: ShapeKind; label: string }[] = [
+  { kind: "rect", label: "Rectangle" },
+  { kind: "roundRect", label: "Rounded" },
+  { kind: "ellipse", label: "Ellipse" },
+  { kind: "triangle", label: "Triangle" },
+  { kind: "diamond", label: "Diamond" },
+  { kind: "rightArrow", label: "Arrow →" },
+  { kind: "leftArrow", label: "Arrow ←" },
+  { kind: "upArrow", label: "Arrow ↑" },
+  { kind: "downArrow", label: "Arrow ↓" },
+  { kind: "chevron", label: "Chevron" },
+  { kind: "pentagon", label: "Pentagon" },
+  { kind: "star", label: "Star" },
+  { kind: "line", label: "Line" },
+];
+
+export function ShapeIcon({ kind, color = "currentColor", size = 22 }: { kind: ShapeKind; color?: string; size?: number }) {
+  if (kind === "line")
+    return (
+      <svg width={size} height={size} viewBox="0 0 100 100">
+        <line x1={6} y1={80} x2={94} y2={20} stroke={color} strokeWidth={10} strokeLinecap="round" />
+      </svg>
+    );
+  if (kind === "rect" || kind === "roundRect")
+    return (
+      <svg width={size} height={size} viewBox="0 0 100 100">
+        <rect x={8} y={22} width={84} height={56} rx={kind === "roundRect" ? 14 : 0} fill={color} />
+      </svg>
+    );
+  if (kind === "ellipse")
+    return (
+      <svg width={size} height={size} viewBox="0 0 100 100">
+        <ellipse cx={50} cy={50} rx={44} ry={32} fill={color} />
+      </svg>
+    );
+  return (
+    <svg width={size} height={size} viewBox="0 0 100 100">
+      <polygon points={SHAPE_POINTS[kind] || SHAPE_POINTS.pentagon} fill={color} />
+    </svg>
+  );
+}
+
+export function ShapeGallery({
+  onPick,
+  active,
+}: {
+  onPick: (kind: ShapeKind) => void;
+  active?: ShapeKind;
+}) {
+  return (
+    <div className="grid grid-cols-5 gap-1">
+      {SHAPE_LIBRARY.map((s) => (
+        <button
+          key={s.kind}
+          title={s.label}
+          onClick={() => onPick(s.kind)}
+          className={`grid aspect-square place-items-center rounded-lg border transition ${
+            active === s.kind
+              ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
+              : "border-border text-muted hover:border-[var(--accent)]/50 hover:text-[var(--accent)]"
+          }`}
+        >
+          <ShapeIcon kind={s.kind} />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function AddElementBar({
+  onAdd,
+  onInsertChart,
+}: {
+  onAdd: (el: SlideElement) => void;
+  onInsertChart: () => void;
+}) {
+  const [showShapes, setShowShapes] = useState(false);
   const base = { id: "", x: 1, y: 1.5, w: 4, h: 1 };
   return (
-    <div className="flex flex-wrap gap-1.5">
+    <div className="relative flex flex-wrap gap-1.5">
       <Button
         size="sm"
         variant="secondary"
@@ -55,33 +133,36 @@ export function AddElementBar({ onAdd }: { onAdd: (el: SlideElement) => void }) 
       >
         <ImageIcon size={13} /> Image
       </Button>
-      <Button
-        size="sm"
-        variant="secondary"
-        onClick={() =>
-          onAdd({
-            ...base,
-            id: uid(),
-            type: "chart",
-            chartType: "bar",
-            labels: ["A", "B", "C"],
-            series: [{ name: "Series 1", values: [4, 7, 5] }],
-            w: 4.5,
-            h: 2.8,
-          })
-        }
-      >
+      <Button size="sm" variant="secondary" onClick={onInsertChart}>
         <BarChart3 size={13} /> Chart
       </Button>
       <Button
         size="sm"
-        variant="secondary"
-        onClick={() =>
-          onAdd({ ...base, id: uid(), type: "shape", shape: "rect", w: 2, h: 1 })
-        }
+        variant={showShapes ? "primary" : "secondary"}
+        onClick={() => setShowShapes((v) => !v)}
       >
-        <Square size={13} /> Shape
+        <Shapes size={13} /> Shape
       </Button>
+      {showShapes && (
+        <div className="absolute left-0 top-full z-30 mt-1.5 w-64 rounded-xl border border-border bg-surface p-2 shadow-lg">
+          <p className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+            Pick a shape
+          </p>
+          <ShapeGallery
+            onPick={(kind) => {
+              onAdd({
+                ...base,
+                id: uid(),
+                type: "shape",
+                shape: kind,
+                w: kind === "line" ? 3 : 2,
+                h: kind === "line" ? 0.15 : kind === "rect" || kind === "roundRect" ? 1.2 : 1.6,
+              });
+              setShowShapes(false);
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -91,14 +172,16 @@ export function Inspector({
   theme,
   onChange,
   onDelete,
+  onEditChart,
 }: {
   el: SlideElement;
   theme: SlideTheme;
   onChange: (partial: Partial<SlideElement>) => void;
   onDelete: () => void;
+  onEditChart: () => void;
 }) {
   const toast = useToast();
-  const [imgPrompt, setImgPrompt] = useState("");
+  const [imgPrompt, setImgPrompt] = useState(el.prompt || "");
   const [generating, setGenerating] = useState(false);
 
   async function generateImage() {
@@ -113,7 +196,6 @@ export function Inspector({
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Image generation failed");
       onChange({ src: json.url });
-      setImgPrompt("");
     } catch (e) {
       toast("error", (e as Error).message);
     } finally {
@@ -185,6 +267,10 @@ export function Inspector({
 
       {el.type === "image" && (
         <div className="space-y-2">
+          {el.src && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={el.src} alt="" className="max-h-28 w-full rounded-lg object-cover" />
+          )}
           <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted transition hover:text-ink">
             <Upload size={13} /> Upload image
             <input
@@ -205,98 +291,79 @@ export function Inspector({
             className="min-h-16"
           />
           <Button size="sm" disabled={!imgPrompt.trim() || generating} onClick={generateImage}>
-            <Sparkles size={13} /> {generating ? "Creating…" : "Generate image"}
+            <Sparkles size={13} /> {generating ? "Creating… (~15s)" : "Generate image"}
           </Button>
         </div>
       )}
 
       {el.type === "chart" && (
         <div className="space-y-2">
-          <Select
-            label="Chart type"
-            value={el.chartType || "bar"}
-            onChange={(e) => onChange({ chartType: e.target.value as "bar" | "line" | "pie" })}
-          >
-            <option value="bar">Bar</option>
-            <option value="line">Line</option>
-            <option value="pie">Pie</option>
-          </Select>
-          <Input
-            label="Labels (comma-separated)"
-            value={(el.labels || []).join(", ")}
-            onChange={(e) =>
-              onChange({ labels: e.target.value.split(",").map((s) => s.trim()) })
-            }
-          />
-          {(el.series || []).map((s, i) => (
-            <div key={i} className="grid grid-cols-[1fr_1.4fr_auto] items-end gap-1.5">
-              <Input
-                label={i === 0 ? "Series" : undefined}
-                value={s.name}
-                onChange={(e) => {
-                  const series = [...(el.series || [])];
-                  series[i] = { ...series[i], name: e.target.value };
-                  onChange({ series });
-                }}
-              />
-              <Input
-                label={i === 0 ? "Values (comma-sep)" : undefined}
-                value={s.values.join(", ")}
-                onChange={(e) => {
-                  const series = [...(el.series || [])];
-                  series[i] = {
-                    ...series[i],
-                    values: e.target.value
-                      .split(",")
-                      .map((v) => Number(v.trim()))
-                      .filter((v) => !Number.isNaN(v)),
-                  };
-                  onChange({ series });
-                }}
-              />
-              <button
-                className="mb-2 rounded p-1 text-muted hover:text-red-600"
-                onClick={() =>
-                  onChange({ series: (el.series || []).filter((_, j) => j !== i) })
-                }
-              >
-                <Trash2 size={13} />
-              </button>
-            </div>
-          ))}
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() =>
-              onChange({
-                series: [
-                  ...(el.series || []),
-                  { name: `Series ${(el.series || []).length + 1}`, values: [1, 2, 3] },
-                ],
-              })
-            }
-          >
-            Add series
+          <p className="text-xs text-muted">
+            {(el.series || []).length} series · {(el.labels || []).length} categories ·{" "}
+            {el.chartType || "bar"}
+          </p>
+          <Button size="sm" onClick={onEditChart}>
+            <BarChart3 size={13} /> Edit data & type
           </Button>
         </div>
       )}
 
       {el.type === "shape" && (
-        <div className="space-y-2">
-          <Select
-            label="Shape"
-            value={el.shape || "rect"}
-            onChange={(e) => onChange({ shape: e.target.value as "rect" | "ellipse" | "line" })}
-          >
-            <option value="rect">Rectangle</option>
-            <option value="ellipse">Ellipse</option>
-            <option value="line">Line</option>
-          </Select>
-          <ColorInput
-            label="Fill"
-            value={el.fill || theme.primary}
-            onChange={(fill) => onChange({ fill })}
-          />
+        <div className="space-y-2.5">
+          <div>
+            <p className="mb-1 text-xs font-medium text-ink">Shape</p>
+            <ShapeGallery active={el.shape || "rect"} onPick={(shape) => onChange({ shape })} />
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <ColorInput
+              label="Fill"
+              value={el.fill || theme.primary}
+              onChange={(fill) => onChange({ fill })}
+            />
+            <ColorInput
+              label="Border"
+              value={el.lineColor || ""}
+              onChange={(lineColor) => onChange({ lineColor })}
+            />
+            <label className="flex items-center gap-1.5">
+              <span className="text-xs font-medium text-muted">Width</span>
+              <input
+                type="number"
+                min={0}
+                max={12}
+                step={0.5}
+                value={el.lineWidth ?? (el.shape === "line" ? 2 : 0)}
+                onChange={(e) => onChange({ lineWidth: Number(e.target.value) || 0 })}
+                className="w-14 rounded border border-border bg-surface px-1.5 py-1 text-xs"
+              />
+            </label>
+          </div>
+          {el.shape !== "line" && (
+            <>
+              <Input
+                label="Label (optional)"
+                value={el.text || ""}
+                onChange={(e) => onChange({ text: e.target.value })}
+                placeholder="Text inside the shape"
+              />
+              {(el.text || "").trim() && (
+                <div className="flex items-end gap-2">
+                  <Input
+                    label="Font size"
+                    type="number"
+                    value={el.fontSize || 14}
+                    onChange={(e) => onChange({ fontSize: Number(e.target.value) || 14 })}
+                    className="!w-20"
+                  />
+                  <ColorInput
+                    label="Text color"
+                    value={el.color || "FFFFFF"}
+                    onChange={(color) => onChange({ color })}
+                  />
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
     </div>

@@ -10,7 +10,7 @@ import { ChevronLeft, ChevronRight, Mic, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { useToast } from "@/components/ui/Feedback";
 import { SlideCanvas } from "./SlideCanvas";
-import { deckText, type Slide, type SlideTheme } from "@/lib/slides/types";
+import { deckText, notesToText, type Slide, type SlideTheme } from "@/lib/slides/types";
 
 const FILLERS = [
   "um", "uh", "like", "you know", "sort of", "kind of", "basically",
@@ -178,7 +178,10 @@ export function PracticeMode({
 
       const metrics = computeMetrics(transcript, elapsedRef.current);
       const notesText = slides
-        .map((s, i) => (s.notes ? `Slide ${i + 1}: ${s.notes}` : ""))
+        .map((s, i) => {
+          const t = notesToText(s.notes);
+          return t ? `Slide ${i + 1}: ${t}` : "";
+        })
         .filter(Boolean)
         .join("\n");
 
@@ -316,7 +319,7 @@ export function PracticeMode({
           <div className="mx-auto mt-3 w-full max-w-4xl">
             <div className="max-h-28 overflow-y-auto rounded-lg bg-white/10 px-4 py-3 text-sm leading-relaxed text-white/90">
               {slide?.notes ? (
-                <span className="whitespace-pre-wrap">{slide.notes}</span>
+                <span className="whitespace-pre-wrap">{notesToText(slide.notes)}</span>
               ) : (
                 <span className="text-white/50">No notes for this slide.</span>
               )}
