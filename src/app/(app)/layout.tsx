@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { AppHeader } from "@/components/AppHeader";
 import { ImpersonationBanner } from "@/components/ImpersonationBanner";
 import { FeedbackProvider } from "@/components/ui/Feedback";
+import { PageContainer } from "@/components/PageContainer";
 
 export default async function AppLayout({
   children,
@@ -40,7 +41,7 @@ export default async function AppLayout({
         )}
         <AppHeader username={username} isAdmin={isAdmin} />
         <main className="flex-1">
-          <div className="mx-auto max-w-5xl px-3 py-5 sm:px-8 sm:py-8">{children}</div>
+          <PageContainer>{children}</PageContainer>
         </main>
       </div>
     </FeedbackProvider>

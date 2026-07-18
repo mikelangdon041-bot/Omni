@@ -1,19 +1,50 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { openai } from "@/lib/openai";
+import { anthropic, WRITER_MODEL } from "@/lib/anthropic";
+import { AUDIENCE_CHIPS, TONE_CHIPS } from "@/lib/writer/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
-const MODEL = process.env.OPENAI_SUMMARY_MODEL || "gpt-4o";
-
-// Writing Studio's text AI. Actions:
-//   generate      — create/edit/refine a piece of writing. Sends the full
-//                   intake (chips + free text + styles). When `previous` is
-//                   present it's a refine pass over the current output.
-//                   → { variants: [{ html, subject }] }
+// Writing Studio's text AI — powered by Claude. Actions:
+//   generate      — create/edit/refine a piece of writing. The free-text brief
+//                   is the primary input (it may contain a pasted email plus
+//                   "reply saying X"); chips + detail fields refine it. When
+//                   `previous` is present it's a refine pass over the current
+//                   output. → { variants: [{ html, subject }] }
+//   extract       — read the free-text brief and pull out structured intake
+//                   fields (recipient, ask, key points, tone, …) so typing
+//                   alone fills the doc. → { extracted: {...} }
 //   analyze_voice — distill pasted writing samples into a voice profile.
 //                   → { profile }
+
+const GENERATE_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    variants: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: {
+          subject: { type: "string" as const },
+          html: { type: "string" as const },
+        },
+        required: ["subject", "html"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["variants"],
+  additionalProperties: false,
+};
+
+function firstText(res: {
+  content: { type: string; text?: string }[];
+}): string {
+  const block = res.content.find((b) => b.type === "text");
+  return (block?.text || "").trim();
+}
+
 export async function POST(req: Request) {
   const supabase = await createClient();
   const {
@@ -30,13 +61,10 @@ export async function POST(req: Request) {
       if (!samples.trim())
         return NextResponse.json({ error: "No samples provided" }, { status: 400 });
 
-      const res = await openai().chat.completions.create({
-        model: MODEL,
-        temperature: 0.3,
-        messages: [
-          {
-            role: "system",
-            content: `You analyze writing samples and produce a compact "voice profile" another writer could follow to imitate the author.
+      const res = await anthropic().messages.create({
+        model: WRITER_MODEL,
+        max_tokens: 2000,
+        system: `You analyze writing samples and produce a compact "voice profile" another writer could follow to imitate the author.
 
 Cover, as short labelled lines (plain text, no markdown headings):
 - Sentence style (length, rhythm, fragments?)
@@ -47,14 +75,59 @@ Cover, as short labelled lines (plain text, no markdown headings):
 - Structure habits (short paragraphs? bullets? one-liners?)
 - Anything distinctive worth imitating
 
-Be specific and quote short examples from the samples. Under 250 words.`,
+Be specific and quote short examples from the samples. Under 250 words. Return only the profile, no preamble.`,
+        messages: [{ role: "user", content: `Writing samples:\n\n${samples}` }],
+      });
+      return NextResponse.json({ profile: firstText(res) });
+    }
+
+    if (action === "extract") {
+      const brief = String(body?.brief || "").slice(0, 30000);
+      const docType = String(body?.docType || "email");
+      if (!brief.trim())
+        return NextResponse.json({ error: "Nothing to extract" }, { status: 400 });
+
+      const EXTRACT_SCHEMA = {
+        type: "object" as const,
+        properties: {
+          title: { type: "string" as const },
+          recipient: { type: "string" as const },
+          ask: { type: "string" as const },
+          keyPoints: { type: "string" as const },
+          background: { type: "string" as const },
+          tone: {
+            type: "array" as const,
+            items: { type: "string" as const, enum: TONE_CHIPS },
           },
-          { role: "user", content: `Writing samples:\n\n${samples}` },
-        ],
+          audience: {
+            type: "array" as const,
+            items: { type: "string" as const, enum: AUDIENCE_CHIPS },
+          },
+        },
+        required: ["title", "recipient", "ask", "keyPoints", "background", "tone", "audience"],
+        additionalProperties: false,
+      };
+
+      const res = await anthropic().messages.create({
+        model: WRITER_MODEL,
+        max_tokens: 2000,
+        output_config: { format: { type: "json_schema", schema: EXTRACT_SCHEMA } },
+        system: `The user is drafting a ${docType} in a writing tool. They typed a free-text brief — possibly including a pasted email or message they're responding to. Extract structured intake details from it so the tool can file them into the right fields.
+
+Rules:
+- Only extract what is clearly present or safely inferable. Use "" (or [] for arrays) when unsure — never guess or invent.
+- title: a short 3–7 word working name for this piece (e.g. "Re: Quarterly Meeting Participation").
+- recipient: the person being written to — name and role if inferable (e.g. from the pasted email's sender).
+- ask: what the writer wants to happen, one sentence, in plain words.
+- keyPoints: points that must be included, one per line. Empty if none stated.
+- background: a compact summary of relevant context from pasted source material (who said what, dates, history). Empty if the brief has no source material.
+- tone / audience: pick ONLY from the allowed values, and only when the brief clearly implies them. Usually 0–2 picks.
+Return only the JSON.`,
+        messages: [{ role: "user", content: `Brief:\n\n${brief}` }],
       });
-      return NextResponse.json({
-        profile: res.choices[0]?.message?.content?.trim() || "",
-      });
+
+      const extracted = JSON.parse(firstText(res) || "{}");
+      return NextResponse.json({ extracted });
     }
 
     if (action === "generate") {
@@ -88,7 +161,10 @@ Be specific and quote short examples from the samples. Under 250 words.`,
 
       const list = (v: unknown) => (Array.isArray(v) && v.length ? v.join("; ") : "");
 
+      const brief = String(ctx.brief || "").slice(0, 30000);
+
       const intake = [
+        brief && `The user's brief (their own words — this is the primary instruction; it may include source material like an email to respond to):\n${brief}`,
         list(ctx.actions) && `Requested edits: ${list(ctx.actions)}`,
         list(ctx.tone) && `Tone: ${list(ctx.tone)}`,
         list(ctx.audience) && `Audience: ${list(ctx.audience)}`,
@@ -99,7 +175,7 @@ Be specific and quote short examples from the samples. Under 250 words.`,
         ctx.background && `Background / context:\n${ctx.background}`,
       ]
         .filter(Boolean)
-        .join("\n");
+        .join("\n\n");
 
       const task = previous
         ? `Here is the current draft you produced earlier. Revise it according to the new guidance while keeping everything that wasn't asked to change.\n\nCurrent draft:\n${previous}\n\nNew guidance: ${guidance || "(none — light general polish)"}`
@@ -107,24 +183,26 @@ Be specific and quote short examples from the samples. Under 250 words.`,
           ? `Here is the user's own draft. Improve it per the intake. Preserve their meaning, facts, and anything specific; do not invent content.\n\nUser's draft:\n${original}`
           : `Write it from scratch based on the intake. If key points are given, include every one. Never invent specific facts, numbers, or commitments the user didn't provide.`;
 
-      const res = await openai().chat.completions.create({
-        model: MODEL,
-        temperature: previous ? 0.4 : 0.6,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content: `You are an elite writing partner. You produce polished, natural writing that sounds like a real person — never like AI filler.
+      const res = await anthropic().messages.create({
+        model: WRITER_MODEL,
+        max_tokens: 16000,
+        output_config: {
+          format: { type: "json_schema", schema: GENERATE_SCHEMA },
+        },
+        system: `You are an elite writing partner. You produce polished, natural writing that sounds like a real person — never like AI filler.
 
 Hard rules:
-- Return ONLY JSON: {"variants":[{"subject":"...","html":"..."}]} with exactly ${variants} variant(s).${variants > 1 ? " Make the variants genuinely different in angle/structure, not reworded copies." : ""}
+- Return JSON: {"variants":[{"subject":"...","html":"..."}]} with exactly ${variants} variant(s).${variants > 1 ? " Make the variants genuinely different in angle/structure, not reworded copies." : ""}
 - "html" is the piece itself as simple HTML: <p> for paragraphs, <br> only inside a paragraph, <ul>/<ol>/<li> for lists, <b>/<i> sparingly. No inline styles, no headings unless the piece truly needs them, no markdown.
 - "subject" is only meaningful for emails; otherwise return "".
-- No preamble, no explanations, no placeholder brackets unless the user's input truly lacks a needed fact (then use [square brackets]).
+- Work out the situation yourself from the brief. If the brief contains a pasted email or message, understand it and do what the user asked with it (reply, decline, forward, summarize…). Pull the recipient's name, the topic, dates, and any commitments straight from that source material.
+- Names: address the recipient by name whenever it can be inferred from anything provided (the pasted email's sender, the recipient field, the background). NEVER output a placeholder like [Name] or [Recipient]. If no name is inferable, open naturally without one (e.g. "Hi," / "Hi there,") or skip the greeting if the format doesn't need it.
+- Only use [square brackets] for a genuinely missing hard fact (a date, a number) the user must fill in — never for names or things you can infer.
+- No preamble, no explanations.
 - Avoid AI tells: no "I hope this email finds you well", no "delve", no exclamation stacking, no needless bullet lists.
 ${typeNotes[docType] || typeNotes.other}
 ${styleBlock ? `\n${styleBlock}` : ""}${signature ? `\n(The user's emails get this signature appended automatically after your body — never write your own sign-off block with contact details.)` : ""}`,
-          },
+        messages: [
           {
             role: "user",
             content: `${intake ? `Intake:\n${intake}\n\n` : ""}${task}`,
@@ -132,7 +210,13 @@ ${styleBlock ? `\n${styleBlock}` : ""}${signature ? `\n(The user's emails get th
         ],
       });
 
-      const parsed = JSON.parse(res.choices[0]?.message?.content || "{}");
+      if (res.stop_reason === "refusal")
+        return NextResponse.json(
+          { error: "The model declined this request — try rephrasing." },
+          { status: 502 },
+        );
+
+      const parsed = JSON.parse(firstText(res) || "{}");
       const out = (Array.isArray(parsed.variants) ? parsed.variants : [])
         .slice(0, variants)
         .map((v: { subject?: unknown; html?: unknown }) => ({

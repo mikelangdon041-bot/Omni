@@ -2,13 +2,14 @@
 
 // Writing Studio settings: signature, diff highlighting, variant count, and
 // the styles manager (rule styles + voices analyzed from writing samples).
+// Everything autosaves — same pattern as the conference app.
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Plus, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea } from "@/components/ui/Input";
-import { RichText } from "@/components/ui/RichText";
+import { AutoRichField } from "@/components/ui/AutoRichField";
 import { useToast, useConfirm } from "@/components/ui/Feedback";
 import type { WriterSettings, WriterStyle } from "@/lib/writer/types";
 
@@ -33,15 +34,12 @@ export function SettingsModal({
 }) {
   const toast = useToast();
   const confirm = useConfirm();
-  const [signature, setSignature] = useState<string | null>(null);
   const [adding, setAdding] = useState<"rules" | "voice" | null>(null);
   const [name, setName] = useState("");
   const [rules, setRules] = useState("");
   const [samples, setSamples] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
   const [editing, setEditing] = useState<WriterStyle | null>(null);
-
-  const sig = signature ?? settings?.signature ?? "";
 
   async function analyzeAndSave() {
     if (!name.trim() || !samples.trim()) return;
@@ -70,30 +68,20 @@ export function SettingsModal({
   return (
     <Modal open={open} onClose={onClose} title="Writing Studio settings" size="lg">
       <div className="space-y-6">
-        {/* Signature */}
+        {/* Signature — autosaves as you type */}
         <section>
-          <h3 className="mb-1 text-sm font-semibold">Email signature</h3>
           <p className="mb-2 text-xs text-muted">
-            Pasted once, appended to every email you copy or send from here.
+            Your signature is appended to every email you copy or send from here.
           </p>
-          <RichText
-            value={sig}
-            onChange={(html) => setSignature(html)}
-            placeholder="Paste or type your signature…"
-            minHeight="min-h-20"
-          />
-          {signature !== null && signature !== settings?.signature && (
-            <div className="mt-2 flex justify-end">
-              <Button
-                size="sm"
-                onClick={async () => {
-                  await saveSettings({ signature });
-                  toast("success", "Signature saved");
-                }}
-              >
-                Save signature
-              </Button>
-            </div>
+          {settings && (
+            <AutoRichField
+              label="Email signature"
+              initialHtml={settings.signature || ""}
+              canEdit
+              onSave={(html) => saveSettings({ signature: html })}
+              placeholder="Paste or type your signature… (saves automatically)"
+              minHeight="min-h-20"
+            />
           )}
         </section>
 
@@ -249,7 +237,7 @@ export function SettingsModal({
         </section>
       </div>
 
-      {/* Edit one style */}
+      {/* Edit one style — autosaves */}
       <Modal
         open={!!editing}
         onClose={() => setEditing(null)}
@@ -257,11 +245,9 @@ export function SettingsModal({
       >
         {editing && (
           <EditStyle
+            key={editing.id}
             style={editing}
-            onSave={async (partial) => {
-              await updateStyle(editing.id, partial);
-              setEditing(null);
-            }}
+            onSave={(partial) => updateStyle(editing.id, partial)}
           />
         )}
       </Modal>
@@ -278,8 +264,38 @@ function EditStyle({
 }) {
   const [name, setName] = useState(style.name);
   const [text, setText] = useState(style.kind === "voice" ? style.voice_profile : style.rules);
+  const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const savedRef = useRef({ name: style.name, text });
+
+  // Debounced autosave — same feel as the conference app's fields.
+  useEffect(() => {
+    if (name === savedRef.current.name && text === savedRef.current.text) return;
+    setStatus("saving");
+    const t = setTimeout(async () => {
+      const finalName = name.trim() || style.name;
+      await onSave(
+        style.kind === "voice"
+          ? { name: finalName, voice_profile: text }
+          : { name: finalName, rules: text },
+      );
+      savedRef.current = { name, text };
+      setStatus("saved");
+    }, 900);
+    return () => clearTimeout(t);
+  }, [name, text, onSave, style.kind, style.name]);
+
   return (
     <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted">
+          Edits save automatically
+        </span>
+        {status !== "idle" && (
+          <span className="text-xs text-muted">
+            {status === "saving" ? "Saving…" : "Saved"}
+          </span>
+        )}
+      </div>
       <Input label="Name" value={name} onChange={(e) => setName(e.target.value)} />
       <Textarea
         label={style.kind === "voice" ? "Voice profile (editable)" : "Rules"}
@@ -287,19 +303,6 @@ function EditStyle({
         onChange={(e) => setText(e.target.value)}
         className="min-h-40"
       />
-      <div className="flex justify-end">
-        <Button
-          onClick={() =>
-            onSave(
-              style.kind === "voice"
-                ? { name: name.trim() || style.name, voice_profile: text }
-                : { name: name.trim() || style.name, rules: text },
-            )
-          }
-        >
-          Save
-        </Button>
-      </div>
     </div>
   );
 }

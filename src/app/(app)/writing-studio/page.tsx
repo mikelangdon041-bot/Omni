@@ -27,6 +27,16 @@ import {
   type DocType,
 } from "@/lib/writer/types";
 
+// Per-type color identity so the library reads at a glance.
+const TYPE_COLORS: Record<DocType, { badge: string; edge: string }> = {
+  email: { badge: "bg-sky-100 text-sky-700", edge: "hover:border-sky-400/60" },
+  document: { badge: "bg-violet-100 text-violet-700", edge: "hover:border-violet-400/60" },
+  message: { badge: "bg-teal-100 text-teal-700", edge: "hover:border-teal-400/60" },
+  social: { badge: "bg-rose-100 text-rose-700", edge: "hover:border-rose-400/60" },
+  summary: { badge: "bg-amber-100 text-amber-700", edge: "hover:border-amber-400/60" },
+  other: { badge: "bg-[var(--accent-soft)] text-[var(--accent)]", edge: "hover:border-[var(--accent)]/50" },
+};
+
 export default function WritingStudioPage() {
   const router = useRouter();
   const confirm = useConfirm();
@@ -140,11 +150,13 @@ export default function WritingStudioPage() {
           {filtered.map((d) => (
             <li
               key={d.id}
-              className="group cursor-pointer rounded-xl border border-border bg-surface p-4 shadow-sm transition hover:border-[var(--accent)]/50"
+              className={`group cursor-pointer rounded-xl border border-border bg-surface p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${TYPE_COLORS[d.doc_type]?.edge || ""}`}
               onClick={() => router.push(`/writing-studio/${d.id}`)}
             >
               <div className="mb-1 flex items-center gap-2">
-                <span className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--accent)]">
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${TYPE_COLORS[d.doc_type]?.badge || "bg-[var(--accent-soft)] text-[var(--accent)]"}`}
+                >
                   {docTypeLabel(d.doc_type)}
                 </span>
                 <span className="text-xs text-muted">
@@ -221,12 +233,16 @@ function NewPieceModal({
             onClick={() => setDocType(t.key)}
             className={`rounded-xl border p-3 text-left transition ${
               docType === t.key
-                ? "border-[var(--accent)] bg-[var(--accent-soft)]/60"
-                : "border-border hover:border-[var(--accent)]/40"
+                ? "border-[var(--accent)] bg-[var(--accent-soft)]/60 shadow-sm"
+                : `border-border ${TYPE_COLORS[t.key]?.edge || ""}`
             }`}
           >
-            <p className="text-sm font-medium">{t.label}</p>
-            <p className="mt-0.5 text-[11px] leading-snug text-muted">{t.blurb}</p>
+            <span
+              className={`mb-1.5 inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${TYPE_COLORS[t.key]?.badge || ""}`}
+            >
+              {t.label}
+            </span>
+            <p className="text-[11px] leading-snug text-muted">{t.blurb}</p>
           </button>
         ))}
       </div>

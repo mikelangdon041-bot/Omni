@@ -1,19 +1,25 @@
 "use client";
 
-// The Writing Studio workspace: guided intake on the left, the living output
-// on the right — generate, refine with new guidance, flip through versions,
-// see what changed, copy or send.
+// The Writing Studio workspace: a "just tell me what you need" brief up top
+// (it auto-extracts recipient/ask/tone/… as you type), guided options folded
+// into collapsible sections below, and the living output on the right —
+// generate, refine with new guidance, flip through versions, see what
+// changed, copy or send.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   Check,
   Copy,
   Eye,
   EyeOff,
+  FileText,
   History,
+  ListChecks,
   Mail,
+  Palette,
   Sparkles,
+  Wand2,
 } from "lucide-react";
 import { BackButton } from "@/components/BackButton";
 import { Button } from "@/components/ui/Button";
@@ -22,6 +28,7 @@ import { Modal } from "@/components/ui/Modal";
 import { RichText, RichTextView } from "@/components/ui/RichText";
 import { useToast } from "@/components/ui/Feedback";
 import { ChipGroup } from "@/components/writer/Chips";
+import { IntakeSection } from "@/components/writer/IntakeSection";
 import { diffHighlightHtml } from "@/lib/writer/diff";
 import {
   useUserId,
@@ -37,6 +44,7 @@ import {
   docTypeLabel,
   htmlToPlain,
   type WriterContext,
+  type WriterDoc,
   type WriterVersion,
 } from "@/lib/writer/types";
 
@@ -57,6 +65,21 @@ export default function WriterDocPage() {
   const [showVersions, setShowVersions] = useState(false);
   const [showDiff, setShowDiff] = useState<boolean | null>(null);
   const [copied, setCopied] = useState(false);
+  const [extractNote, setExtractNote] = useState<"idle" | "working" | string>("idle");
+
+  // Latest doc for use inside debounced callbacks without re-arming them.
+  const docRef = useRef<WriterDoc | null>(null);
+  docRef.current = doc;
+  const lastExtracted = useRef("");
+  const extractInit = useRef(false);
+
+  // Don't re-extract a brief that was already there when the page opened.
+  useEffect(() => {
+    if (doc && !extractInit.current) {
+      extractInit.current = true;
+      lastExtracted.current = htmlToPlain(doc.context.brief);
+    }
+  }, [doc]);
 
   const isEmail = doc?.doc_type === "email";
   const diffOn =
@@ -69,6 +92,86 @@ export default function WriterDocPage() {
     const prev = versions.find((v) => htmlToPlain(v.content) !== htmlToPlain(doc.content));
     return prev ? htmlToPlain(prev.content) : "";
   }, [doc, versions]);
+
+  const briefPlain = doc ? htmlToPlain(doc.context.brief) : "";
+
+  // Auto-extract: once you've typed a real brief and paused, ask the AI to
+  // file recipient / ask / key points / tone / … into their fields — only
+  // ever filling fields you've left empty.
+  useEffect(() => {
+    if (!doc || busy) return;
+    if (briefPlain.length < 60 || briefPlain === lastExtracted.current) return;
+    const timer = setTimeout(async () => {
+      const d = docRef.current;
+      if (!d) return;
+      lastExtracted.current = briefPlain;
+      setExtractNote("working");
+      try {
+        const res = await fetch("/api/writer/ai", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            action: "extract",
+            docType: d.doc_type,
+            brief: briefPlain,
+          }),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "Extract failed");
+        const ex = json.extracted || {};
+        const cur = docRef.current;
+        if (!cur) return;
+        const partial: Partial<WriterContext> = {};
+        const filled: string[] = [];
+        if (!cur.context.recipient.trim() && ex.recipient) {
+          partial.recipient = String(ex.recipient);
+          filled.push("recipient");
+        }
+        if (!cur.context.ask.trim() && ex.ask) {
+          partial.ask = String(ex.ask);
+          filled.push("goal");
+        }
+        if (!cur.context.keyPoints.trim() && ex.keyPoints) {
+          partial.keyPoints = String(ex.keyPoints);
+          filled.push("key points");
+        }
+        if (!cur.context.background.trim() && ex.background) {
+          partial.background = String(ex.background);
+          filled.push("background");
+        }
+        if (!cur.context.tone.length && Array.isArray(ex.tone) && ex.tone.length) {
+          partial.tone = ex.tone.filter((t: string) => TONE_CHIPS.includes(t));
+          if (partial.tone!.length) filled.push("tone");
+          else delete partial.tone;
+        }
+        if (
+          !cur.context.audience.length &&
+          Array.isArray(ex.audience) &&
+          ex.audience.length
+        ) {
+          partial.audience = ex.audience.filter((a: string) =>
+            AUDIENCE_CHIPS.includes(a),
+          );
+          if (partial.audience!.length) filled.push("audience");
+          else delete partial.audience;
+        }
+        const docPartial: Partial<WriterDoc> = {};
+        if (Object.keys(partial).length)
+          docPartial.context = { ...cur.context, ...partial };
+        if (!cur.title.trim() && ex.title) {
+          docPartial.title = String(ex.title);
+          filled.push("title");
+        }
+        if (Object.keys(docPartial).length) save(docPartial);
+        setExtractNote(filled.length ? `Auto-filled: ${filled.join(", ")}` : "idle");
+      } catch {
+        setExtractNote("idle");
+      }
+    }, 2200);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [briefPlain, busy]);
 
   if (loading) return <p className="py-16 text-center text-sm text-muted">Loading…</p>;
   if (!doc)
@@ -98,6 +201,12 @@ export default function WriterDocPage() {
     return words || "Untitled";
   }
 
+  const hasIntake =
+    !!briefPlain.trim() ||
+    !!ctx.ask.trim() ||
+    !!ctx.keyPoints.trim() ||
+    !!htmlToPlain(ctx.background).trim();
+
   async function generate(refineGuidance?: string) {
     if (!doc) return;
     setBusy(true);
@@ -121,7 +230,11 @@ export default function WriterDocPage() {
           original: doc.original ? htmlToPlain(doc.original) : "",
           previous: refining ? doc.content : "",
           guidance: refineGuidance || "",
-          context: ctx,
+          context: {
+            ...ctx,
+            brief: briefPlain,
+            background: htmlToPlain(ctx.background),
+          },
           styles: styleTexts,
           signature: isEmail ? htmlToPlain(settings?.signature || "") : "",
           variants: refining ? 1 : settings?.variant_count ?? 1,
@@ -203,60 +316,131 @@ export default function WriterDocPage() {
     window.location.href = `mailto:?subject=${encodeURIComponent(doc.subject)}&body=${encodeURIComponent(body)}`;
   }
 
+  const selectedStyleCount = ctx.styleIds.filter((sid) =>
+    styles.some((s) => s.id === sid),
+  ).length;
+  const toneStyleCount =
+    ctx.actions.length + ctx.tone.length + ctx.audience.length + (ctx.length !== "as_is" ? 1 : 0);
+  const detailCount = [ctx.recipient, ctx.ask, ctx.keyPoints, htmlToPlain(ctx.background)]
+    .filter((v) => v.trim()).length;
+
   return (
     <>
       <div className="mb-4 flex items-center gap-3">
         <BackButton label="Writing Studio" />
-        <span className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--accent)]">
+        <span className="rounded-full bg-gradient-to-r from-[var(--grad-from)] to-[var(--grad-to)] px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white shadow-sm">
           {docTypeLabel(doc.doc_type)}
         </span>
         <span className="text-xs text-muted">
-          {doc.mode === "edit" ? "Polishing your draft" : "From scratch"}
+          {doc.mode === "edit"
+            ? "Polishing your draft"
+            : "Describe it — I'll figure out the rest"}
         </span>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-[minmax(320px,380px)_1fr]">
+      <div className="grid gap-5 lg:grid-cols-[minmax(360px,460px)_1fr]">
         {/* ---------------- Intake ---------------- */}
-        <div className="space-y-4">
-          <section className="space-y-4 rounded-xl border border-border bg-surface p-4 shadow-sm">
-            <Input
-              label="Title"
-              value={doc.title}
-              onChange={(e) => save({ title: e.target.value })}
-              placeholder="Name this piece (for your library)"
-            />
+        <div className="space-y-3">
+          {/* The brief — the one box that does the work */}
+          <section className="overflow-hidden rounded-xl border border-[var(--accent)]/40 bg-surface shadow-sm">
+            <div className="h-1 bg-gradient-to-r from-[var(--grad-from)] via-[var(--grad-via)] to-[var(--grad-to)]" />
+            <div className="space-y-3 p-3.5">
+              <Input
+                label="Title"
+                value={doc.title}
+                onChange={(e) => save({ title: e.target.value })}
+                placeholder="Names itself once you type or generate"
+              />
 
-            {doc.mode === "edit" && (
+              {doc.mode === "edit" && (
+                <div>
+                  <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                    Your draft
+                  </p>
+                  <RichText
+                    value={doc.original}
+                    onChange={(html) => save({ original: html })}
+                    placeholder="Paste the version you have…"
+                    minHeight="min-h-32"
+                  />
+                </div>
+              )}
+
               <div>
-                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
-                  Your draft
-                </p>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">
+                    <Sparkles size={12} />
+                    {doc.mode === "edit"
+                      ? "Anything else I should know?"
+                      : "Just tell me what you need"}
+                  </span>
+                  {extractNote !== "idle" && (
+                    <span className="text-[11px] text-muted">
+                      {extractNote === "working" ? "Reading your brief…" : extractNote}
+                    </span>
+                  )}
+                </div>
                 <RichText
-                  value={doc.original}
-                  onChange={(html) => save({ original: html })}
-                  placeholder="Paste the version you have…"
-                  minHeight="min-h-32"
+                  value={ctx.brief}
+                  onChange={(html) => setCtx({ brief: html })}
+                  placeholder={
+                    doc.mode === "edit"
+                      ? "Optional context — who it's for, what's at stake…"
+                      : 'Paste an email and say "write a reply that pushes the meeting to next week" — or just describe what you want. I\'ll pull out the names, context, and details automatically.'
+                  }
+                  minHeight="min-h-36"
                 />
               </div>
-            )}
 
+              <Button
+                className="w-full !bg-gradient-to-r !from-[var(--grad-from)] !via-[var(--grad-via)] !to-[var(--grad-to)] !text-white shadow-md transition hover:opacity-90"
+                disabled={
+                  busy ||
+                  (doc.mode === "edit"
+                    ? !htmlToPlain(doc.original).trim()
+                    : !hasIntake)
+                }
+                onClick={() => generate()}
+              >
+                <Sparkles size={16} />
+                {busy
+                  ? "Writing…"
+                  : doc.content.trim()
+                    ? "Regenerate"
+                    : (settings?.variant_count ?? 1) > 1
+                      ? `Generate ${settings?.variant_count} variants`
+                      : "Generate"}
+              </Button>
+            </div>
+          </section>
+
+          {/* Optional dials, folded away */}
+          <IntakeSection
+            title="Tone & style"
+            icon={Palette}
+            tint="bg-violet-100 text-violet-600"
+            badge={toneStyleCount ? `${toneStyleCount} picked` : undefined}
+          >
             <ChipGroup
               label={doc.mode === "edit" ? "What should I do to it?" : "What matters here?"}
               options={ACTION_CHIPS}
               selected={ctx.actions}
               onToggle={toggle("actions")}
+              hue="teal"
             />
             <ChipGroup
               label="Tone"
               options={TONE_CHIPS}
               selected={ctx.tone}
               onToggle={toggle("tone")}
+              hue="sky"
             />
             <ChipGroup
               label="Audience"
               options={AUDIENCE_CHIPS}
               selected={ctx.audience}
               onToggle={toggle("audience")}
+              hue="violet"
             />
             <ChipGroup
               label="Length"
@@ -264,62 +448,67 @@ export default function WriterDocPage() {
               selected={[ctx.length]}
               single
               onToggle={(key) => setCtx({ length: key })}
+              hue="amber"
             />
+          </IntakeSection>
 
+          <IntakeSection
+            title="Details"
+            icon={ListChecks}
+            tint="bg-sky-100 text-sky-600"
+            badge={detailCount ? `${detailCount} filled` : undefined}
+          >
             {(isEmail || doc.doc_type === "message") && (
               <Input
                 label="Recipient (name / role)"
                 value={ctx.recipient}
                 onChange={(e) => setCtx({ recipient: e.target.value })}
-                placeholder="e.g. Dr. Chen, cardiology chief we met at ACC"
+                placeholder="Auto-detected from your brief when possible"
               />
             )}
             <Textarea
-              label="What are you asking for / what should happen?"
+              label="What should happen?"
               value={ctx.ask}
               onChange={(e) => setCtx({ ask: e.target.value })}
               placeholder="e.g. She agrees to a 30-min call next week"
-              className="min-h-16"
+              className="min-h-14"
             />
             <Textarea
               label="Key points that must be included"
               value={ctx.keyPoints}
               onChange={(e) => setCtx({ keyPoints: e.target.value })}
               placeholder="One per line"
-              className="min-h-16"
+              className="min-h-14"
             />
-            <Textarea
-              label="Background the AI should know"
-              value={ctx.background}
-              onChange={(e) => setCtx({ background: e.target.value })}
-              placeholder="History, sensitivities, anything relevant…"
-              className="min-h-16"
-            />
+            <div>
+              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                Background the AI should know
+              </p>
+              <RichText
+                value={ctx.background}
+                onChange={(html) => setCtx({ background: html })}
+                placeholder="History, sensitivities, anything relevant…"
+                minHeight="min-h-16"
+              />
+            </div>
+          </IntakeSection>
 
-            {styles.length > 0 && (
+          {styles.length > 0 && (
+            <IntakeSection
+              title="Styles & voices"
+              icon={Wand2}
+              tint="bg-amber-100 text-amber-600"
+              badge={selectedStyleCount ? `${selectedStyleCount} on` : undefined}
+            >
               <ChipGroup
-                label="Apply styles & voices"
+                label="Apply to this piece"
                 options={styles.map((s) => ({ key: s.id, label: s.name }))}
                 selected={ctx.styleIds}
                 onToggle={toggle("styleIds")}
+                hue="rose"
               />
-            )}
-
-            <Button
-              className="w-full"
-              disabled={busy || (doc.mode === "edit" && !htmlToPlain(doc.original).trim())}
-              onClick={() => generate()}
-            >
-              <Sparkles size={16} />
-              {busy
-                ? "Writing…"
-                : doc.content.trim()
-                  ? "Regenerate from intake"
-                  : (settings?.variant_count ?? 1) > 1
-                    ? `Generate ${settings?.variant_count} variants`
-                    : "Generate"}
-            </Button>
-          </section>
+            </IntakeSection>
+          )}
         </div>
 
         {/* ---------------- Output ---------------- */}
@@ -332,7 +521,7 @@ export default function WriterDocPage() {
                   onClick={() => pickVariant(i)}
                   className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
                     activeVariant === i
-                      ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
+                      ? "border-transparent bg-gradient-to-r from-[var(--grad-from)] to-[var(--grad-to)] text-white shadow-sm"
                       : "border-border text-muted hover:text-ink"
                   }`}
                 >
@@ -342,79 +531,87 @@ export default function WriterDocPage() {
             </div>
           )}
 
-          <section className="space-y-3 rounded-xl border border-border bg-surface p-4 shadow-sm">
-            {isEmail && (
-              <Input
-                label="Subject"
-                value={doc.subject}
-                onChange={(e) => save({ subject: e.target.value })}
-                placeholder="Subject line"
-              />
-            )}
+          <section className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
+            <div className="h-1 bg-gradient-to-r from-[var(--grad-from)] via-[var(--grad-via)] to-[var(--grad-to)] opacity-60" />
+            <div className="space-y-3 p-4">
+              {isEmail && (
+                <Input
+                  label="Subject"
+                  value={doc.subject}
+                  onChange={(e) => save({ subject: e.target.value })}
+                  placeholder="Subject line"
+                />
+              )}
 
-            <div>
-              <div className="mb-1.5 flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase tracking-wide text-muted">
-                  {doc.content.trim() ? "Result — edit freely, it autosaves" : "Result"}
-                </span>
-                <div className="flex items-center gap-1">
-                  <button
-                    title="Version history"
-                    onClick={() => setShowVersions(true)}
-                    className="grid h-7 w-7 place-items-center rounded text-muted transition hover:bg-canvas hover:text-ink"
-                  >
-                    <History size={14} />
-                  </button>
-                  {(settings?.show_diff ?? true) && (
+              <div>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
+                    <FileText size={13} className="text-[var(--accent)]" />
+                    {doc.content.trim() ? "Result — edit freely, it autosaves" : "Result"}
+                  </span>
+                  <div className="flex items-center gap-1">
                     <button
-                      title={diffOn ? "Hide changes" : "Show changes"}
-                      onClick={() => setShowDiff(!diffOn)}
+                      title="Version history"
+                      onClick={() => setShowVersions(true)}
                       className="grid h-7 w-7 place-items-center rounded text-muted transition hover:bg-canvas hover:text-ink"
                     >
-                      {diffOn ? <EyeOff size={14} /> : <Eye size={14} />}
+                      <History size={14} />
                     </button>
-                  )}
+                    {(settings?.show_diff ?? true) && (
+                      <button
+                        title={diffOn ? "Hide changes" : "Show changes"}
+                        onClick={() => setShowDiff(!diffOn)}
+                        className="grid h-7 w-7 place-items-center rounded text-muted transition hover:bg-canvas hover:text-ink"
+                      >
+                        {diffOn ? <EyeOff size={14} /> : <Eye size={14} />}
+                      </button>
+                    )}
+                  </div>
                 </div>
+                {doc.content.trim() || busy ? (
+                  <RichText
+                    value={doc.content}
+                    onChange={(html) => save({ content: html })}
+                    minHeight="min-h-64"
+                  />
+                ) : (
+                  <div className="grid place-items-center rounded-lg border border-dashed border-[var(--accent)]/40 bg-[var(--accent-soft)]/20 py-16 text-center">
+                    <div className="max-w-sm space-y-1.5">
+                      <Sparkles size={20} className="mx-auto text-[var(--accent)]" />
+                      <p className="text-sm text-muted">
+                        Tell me what you need in the box on the left — paste an
+                        email, describe the situation, whatever's fastest — then hit{" "}
+                        <span className="font-medium text-ink">Generate</span>.
+                        Everything is editable afterwards.
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
-              {doc.content.trim() || busy ? (
-                <RichText
-                  value={doc.content}
-                  onChange={(html) => save({ content: html })}
-                  minHeight="min-h-48"
-                />
-              ) : (
-                <div className="grid place-items-center rounded-lg border border-dashed border-border py-14 text-center">
-                  <p className="text-sm text-muted">
-                    Fill in the intake and hit{" "}
-                    <span className="font-medium text-ink">Generate</span> —
-                    everything is editable afterwards.
+
+              {isEmail && settings?.signature && doc.content.trim() ? (
+                <div className="rounded-lg bg-canvas px-3 py-2">
+                  <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    Signature (appended on copy/send)
                   </p>
+                  <RichTextView html={settings.signature} />
+                </div>
+              ) : null}
+
+              {doc.content.trim() && (
+                <div className="flex flex-wrap gap-2 border-t border-border pt-3">
+                  <Button size="sm" variant="secondary" onClick={copyOut}>
+                    {copied ? <Check size={14} /> : <Copy size={14} />}
+                    {copied ? "Copied" : "Copy"}
+                  </Button>
+                  {isEmail && (
+                    <Button size="sm" variant="secondary" onClick={openInEmail}>
+                      <Mail size={14} /> Open in email
+                    </Button>
+                  )}
                 </div>
               )}
             </div>
-
-            {isEmail && settings?.signature && doc.content.trim() ? (
-              <div className="rounded-lg bg-canvas px-3 py-2">
-                <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                  Signature (appended on copy/send)
-                </p>
-                <RichTextView html={settings.signature} />
-              </div>
-            ) : null}
-
-            {doc.content.trim() && (
-              <div className="flex flex-wrap gap-2 border-t border-border pt-3">
-                <Button size="sm" variant="secondary" onClick={copyOut}>
-                  {copied ? <Check size={14} /> : <Copy size={14} />}
-                  {copied ? "Copied" : "Copy"}
-                </Button>
-                {isEmail && (
-                  <Button size="sm" variant="secondary" onClick={openInEmail}>
-                    <Mail size={14} /> Open in email
-                  </Button>
-                )}
-              </div>
-            )}
           </section>
 
           {/* What changed */}
@@ -435,9 +632,9 @@ export default function WriterDocPage() {
 
           {/* Refine loop */}
           {doc.content.trim() && (
-            <section className="rounded-xl border border-[var(--accent)]/30 bg-[var(--accent-soft)]/25 p-4">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-                Not quite right? Tell me what to change
+            <section className="rounded-xl border border-[var(--accent)]/30 bg-gradient-to-br from-[var(--accent-soft)]/40 to-transparent p-4">
+              <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--accent)]">
+                <Wand2 size={13} /> Not quite right? Tell me what to change
               </p>
               <Textarea
                 value={guidance}

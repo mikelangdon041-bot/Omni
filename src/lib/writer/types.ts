@@ -4,6 +4,7 @@ export type DocType = "email" | "document" | "message" | "social" | "summary" | 
 export type DocMode = "create" | "edit";
 
 export interface WriterContext {
+  brief: string; // free-text brief (HTML) — "here's an email, write a reply saying…"
   actions: string[]; // what to do (edit mode mostly)
   tone: string[];
   audience: string[];
@@ -16,6 +17,7 @@ export interface WriterContext {
 }
 
 export const EMPTY_CONTEXT: WriterContext = {
+  brief: "",
   actions: [],
   tone: [],
   audience: [],
