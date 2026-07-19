@@ -41,7 +41,7 @@ export const MODULES: ModuleDef[] = [
     href: "/",
     label: "Home",
     icon: LayoutDashboard,
-    blurb: "Your medical-affairs command center.",
+    blurb: "Your field team's command center.",
     ready: true,
     theme: t("#5a4ff3", "#4a3fde", "#ebe9fe", "#5a4ff3", "#8b5cf6", "#ff6a4d"),
   },

@@ -16,7 +16,7 @@ export default function SurveyBuilderPage() {
         eyebrow="Insights · Survey"
         icon={ClipboardList}
         title="Design the survey"
-        subtitle="Build the canonical, branching KOL survey. Choice answers can reveal follow-up questions — like a natural conversation — so every MSL captures comparable data."
+        subtitle="Build the canonical, branching KOL survey. Choice answers can reveal follow-up questions — like a natural conversation — so every rep captures comparable data."
       />
       <SurveyBuilder />
     </>

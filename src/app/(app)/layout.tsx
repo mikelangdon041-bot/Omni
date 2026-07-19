@@ -28,7 +28,7 @@ export default async function AppLayout({
     profile?.display_name ||
     profile?.username ||
     (user.user_metadata?.username as string) ||
-    "MSL";
+    "User";
 
   const isAdmin = profile?.role === "admin" || profile?.role === "owner";
   const impersonating = (await cookies()).has("omni-admin-return");

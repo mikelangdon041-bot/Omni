@@ -199,7 +199,7 @@ export function SuggestQuestionsModal({
             <input
               value={guidance}
               onChange={(e) => setGuidance(e.target.value)}
-              placeholder="Optional guidance — e.g. 'senior MSL, stakeholder management'"
+              placeholder="Optional guidance — e.g. 'senior rep, stakeholder management'"
               className="flex-1 rounded-lg border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
             />
             <Button

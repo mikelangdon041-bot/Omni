@@ -236,7 +236,7 @@ export function AnalysisWorkbench() {
           {scopeToggle}
           <span className="text-xs text-muted">
             {scope === "org"
-              ? `Organization-wide · ${kols.length} KOLs across all MSLs`
+              ? `Organization-wide · ${kols.length} KOLs across your team`
               : `Your KOLs · ${kols.length}`}
           </span>
         </div>

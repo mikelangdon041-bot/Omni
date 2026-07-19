@@ -4,9 +4,7 @@ export function Logo({ className = "" }: { className?: string }) {
       <span className="omni-gradient grid h-8 w-8 place-items-center rounded-lg text-white shadow-sm">
         <span className="text-lg font-bold leading-none">O</span>
       </span>
-      <span className="tracking-tight">
-        Omni<span className="font-normal text-muted"> · MSL</span>
-      </span>
+      <span className="tracking-tight">Omni</span>
     </span>
   );
 }

@@ -60,7 +60,7 @@ export async function nlToAnalysisSpec(opts: {
   options: SurveyOption[];
 }): Promise<AnalysisSpec> {
   const { prompt, questions, options } = opts;
-  const system = `You convert an MSL's plain-English analytics request into a strict AnalysisSpec JSON for a KOL survey analytics tool. Return ONLY the JSON object, no prose.
+  const system = `You convert a rep's plain-English analytics request into a strict AnalysisSpec JSON for a KOL survey analytics tool. Return ONLY the JSON object, no prose.
 
 Available KOL grouping/filter fields: ${KOL_FIELDS.join(", ")}.
 
@@ -90,7 +90,7 @@ export async function suggestAnalyses(opts: {
   dataSummary?: string;
 }): Promise<{ title: string; spec: AnalysisSpec }[]> {
   const { questions, options, count = 5, dataSummary } = opts;
-  const system = `You are a medical-affairs insights analyst. Look at the ACTUAL data summary below and propose ${count} genuinely interesting, non-obvious analyses that surface real patterns in THIS data (e.g. a group that skews notably positive/negative, an unexpected split, a strong driver). Base your picks on the numbers you see, not generic ideas. Return ONLY JSON: {"suggestions":[{"title":"...","spec":{...AnalysisSpec...}}]}. Make each title reference what's interesting (e.g. "Neurologists rate efficacy highest").
+  const system = `You are a field insights analyst. Look at the ACTUAL data summary below and propose ${count} genuinely interesting, non-obvious analyses that surface real patterns in THIS data (e.g. a group that skews notably positive/negative, an unexpected split, a strong driver). Base your picks on the numbers you see, not generic ideas. Return ONLY JSON: {"suggestions":[{"title":"...","spec":{...AnalysisSpec...}}]}. Make each title reference what's interesting (e.g. "Neurologists rate efficacy highest").
 
 Available KOL grouping/filter fields: ${KOL_FIELDS.join(", ")}.
 
@@ -195,12 +195,12 @@ function coerceSpec(raw: unknown, questions: SurveyQuestion[]): AnalysisSpec {
 // Document import: turn a survey worksheet's raw text into a structured,
 // branching draft the user can review and edit before importing.
 // ------------------------------------------------------------------
-const IMPORT_SYSTEM_PROMPT = `You convert a medical-affairs survey/worksheet document into a structured branching survey. Return ONLY JSON of the form:
+const IMPORT_SYSTEM_PROMPT = `You convert a field survey/worksheet document into a structured branching survey. Return ONLY JSON of the form:
 {"title":"...","questions":[{"tempId":"q1","section":"...","text":"...","type":"single|multi|boolean|scale|number|text","options":["..."],"parentTempId":null,"parentOptionLabel":null,"required":false}]}
 
 How to read the document:
 - Each QUESTION is a prompt line, usually followed by its ANSWER OPTIONS on the lines beneath it (one option per line). Options may start with bullets/dashes ("-PSNP") — strip the leading dash.
-- A SECTION HEADER is a standalone line that is neither a question nor an option (e.g. "Required Questions for all MSL Interactions", "Qutenza awareness", "CASPAR", "Off-label Qutenza use"). Apply it as the "section" of the questions beneath it until the next header.
+- A SECTION HEADER is a standalone line that is neither a question nor an option (e.g. "Required Questions for all Rep Interactions", "Qutenza awareness", "CASPAR", "Off-label Qutenza use"). Apply it as the "section" of the questions beneath it until the next header.
 
 Choosing "type":
 - "boolean": exactly Yes/No.

@@ -2,9 +2,9 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Omni — Medical Affairs",
+    name: "Omni",
     short_name: "Omni",
-    description: "All-in-one toolkit for Medical Science Liaisons.",
+    description: "All-in-one workspace for your field team.",
     start_url: "/",
     display: "standalone",
     background_color: "#031142",

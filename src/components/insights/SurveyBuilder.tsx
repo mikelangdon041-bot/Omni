@@ -91,7 +91,7 @@ export function SurveyBuilder() {
     return (
       <EmptyState
         title="Survey editing is admin-only"
-        hint="Your organization's admins define the canonical survey so every MSL's answers stay comparable. You can still answer surveys and explore analytics."
+        hint="Your organization's admins define the canonical survey so every rep's answers stay comparable. You can still answer surveys and explore analytics."
       />
     );
   }
@@ -101,7 +101,7 @@ export function SurveyBuilder() {
       <>
         <EmptyState
           title="No survey yet"
-          hint="Import an existing survey document, or start one from scratch. Every MSL will answer the same questions per KOL."
+          hint="Import an existing survey document, or start one from scratch. Every rep will answer the same questions per KOL."
           action={
             <div className="flex flex-wrap justify-center gap-2">
               <Button onClick={() => setShowImport(true)}>

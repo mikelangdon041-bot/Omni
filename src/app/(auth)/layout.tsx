@@ -24,7 +24,7 @@ export default function AuthLayout({
           {children}
         </div>
         <p className="mt-6 text-center text-xs text-muted">
-          Omni — toolkit for Medical Science Liaisons
+          Omni — a workspace for your field team
         </p>
       </div>
     </div>

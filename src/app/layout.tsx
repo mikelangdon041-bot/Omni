@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Omni — Medical Affairs",
-  description: "All-in-one toolkit for Medical Science Liaisons.",
+  title: "Omni",
+  description: "All-in-one workspace for your field team.",
   icons: {
     apple: "/apple-touch-icon.png",
   },

@@ -9,7 +9,7 @@ export interface MeetingPrep {
   followUps: string[];
 }
 
-const PREP_SYSTEM = `You are a field medical engagement advisor helping a Medical Science Liaison prepare for a meeting with a key contact (KOL).
+const PREP_SYSTEM = `You are a field engagement advisor helping a rep prepare for a meeting with a key contact (KOL).
 - Return ONLY JSON: {"opener": string, "talkingPoints": string[], "reminders": string[], "followUps": string[]}.
 - opener: one warm, specific conversation starter.
 - talkingPoints: 4-6 prioritized, specific points to cover, grounded in the contact's interests, objectives, potential collaborations, clinical-trial interest, and goals.

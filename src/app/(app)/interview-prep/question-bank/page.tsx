@@ -79,7 +79,7 @@ export default function QuestionBankPage() {
             value={topic}
             onChange={(e) => setTopic(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && generate()}
-            placeholder="Topic or role — e.g. 'Senior MSL, oncology' or 'behavioral / leadership'"
+            placeholder="Topic or role — e.g. 'Senior rep, oncology' or 'behavioral / leadership'"
             className="flex-1 rounded-lg border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20"
           />
           <Button onClick={generate} disabled={loading}>

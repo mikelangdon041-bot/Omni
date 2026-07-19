@@ -458,7 +458,7 @@ function IdeasModal({
         <Input
           value={focus}
           onChange={(e) => setFocus(e.target.value)}
-          placeholder={`Optional focus — e.g. "KPIs and new things we're doing to showcase my MSL team"`}
+          placeholder={`Optional focus — e.g. "KPIs and new things we're doing to showcase my team"`}
           className="flex-1"
         />
         <Button disabled={busy} onClick={() => void brainstorm()} className="shrink-0">
