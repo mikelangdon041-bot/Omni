@@ -104,15 +104,21 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
       />
 
       {!isRegister && (
-        <label className="flex cursor-pointer items-center gap-2 text-sm text-ink">
-          <input
-            type="checkbox"
-            checked={remember}
-            onChange={(e) => setRemember(e.target.checked)}
-            className="h-4 w-4 rounded border-border accent-primary"
-          />
-          Remember me on this device
-        </label>
+        <>
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-ink">
+            <input
+              type="checkbox"
+              checked={remember}
+              onChange={(e) => setRemember(e.target.checked)}
+              className="h-4 w-4 rounded border-border accent-primary"
+            />
+            Remember me on this device
+          </label>
+          <p className="text-xs text-muted">
+            Forgot your password? Ask an admin at your company to reset it for you from the
+            Admin page.
+          </p>
+        </>
       )}
 
       {error && (

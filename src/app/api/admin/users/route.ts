@@ -26,6 +26,10 @@ export async function GET() {
   return NextResponse.json({ users: data || [], me: ctx.userId });
 }
 
+function generateTempPassword() {
+  return `Omni-${Math.random().toString(36).slice(2, 8)}${Math.floor(Math.random() * 90 + 10)}`;
+}
+
 // Add a member to the caller's org. Returns a one-time temp password.
 export async function POST(req: Request) {
   const ctx = await requireAdmin();
@@ -39,9 +43,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid username" }, { status: 400 });
   }
 
-  const tempPassword = `Omni-${Math.random().toString(36).slice(2, 8)}${Math.floor(
-    Math.random() * 90 + 10,
-  )}`;
+  const tempPassword = generateTempPassword();
 
   const admin = createAdminClient();
   const { data: created, error: createErr } = await admin.auth.admin.createUser({
@@ -90,6 +92,21 @@ export async function PATCH(req: Request) {
   if (!target || target.org_id !== ctx.profile.org_id) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
+
+  // Reset a member's password to a fresh one-time temp password. Anyone may
+  // reset their own; resetting someone else's owner account is blocked (same
+  // protection as role/active changes below) to stop one admin locking out
+  // another admin/the owner.
+  if (body.resetPassword === true) {
+    if (target.role === "owner" && targetId !== ctx.userId) {
+      return NextResponse.json({ error: "Cannot reset the owner's password" }, { status: 403 });
+    }
+    const tempPassword = generateTempPassword();
+    const { error } = await admin.auth.admin.updateUserById(targetId, { password: tempPassword });
+    if (error) return NextResponse.json({ error: "Could not reset password" }, { status: 500 });
+    return NextResponse.json({ ok: true, tempPassword });
+  }
+
   if (target.role === "owner") {
     return NextResponse.json({ error: "Cannot modify the owner" }, { status: 403 });
   }

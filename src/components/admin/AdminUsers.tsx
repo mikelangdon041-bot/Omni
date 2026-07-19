@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { UserPlus, Eye, ShieldCheck, Ban, RotateCcw } from "lucide-react";
+import { UserPlus, Eye, ShieldCheck, Ban, RotateCcw, KeyRound } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input, Select } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
@@ -25,9 +25,12 @@ export function AdminUsers() {
   const [me, setMe] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
-  const [created, setCreated] = useState<{ username: string; tempPassword: string } | null>(null);
+  const [credentials, setCredentials] = useState<
+    { username: string; tempPassword: string; mode: "created" | "reset" } | null
+  >(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resettingId, setResettingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/admin/users", { credentials: "same-origin" });
@@ -65,7 +68,7 @@ export function AdminUsers() {
       return;
     }
     setAddOpen(false);
-    setCreated({ username: data.username, tempPassword: data.tempPassword });
+    setCredentials({ username: data.username, tempPassword: data.tempPassword, mode: "created" });
     await load();
   }
 
@@ -77,6 +80,23 @@ export function AdminUsers() {
       body: JSON.stringify({ userId, ...body }),
     });
     await load();
+  }
+
+  async function resetPassword(u: OrgUser) {
+    setResettingId(u.id);
+    const res = await fetch("/api/admin/users", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ userId: u.id, resetPassword: true }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setResettingId(null);
+    if (!res.ok) {
+      toast("error", data.error || "Could not reset password");
+      return;
+    }
+    setCredentials({ username: u.username, tempPassword: data.tempPassword, mode: "reset" });
   }
 
   async function impersonate(userId: string) {
@@ -134,33 +154,49 @@ export function AdminUsers() {
                 <Badge className="bg-rose-100 text-rose-700">inactive</Badge>
               )}
 
-              {u.role !== "owner" && u.id !== me && (
-                <div className="flex items-center gap-1.5">
-                  {u.role === "member" && u.is_active && (
-                    <Button variant="secondary" size="sm" onClick={() => impersonate(u.id)}>
-                      <Eye size={14} /> View as
+              <div className="flex items-center gap-1.5">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => resetPassword(u)}
+                  disabled={resettingId === u.id}
+                  title={
+                    u.id === me
+                      ? "Reset your own password"
+                      : `Reset @${u.username}'s password`
+                  }
+                >
+                  <KeyRound size={14} /> {resettingId === u.id ? "Resetting…" : "Reset password"}
+                </Button>
+
+                {u.role !== "owner" && u.id !== me && (
+                  <>
+                    {u.role === "member" && u.is_active && (
+                      <Button variant="secondary" size="sm" onClick={() => impersonate(u.id)}>
+                        <Eye size={14} /> View as
+                      </Button>
+                    )}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() =>
+                        patch(u.id, { role: u.role === "admin" ? "member" : "admin" })
+                      }
+                    >
+                      <ShieldCheck size={14} />
+                      {u.role === "admin" ? "Make member" : "Make admin"}
                     </Button>
-                  )}
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() =>
-                      patch(u.id, { role: u.role === "admin" ? "member" : "admin" })
-                    }
-                  >
-                    <ShieldCheck size={14} />
-                    {u.role === "admin" ? "Make member" : "Make admin"}
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => patch(u.id, { is_active: !u.is_active })}
-                  >
-                    {u.is_active ? <Ban size={14} /> : <RotateCcw size={14} />}
-                    {u.is_active ? "Deactivate" : "Reactivate"}
-                  </Button>
-                </div>
-              )}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => patch(u.id, { is_active: !u.is_active })}
+                    >
+                      {u.is_active ? <Ban size={14} /> : <RotateCcw size={14} />}
+                      {u.is_active ? "Deactivate" : "Reactivate"}
+                    </Button>
+                  </>
+                )}
+              </div>
             </li>
           ))}
         </ul>
@@ -187,22 +223,22 @@ export function AdminUsers() {
       </Modal>
 
       <Modal
-        open={!!created}
-        onClose={() => setCreated(null)}
-        title="Member added"
+        open={!!credentials}
+        onClose={() => setCredentials(null)}
+        title={credentials?.mode === "reset" ? "Password reset" : "Member added"}
         size="sm"
       >
         <p className="text-sm text-muted">
           Share these credentials with{" "}
-          <span className="font-medium text-ink">@{created?.username}</span>. The
+          <span className="font-medium text-ink">@{credentials?.username}</span>. The
           temporary password is shown once.
         </p>
         <div className="mt-3 rounded-lg border border-border bg-canvas p-3 font-mono text-sm">
-          <div>username: {created?.username}</div>
-          <div>password: {created?.tempPassword}</div>
+          <div>username: {credentials?.username}</div>
+          <div>password: {credentials?.tempPassword}</div>
         </div>
         <div className="mt-4 flex justify-end">
-          <Button onClick={() => setCreated(null)}>Done</Button>
+          <Button onClick={() => setCredentials(null)}>Done</Button>
         </div>
       </Modal>
     </>
