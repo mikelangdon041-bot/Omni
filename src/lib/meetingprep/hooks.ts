@@ -48,10 +48,14 @@ export function useMpMeetings(userId: string | null) {
   return { meetings, loading, add, remove, refresh };
 }
 
+export type SaveState = "idle" | "pending" | "saving" | "saved";
+
 // One meeting with debounced autosave (same pattern as Writing Studio docs).
+// `saveState` drives the "Saving… / All changes saved" indicator.
 export function useMpMeeting(id: string) {
   const [meeting, setMeeting] = useState<MpMeeting | null>(null);
   const [loading, setLoading] = useState(true);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
 
   useEffect(() => {
     let active = true;
@@ -78,13 +82,18 @@ export function useMpMeeting(id: string) {
     timerRef.current = null;
     const p = pendingRef.current;
     pendingRef.current = {};
-    if (Object.keys(p).length) await supabase.from("mp_meetings").update(p).eq("id", id);
+    if (Object.keys(p).length) {
+      setSaveState("saving");
+      await supabase.from("mp_meetings").update(p).eq("id", id);
+      setSaveState("saved");
+    }
   }, [id]);
 
   const save = useCallback(
     (partial: Partial<MpMeeting>) => {
       setMeeting((prev) => (prev ? { ...prev, ...partial } : prev));
       pendingRef.current = { ...pendingRef.current, ...partial };
+      setSaveState("pending");
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => void flush(), 800);
     },
@@ -97,7 +106,7 @@ export function useMpMeeting(id: string) {
     };
   }, [flush]);
 
-  return { meeting, loading, save, flush };
+  return { meeting, loading, save, flush, saveState };
 }
 
 export function useMpSettings(userId: string | null) {

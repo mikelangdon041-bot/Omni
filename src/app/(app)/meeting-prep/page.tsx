@@ -5,11 +5,11 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CalendarClock, Plus, Settings2, Trash2 } from "lucide-react";
+import { CalendarClock, Plus, Settings2, Sparkles, Trash2 } from "lucide-react";
 import { ModuleHero } from "@/components/ui/ModuleHero";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/Button";
-import { Input, Textarea } from "@/components/ui/Input";
+import { Input, Select, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { useConfirm } from "@/components/ui/Feedback";
 import {
@@ -18,8 +18,10 @@ import {
   useUserId,
 } from "@/lib/meetingprep/hooks";
 import {
+  MEETING_TYPES,
   meetingTypeLabel,
   type CustomSection,
+  type MeetingType,
   type MpMeeting,
 } from "@/lib/meetingprep/types";
 
@@ -30,6 +32,7 @@ export default function MeetingPrepPage() {
   const { meetings, loading, add, remove } = useMpMeetings(userId);
   const { settings, save: saveSettings } = useMpSettings(userId);
   const [showSettings, setShowSettings] = useState(false);
+  const [showNew, setShowNew] = useState(false);
   const [creating, setCreating] = useState(false);
 
   const { upcoming, past } = useMemo(() => {
@@ -48,11 +51,16 @@ export default function MeetingPrepPage() {
     return { upcoming, past };
   }, [meetings]);
 
-  async function createMeeting() {
+  // The meeting row is only created once the user confirms the modal — no
+  // ghost "Untitled meeting" flashing into the list.
+  async function createMeeting(partial: Partial<MpMeeting>) {
     setCreating(true);
-    const m = await add({});
-    if (m) router.push(`/meeting-prep/${m.id}`);
+    const m = await add(partial);
     setCreating(false);
+    if (m) {
+      setShowNew(false);
+      router.push(`/meeting-prep/${m.id}`);
+    }
   }
 
   const briefed = meetings.filter((m) => (m.brief?.sections || []).length > 0).length;
@@ -79,10 +87,9 @@ export default function MeetingPrepPage() {
             </Button>
             <Button
               className="!bg-white !text-[var(--accent)] hover:!bg-white/90"
-              disabled={creating}
-              onClick={createMeeting}
+              onClick={() => setShowNew(true)}
             >
-              <Plus size={16} /> {creating ? "Opening…" : "New meeting"}
+              <Plus size={16} /> New meeting
             </Button>
           </div>
         }
@@ -95,7 +102,7 @@ export default function MeetingPrepPage() {
           title="No meetings yet"
           hint="Create one, tell me who's in the room and what you want out of it, and I'll build your brief."
           action={
-            <Button onClick={createMeeting} disabled={creating}>
+            <Button onClick={() => setShowNew(true)}>
               <Plus size={16} /> New meeting
             </Button>
           }
@@ -138,6 +145,13 @@ export default function MeetingPrepPage() {
         </div>
       )}
 
+      <NewMeetingModal
+        open={showNew}
+        creating={creating}
+        onClose={() => setShowNew(false)}
+        onCreate={createMeeting}
+      />
+
       <CustomSectionsModal
         open={showSettings}
         onClose={() => setShowSettings(false)}
@@ -145,6 +159,79 @@ export default function MeetingPrepPage() {
         onSave={(custom_sections) => void saveSettings({ custom_sections })}
       />
     </>
+  );
+}
+
+// Collect the essentials up front so the meeting is born with a real name —
+// the row is only inserted when the user confirms.
+function NewMeetingModal({
+  open,
+  creating,
+  onClose,
+  onCreate,
+}: {
+  open: boolean;
+  creating: boolean;
+  onClose: () => void;
+  onCreate: (partial: Partial<MpMeeting>) => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [type, setType] = useState<MeetingType>("kol_1on1");
+  const [date, setDate] = useState("");
+
+  return (
+    <Modal open={open} onClose={onClose} title="New meeting">
+      <div className="space-y-3">
+        <Input
+          label="What's the meeting?"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder='e.g. "Q3 review with Dr. Chen"'
+          autoFocus
+        />
+        <div className="grid grid-cols-2 gap-3">
+          <Select
+            label="Type"
+            value={type}
+            onChange={(e) => setType(e.target.value as MeetingType)}
+          >
+            {MEETING_TYPES.map((t) => (
+              <option key={t.key} value={t.key}>
+                {t.label}
+              </option>
+            ))}
+          </Select>
+          <Input
+            label="Date & time (optional)"
+            type="datetime-local"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+          />
+        </div>
+        <p className="flex items-start gap-1.5 rounded-lg bg-[var(--accent-soft)]/50 px-3 py-2 text-xs text-muted">
+          <Sparkles size={13} className="mt-0.5 shrink-0 text-[var(--accent)]" />
+          Next you&apos;ll add attendees, objectives, and background — then I&apos;ll
+          build your full brief.
+        </p>
+        <div className="flex justify-end gap-2 pt-1">
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            disabled={!title.trim() || creating}
+            onClick={() =>
+              onCreate({
+                title: title.trim(),
+                meeting_type: type,
+                date: date ? new Date(date).toISOString() : null,
+              })
+            }
+          >
+            <Plus size={15} /> {creating ? "Creating…" : "Create meeting"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -168,55 +255,75 @@ function MeetingList({
       <ul className="grid gap-3 sm:grid-cols-2">
         {meetings.map((m) => {
           const hasBrief = (m.brief?.sections || []).length > 0;
+          const d = m.date ? new Date(m.date) : null;
+          const names = (m.attendees || [])
+            .filter((a) => a.name.trim())
+            .map((a) => a.name);
           return (
             <li
               key={m.id}
-              className="group cursor-pointer rounded-xl border border-border bg-surface p-4 shadow-sm transition hover:border-[var(--accent)]/50"
+              className="group cursor-pointer rounded-xl border border-border bg-surface p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-[var(--accent)]/40 hover:shadow-md"
               onClick={() => onOpen(m.id)}
             >
-              <div className="mb-1 flex items-center gap-2">
-                <span className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--accent)]">
-                  {meetingTypeLabel(m.meeting_type)}
-                </span>
-                {hasBrief && (
-                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
-                    Briefed
-                  </span>
-                )}
-                {m.territory_logged && (
-                  <span className="rounded-full bg-teal-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-teal-700">
-                    Logged
-                  </span>
-                )}
-                <span className="flex-1" />
-                <button
-                  className="rounded p-1 text-muted opacity-0 transition hover:text-red-600 group-hover:opacity-100"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onDelete(m);
-                  }}
-                >
-                  <Trash2 size={13} />
-                </button>
+              <div className="flex items-start gap-3">
+                {/* Date block */}
+                <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-[var(--grad-from)] to-[var(--grad-via)] text-white shadow-sm">
+                  {d ? (
+                    <div className="text-center leading-none">
+                      <p className="text-[9px] font-bold uppercase tracking-wide opacity-90">
+                        {d.toLocaleString(undefined, { month: "short" })}
+                      </p>
+                      <p className="mt-0.5 text-lg font-bold">{d.getDate()}</p>
+                    </div>
+                  ) : (
+                    <CalendarClock size={18} className="opacity-90" />
+                  )}
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start gap-2">
+                    <p className="min-w-0 flex-1 truncate text-sm font-semibold">
+                      {m.title || "Untitled meeting"}
+                    </p>
+                    <button
+                      className="rounded p-1 text-muted opacity-0 transition hover:text-red-600 group-hover:opacity-100"
+                      aria-label="Delete meeting"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDelete(m);
+                      }}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                  <p className="mt-0.5 truncate text-xs text-muted">
+                    {d
+                      ? d.toLocaleString(undefined, {
+                          weekday: "short",
+                          hour: "numeric",
+                          minute: "2-digit",
+                        })
+                      : "No date set"}
+                    {names.length > 0 && ` · ${names.slice(0, 3).join(", ")}`}
+                    {names.length > 3 && ` +${names.length - 3}`}
+                  </p>
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    <span className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--accent)]">
+                      {meetingTypeLabel(m.meeting_type)}
+                    </span>
+                    {hasBrief && (
+                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                        Briefed
+                      </span>
+                    )}
+                    {m.territory_logged && (
+                      <span className="rounded-full bg-teal-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-teal-700">
+                        Logged
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
-              <p className="truncate text-sm font-medium">{m.title || "Untitled meeting"}</p>
-              <p className="mt-0.5 text-xs text-muted">
-                {m.date
-                  ? new Date(m.date).toLocaleString(undefined, {
-                      weekday: "short",
-                      month: "short",
-                      day: "numeric",
-                      hour: "numeric",
-                      minute: "2-digit",
-                    })
-                  : "No date set"}
-                {(m.attendees || []).filter((a) => a.name.trim()).length > 0 &&
-                  ` · ${(m.attendees || [])
-                    .filter((a) => a.name.trim())
-                    .map((a) => a.name)
-                    .slice(0, 3)
-                    .join(", ")}`}
-              </p>
             </li>
           );
         })}

@@ -9,11 +9,14 @@ export const maxDuration = 120;
 const MODEL = process.env.OPENAI_SUMMARY_MODEL || "gpt-4o";
 
 // Meeting Prep AI. Actions:
-//   brief   { meeting, sections:[{key,title,prompt}], kolId?, guidance?,
-//             previousSections? }             → { sections:[{key,title,content}] }
-//   grill   { context, briefText?, count? }   → { questions:[{question,modelAnswer}] }
-//   coach   { question, modelAnswer, userAnswer, context } → { coaching }
-//   debrief { transcript, context }           → { summary, actions:[] }
+//   brief    { meeting, sections:[{key,title,prompt}], kolId?, guidance?,
+//              previousSections? }             → { sections:[{key,title,content}] }
+//   autofill { meeting }                       → { title, location, durationMin,
+//              date, attendees:[], objectives, concerns } (only what's stated)
+//   ideas    { context, focus?, count? }       → { ideas:[{title,detail}] }
+//   grill    { context, briefText?, count? }   → { questions:[{question,modelAnswer}] }
+//   coach    { question, modelAnswer, userAnswer, context } → { coaching }
+//   debrief  { transcript, context }           → { summary, actions:[] }
 
 interface MeetingPayload {
   title?: string;
@@ -27,6 +30,7 @@ interface MeetingPayload {
   background?: string;
   concerns?: string;
   priorTranscript?: string;
+  documents?: { name?: string; note?: string; text?: string }[];
 }
 
 function meetingContext(m: MeetingPayload, kolBlock: string): string {
@@ -51,6 +55,15 @@ function meetingContext(m: MeetingPayload, kolBlock: string): string {
     kolBlock && `Linked contact profile (from Territory Planning):\n${kolBlock}`,
     m.priorTranscript &&
       `Transcript/notes from a previous meeting with these people:\n${m.priorTranscript.slice(0, 20000)}`,
+    ...(m.documents || [])
+      .filter((d) => String(d.text || "").trim())
+      .slice(0, 8)
+      .map(
+        (d) =>
+          `Supporting document "${d.name || "untitled"}"${
+            d.note ? ` — the writer says about it: "${d.note}"` : ""
+          }:\n${String(d.text).slice(0, 15000)}`,
+      ),
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -164,6 +177,86 @@ Rules:
         }),
       );
       return NextResponse.json({ sections: out });
+    }
+
+    if (action === "autofill") {
+      const meeting: MeetingPayload = body?.meeting || {};
+      const context = meetingContext(meeting, "");
+      const res = await openai().chat.completions.create({
+        model: MODEL,
+        temperature: 0.1,
+        max_tokens: 1500,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content: `You extract structured meeting details from free-form background text, notes, and documents the writer provided. Return ONLY JSON:
+{"title":"","location":"","durationMin":0,"date":"","attendees":[{"name":"","role":"","org":"","notes":""}],"objectives":"","concerns":""}
+
+Rules:
+- Extract ONLY what is explicitly stated or unambiguously implied in the provided context. Never invent or guess.
+- attendees: every person stated or implied to be AT this meeting (e.g. "Melissa, the head of the company, will be there" → {"name":"Melissa","role":"Head of the company"}). Do not include the writer themself. Put anything else known about a person in "notes".
+- title: a short natural meeting title, only if the purpose is clear.
+- date: ISO 8601 datetime, only if a specific date (and ideally time) is stated. Otherwise "".
+- durationMin: only if a duration is stated, else 0.
+- objectives: the writer's goals for the meeting, in their voice, plain text. "" if not stated.
+- concerns: worries/sensitivities stated, plain text. "" if none.
+- Use "" / [] / 0 for anything not present.`,
+          },
+          { role: "user", content: `Context:\n${context || "(empty)"}` },
+        ],
+      });
+      const parsed = JSON.parse(res.choices[0]?.message?.content || "{}");
+      return NextResponse.json({
+        title: String(parsed.title || ""),
+        location: String(parsed.location || ""),
+        durationMin: Number(parsed.durationMin) || 0,
+        date: String(parsed.date || ""),
+        attendees: (Array.isArray(parsed.attendees) ? parsed.attendees : []).map(
+          (a: { name?: unknown; role?: unknown; org?: unknown; notes?: unknown }) => ({
+            name: String(a?.name || ""),
+            role: String(a?.role || ""),
+            org: String(a?.org || ""),
+            notes: String(a?.notes || ""),
+          }),
+        ),
+        objectives: String(parsed.objectives || ""),
+        concerns: String(parsed.concerns || ""),
+      });
+    }
+
+    if (action === "ideas") {
+      const context = String(body?.context || "").slice(0, 30000);
+      const focus = String(body?.focus || "").slice(0, 2000);
+      const count = Math.min(12, Math.max(4, Number(body?.count) || 8));
+      const res = await openai().chat.completions.create({
+        model: MODEL,
+        temperature: 0.8,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content: `You are a creative, experienced strategist brainstorming for an upcoming meeting. The writer wants ideas for what ELSE they could bring up, showcase, or prepare — the things the sharpest people in their position would do. Return ONLY JSON {"ideas":[{"title":"...","detail":"..."}]} with exactly ${count} items.
+
+- Draw on what high performers typically present in this kind of meeting: relevant KPIs and metrics, wins worth showcasing, stories, data, pre-empting questions, smart asks.
+- title: a short punchy label (3-8 words).
+- detail: 1-3 sentences making it concrete — if you suggest "showcase KPIs", NAME the specific KPIs someone in their role would show. It's fine to suggest ideas beyond the provided context here (they are suggestions, clearly framed as such), but tailor everything to the meeting type, audience, and objectives.
+- No duplicates of what's obviously already in their plan; add angles they haven't thought of.`,
+          },
+          {
+            role: "user",
+            content: `Meeting context:\n${context}${focus ? `\n\nThe writer wants ideas about: ${focus}` : ""}`,
+          },
+        ],
+      });
+      const parsed = JSON.parse(res.choices[0]?.message?.content || "{}");
+      const ideas = (Array.isArray(parsed.ideas) ? parsed.ideas : []).map(
+        (i: { title?: unknown; detail?: unknown }) => ({
+          title: String(i?.title || ""),
+          detail: String(i?.detail || ""),
+        }),
+      );
+      return NextResponse.json({ ideas });
     }
 
     if (action === "grill") {

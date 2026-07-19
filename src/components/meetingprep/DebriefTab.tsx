@@ -1,21 +1,35 @@
 "use client";
 
-// Meeting Prep — Debrief: after the meeting, capture what happened
-// (record/upload/paste), get a summary + extracted follow-ups, push them to
-// the to-do list, and — when a KOL is linked — log the meeting into
-// Territory Planning with the same fields territory requires.
+// Meeting Prep — Debrief: after the meeting, capture what happened by typing
+// answers to structured questions AND/OR recording/uploading/pasting the
+// meeting itself. The AI turns all of it into a summary + follow-ups, which
+// can be pushed to the to-do list and — when a KOL is linked — logged into
+// Territory Planning.
 
 import { useState } from "react";
-import { CheckCircle2, ListTodo, MapPin, Sparkles } from "lucide-react";
+import {
+  CheckCircle2,
+  FileAudio,
+  ListTodo,
+  MapPin,
+  MessageSquareText,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/Button";
-import { Input, Select } from "@/components/ui/Input";
+import { Input, Select, Textarea } from "@/components/ui/Input";
 import { RichText } from "@/components/ui/RichText";
 import { useToast } from "@/components/ui/Feedback";
 import { TranscriptCapture } from "@/components/studio/TranscriptCapture";
 import { useKolLite } from "./KolLink";
 import { logMeetingToTerritory } from "@/lib/meetingprep/territoryLog";
-import { meetingContextText, type DebriefAction, type MpMeeting } from "@/lib/meetingprep/types";
+import {
+  DEBRIEF_QUESTIONS,
+  meetingContextText,
+  type DebriefAction,
+  type MpMeeting,
+} from "@/lib/meetingprep/types";
 import type { DueDatePreset } from "@/lib/territory/types";
 
 const supabase = createClient();
@@ -40,9 +54,28 @@ export function DebriefTab({
   const [busy, setBusy] = useState(false);
 
   const debrief = m.debrief || {};
+  const notes = debrief.notes || {};
   const actions: DebriefAction[] = debrief.actions || [];
 
-  async function analyze(transcript: string) {
+  const notesText = DEBRIEF_QUESTIONS.map((q) =>
+    (notes[q.key] || "").trim() ? `${q.label}\n${notes[q.key].trim()}` : "",
+  )
+    .filter(Boolean)
+    .join("\n\n");
+  const hasMaterial = Boolean(notesText || (debrief.transcript || "").trim());
+
+  const setNote = (key: string, value: string) =>
+    save({ debrief: { ...debrief, notes: { ...notes, [key]: value } } });
+
+  async function analyze() {
+    const combined = [
+      notesText && `The writer's own debrief notes:\n${notesText}`,
+      (debrief.transcript || "").trim() &&
+        `Meeting transcript/notes:\n${debrief.transcript}`,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    if (!combined) return;
     setBusy(true);
     try {
       const res = await fetch("/api/meeting/ai", {
@@ -51,7 +84,7 @@ export function DebriefTab({
         credentials: "same-origin",
         body: JSON.stringify({
           action: "debrief",
-          transcript,
+          transcript: combined,
           context: meetingContextText(m),
         }),
       });
@@ -59,7 +92,7 @@ export function DebriefTab({
       if (!res.ok) throw new Error(json.error || "Debrief failed");
       save({
         debrief: {
-          transcript,
+          ...debrief,
           summary: json.summary || "",
           actions: (json.actions || []).map((text: string) => ({ text, done: false })),
         },
@@ -99,51 +132,90 @@ export function DebriefTab({
 
   return (
     <div className="space-y-5">
-      {!debrief.transcript ? (
-        <section className="rounded-xl border border-border bg-surface p-4 shadow-sm">
-          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-muted">
-            How did it go?
-          </h2>
-          <p className="mb-3 text-sm text-muted">
-            Record or upload the meeting audio, or paste your notes — I&apos;ll
-            summarize it, pull out every follow-up, and remember it for next
-            time you meet these people.
+      {/* Capture: typed answers to the questions that matter + audio/paste. */}
+      <section className="rounded-xl border border-border bg-surface p-4 shadow-sm">
+        <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold tracking-tight">
+          <span className="grid h-7 w-7 place-items-center rounded-lg bg-[var(--accent-soft)] text-[var(--accent)]">
+            <MessageSquareText size={15} />
+          </span>
+          How did it go?
+        </h2>
+        <p className="mb-4 text-sm text-muted">
+          Type what you remember below — a few honest sentences per box is
+          plenty — and/or attach the meeting recording. I&apos;ll turn all of it
+          into a summary, pull out every follow-up, and remember it for next
+          time you meet these people. Everything autosaves.
+        </p>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          {DEBRIEF_QUESTIONS.map((q) => (
+            <Textarea
+              key={q.key}
+              label={q.label}
+              value={notes[q.key] || ""}
+              onChange={(e) => setNote(q.key, e.target.value)}
+              placeholder={q.placeholder}
+              className="min-h-20"
+            />
+          ))}
+        </div>
+
+        <div className="mt-4 rounded-lg border border-border bg-canvas/40 p-3">
+          <p className="mb-2 flex items-center gap-1.5 text-sm font-medium text-ink">
+            <FileAudio size={14} className="text-[var(--accent)]" />
+            Recording or raw notes (optional)
           </p>
-          {busy ? (
-            <p className="rounded-lg bg-canvas px-4 py-3 text-sm text-muted">
-              Analyzing the meeting…
-            </p>
+          {(debrief.transcript || "").trim() ? (
+            <div className="flex items-center gap-2">
+              <details className="min-w-0 flex-1">
+                <summary className="cursor-pointer text-xs font-medium text-[var(--accent)]">
+                  Transcript attached ({(debrief.transcript || "").length.toLocaleString()} chars) — view
+                </summary>
+                <p className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs text-muted">
+                  {debrief.transcript}
+                </p>
+              </details>
+              <button
+                className="shrink-0 rounded p-1 text-muted hover:text-red-600"
+                aria-label="Remove transcript"
+                onClick={() => save({ debrief: { ...debrief, transcript: "" } })}
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
           ) : (
-            <TranscriptCapture onTranscript={(text) => void analyze(text)} />
+            <TranscriptCapture
+              onTranscript={(text) => save({ debrief: { ...debrief, transcript: text } })}
+            />
           )}
-        </section>
-      ) : (
+        </div>
+
+        <div className="mt-4 flex items-center justify-end gap-3">
+          {!hasMaterial && (
+            <p className="text-xs text-muted">
+              Answer at least one question or attach a recording first.
+            </p>
+          )}
+          <Button disabled={!hasMaterial || busy} onClick={() => void analyze()}>
+            <Sparkles size={15} />
+            {busy
+              ? "Analyzing…"
+              : debrief.summary
+                ? "Re-analyze"
+                : "Summarize & extract follow-ups"}
+          </Button>
+        </div>
+      </section>
+
+      {debrief.summary && (
         <>
           <section className="rounded-xl border border-border bg-surface p-4 shadow-sm">
-            <div className="mb-2 flex items-center justify-between">
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
-                Summary
-              </h2>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={busy}
-                onClick={() => void analyze(debrief.transcript || "")}
-              >
-                <Sparkles size={13} /> {busy ? "Re-analyzing…" : "Re-analyze"}
-              </Button>
-            </div>
+            <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-muted">
+              Summary
+            </h2>
             <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed">
-              {debrief.summary || "(no summary)"}
+              {debrief.summary}
             </pre>
-            <details className="mt-3">
-              <summary className="cursor-pointer text-xs font-medium text-muted">
-                Full transcript
-              </summary>
-              <p className="mt-1 max-h-56 overflow-y-auto whitespace-pre-wrap text-xs text-muted">
-                {debrief.transcript}
-              </p>
-            </details>
           </section>
 
           <section className="rounded-xl border border-border bg-surface p-4 shadow-sm">
