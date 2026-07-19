@@ -8,6 +8,7 @@ import {
   Presentation,
   PenLine,
   MonitorPlay,
+  BarChart3,
   type LucideIcon,
 } from "lucide-react";
 
@@ -38,7 +39,7 @@ export const MODULES: ModuleDef[] = [
   {
     slug: "",
     href: "/",
-    label: "Dashboard",
+    label: "Home",
     icon: LayoutDashboard,
     blurb: "Your medical-affairs command center.",
     ready: true,
@@ -106,6 +107,15 @@ export const MODULES: ModuleDef[] = [
     blurb: "Plan and execute conference coverage.",
     ready: true,
     theme: t("#e11d48", "#be123c", "#ffe4e6", "#f43f5e", "#ec4899", "#d946ef"),
+  },
+  {
+    slug: "dashboard",
+    href: "/dashboard",
+    label: "Dashboard",
+    icon: BarChart3,
+    blurb: "Visualize data from any app — ask in plain language.",
+    ready: true,
+    theme: t("#4338ca", "#3730a3", "#e0e7ff", "#6366f1", "#4338ca", "#0ea5e9"),
   },
 ];
 
