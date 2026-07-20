@@ -19,3 +19,14 @@ export function isValidUsername(username: string) {
 // session cookies; "0" → browser-session cookies, enforced on every refresh.
 export const REMEMBER_COOKIE = "omni-remember";
 export const REMEMBER_MAX_AGE = 400 * 24 * 60 * 60; // matches @supabase/ssr default
+
+// Alphanumeric only (no hyphen/punctuation, no 0/O/1/l/I) — safe to read
+// aloud, hard to mis-select on mobile, and unambiguous character-by-character.
+const TEMP_PASSWORD_CHARS = "abcdefghjkmnpqrstuvwxyzACDEFGHJKMNPQRSTUVWXYZ23456789";
+export function generateTempPassword(length = 14) {
+  let out = "";
+  for (let i = 0; i < length; i++) {
+    out += TEMP_PASSWORD_CHARS[Math.floor(Math.random() * TEMP_PASSWORD_CHARS.length)];
+  }
+  return out;
+}

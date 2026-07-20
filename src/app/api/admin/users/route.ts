@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getSessionProfile, isAdmin } from "@/lib/authz";
-import { isValidUsername, normalizeUsername, usernameToEmail } from "@/lib/auth";
+import { generateTempPassword, isValidUsername, normalizeUsername, usernameToEmail } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -24,10 +24,6 @@ export async function GET() {
     .order("created_at", { ascending: true });
 
   return NextResponse.json({ users: data || [], me: ctx.userId });
-}
-
-function generateTempPassword() {
-  return `Omni-${Math.random().toString(36).slice(2, 8)}${Math.floor(Math.random() * 90 + 10)}`;
 }
 
 // Add a member to the caller's org. Returns a one-time temp password.

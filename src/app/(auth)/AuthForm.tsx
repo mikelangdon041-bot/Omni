@@ -11,6 +11,45 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const [remember, setRemember] = useState(true);
   const isRegister = mode === "register";
 
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotUsername, setForgotUsername] = useState("");
+  const [forgotBusy, setForgotBusy] = useState(false);
+  const [forgotError, setForgotError] = useState<string | null>(null);
+  const [resetPassword, setResetPassword] = useState<string | null>(null);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+
+  // Not a <form> submit handler — this lives inside the outer login <form>,
+  // and HTML forms can't nest, so it's wired up via button click / Enter key.
+  async function resetMyPassword() {
+    if (!forgotUsername.trim() || forgotBusy) return;
+    setForgotBusy(true);
+    setForgotError(null);
+    try {
+      const res = await fetch("/api/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ username: forgotUsername }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setForgotError(data.error || "Could not reset password.");
+        return;
+      }
+      // Fill the real login form with the fresh credentials so the user can
+      // just hit "Sign in" — no re-typing or copy-pasting the new password.
+      setUsername(data.username);
+      setPassword(data.tempPassword);
+      setResetPassword(data.tempPassword);
+      setForgotOpen(false);
+    } catch {
+      setForgotError("Network error. Please try again.");
+    } finally {
+      setForgotBusy(false);
+    }
+  }
+
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
@@ -91,6 +130,8 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
         type="text"
         autoComplete="username"
         placeholder="jsmith"
+        value={username}
+        onChange={(e) => setUsername(e.target.value)}
         required
       />
 
@@ -100,8 +141,16 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
         type="password"
         autoComplete={isRegister ? "new-password" : "current-password"}
         placeholder={isRegister ? "At least 8 characters" : "••••••••"}
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
         required
       />
+
+      {resetPassword && (
+        <p className="rounded-lg bg-status-success/10 px-3 py-2 text-xs text-status-success">
+          Password reset — your username and new password are filled in below. Just hit sign in.
+        </p>
+      )}
 
       {!isRegister && (
         <>
@@ -114,10 +163,51 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
             />
             Remember me on this device
           </label>
-          <p className="text-xs text-muted">
-            Forgot your password? Ask an admin at your company to reset it for you from the
-            Admin page.
-          </p>
+
+          {forgotOpen ? (
+            <div className="rounded-lg border border-border bg-canvas p-3">
+              <p className="mb-2 text-xs text-ink">
+                Enter your username and we&apos;ll issue a fresh password right here — no email
+                needed.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  autoFocus
+                  value={forgotUsername}
+                  onChange={(e) => setForgotUsername(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), resetMyPassword())}
+                  placeholder="Username"
+                  className="flex-1 rounded-lg border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-primary"
+                />
+                <button
+                  type="button"
+                  onClick={resetMyPassword}
+                  disabled={forgotBusy || !forgotUsername.trim()}
+                  className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-fg disabled:opacity-60"
+                >
+                  {forgotBusy ? "…" : "Reset"}
+                </button>
+              </div>
+              {forgotError && (
+                <p className="mt-2 text-xs text-status-error">{forgotError}</p>
+              )}
+              <button
+                type="button"
+                onClick={() => setForgotOpen(false)}
+                className="mt-2 text-xs text-muted hover:underline"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setForgotOpen(true)}
+              className="text-left text-xs text-muted hover:text-primary hover:underline"
+            >
+              Forgot your password?
+            </button>
+          )}
         </>
       )}
 
