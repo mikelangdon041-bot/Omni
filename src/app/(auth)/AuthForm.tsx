@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Eye, EyeOff } from "lucide-react";
 
 export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const router = useRouter();
@@ -18,6 +19,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const [resetPassword, setResetPassword] = useState<string | null>(null);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
 
   // Not a <form> submit handler — this lives inside the outer login <form>,
   // and HTML forms can't nest, so it's wired up via button click / Enter key.
@@ -42,6 +44,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
       setUsername(data.username);
       setPassword(data.tempPassword);
       setResetPassword(data.tempPassword);
+      setShowPassword(true);
       setForgotOpen(false);
     } catch {
       setForgotError("Network error. Please try again.");
@@ -135,21 +138,37 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
         required
       />
 
-      <Field
-        label="Password"
-        name="password"
-        type="password"
-        autoComplete={isRegister ? "new-password" : "current-password"}
-        placeholder={isRegister ? "At least 8 characters" : "••••••••"}
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        required
-      />
+      <label className="flex flex-col gap-1.5">
+        <span className="text-sm font-medium text-ink">Password</span>
+        <span className="relative flex items-center">
+          <input
+            name="password"
+            type={showPassword ? "text" : "password"}
+            autoComplete={isRegister ? "new-password" : "current-password"}
+            placeholder={isRegister ? "At least 8 characters" : "••••••••"}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            className="w-full rounded-lg border border-border bg-surface px-3 py-2.5 pr-10 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+          />
+          <button
+            type="button"
+            onClick={() => setShowPassword((v) => !v)}
+            aria-label={showPassword ? "Hide password" : "Show password"}
+            className="absolute right-2.5 text-muted hover:text-ink"
+          >
+            {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        </span>
+      </label>
 
       {resetPassword && (
-        <p className="rounded-lg bg-status-success/10 px-3 py-2 text-xs text-status-success">
-          Password reset — your username and new password are filled in below. Just hit sign in.
-        </p>
+        <div className="rounded-lg bg-status-success/10 px-3 py-2 text-xs text-status-success">
+          <p>Your new password is filled in below — write it down if you want a copy:</p>
+          <p className="mt-1 select-all break-all rounded bg-surface px-2 py-1 font-mono text-sm text-ink">
+            {resetPassword}
+          </p>
+        </div>
       )}
 
       {!isRegister && (
