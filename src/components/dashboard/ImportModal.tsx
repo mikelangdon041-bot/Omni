@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import * as XLSX from "xlsx";
+import type * as XLSX from "xlsx";
 import { Upload, Loader2, Check } from "lucide-react";
+import { readWorkbookFile, sheetToRows } from "@/lib/xlsx";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import type { ImportColumn } from "@/lib/dashboard/types";
@@ -58,9 +59,7 @@ export function ImportModal({
   }
 
   function loadSheet(wb: XLSX.WorkBook, name: string) {
-    const sheet = wb.Sheets[name];
-    const raw = XLSX.utils.sheet_to_json<string[]>(sheet, { header: 1, defval: "" });
-    const rows = raw.map((r) => r.map((c) => String(c ?? ""))).filter((r) => r.some((c) => c.trim()));
+    const rows = sheetToRows(wb, name);
     if (rows.length < 2) {
       setError("That sheet doesn't have a header row plus at least one data row.");
       return;
@@ -78,8 +77,7 @@ export function ImportModal({
     setError(null);
     setTitle(file.name.replace(/\.(xlsx|xls|csv)$/i, ""));
     try {
-      const buf = await file.arrayBuffer();
-      const wb = XLSX.read(new Uint8Array(buf), { type: "array" });
+      const wb = await readWorkbookFile(file);
       setBook(wb);
       if (wb.SheetNames.length === 1) loadSheet(wb, wb.SheetNames[0]);
       else setStep("sheet");
@@ -121,7 +119,7 @@ export function ImportModal({
         onClose();
         reset();
       }}
-      title="Import a spreadsheet"
+      title="Import data"
       size="md"
     >
       {step === "upload" && (

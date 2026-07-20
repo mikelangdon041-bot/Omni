@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Upload, Sparkles, ArrowLeft, ArrowRight, Check } from "lucide-react";
 import * as XLSX from "xlsx";
+import { readWorkbookFile, sheetToRows } from "@/lib/xlsx";
 import type { KOL } from "@/lib/territory/types";
 import {
   PROFILE_FIELDS,
@@ -86,8 +87,7 @@ export function ImportModal({
     setStep("reading");
     await new Promise((r) => setTimeout(r, 30));
     try {
-      const buf = await file.arrayBuffer();
-      const book = XLSX.read(new Uint8Array(buf), { type: "array" });
+      const book = await readWorkbookFile(file);
       setWb(book);
       if (book.SheetNames.length === 1) loadSheet(book, book.SheetNames[0]);
       else setStep("sheet");
@@ -98,11 +98,7 @@ export function ImportModal({
   }
 
   function loadSheet(book: XLSX.WorkBook, name: string) {
-    const sheet = book.Sheets[name];
-    const raw = XLSX.utils.sheet_to_json<string[]>(sheet, { header: 1, defval: "" });
-    const r = raw
-      .map((row) => row.map((c) => String(c ?? "")))
-      .filter((row) => row.some((c) => c.trim()));
+    const r = sheetToRows(book, name);
     setRows(r);
     setStep("mapping");
     void analyze(r, "");

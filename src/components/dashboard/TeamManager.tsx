@@ -56,7 +56,9 @@ export function TeamManager({ open, onClose }: { open: boolean; onClose: () => v
           </div>
 
           <label className="flex flex-col gap-1.5">
-            <span className="text-sm font-medium text-ink">Team name</span>
+            <span className="text-sm font-medium text-ink">
+              Team name <span className="font-normal text-muted">(optional)</span>
+            </span>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}

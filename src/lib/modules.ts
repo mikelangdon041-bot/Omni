@@ -45,15 +45,10 @@ export const MODULES: ModuleDef[] = [
     ready: true,
     theme: t("#5a4ff3", "#4a3fde", "#ebe9fe", "#5a4ff3", "#8b5cf6", "#ff6a4d"),
   },
-  {
-    slug: "interview-prep",
-    href: "/interview-prep",
-    label: "Interview Prep",
-    icon: Mic,
-    blurb: "Upload a recording, get a transcript and a nested summary.",
-    ready: true,
-    theme: t("#4f46e5", "#4338ca", "#e0e7ff", "#4f46e5", "#7c3aed", "#db2777"),
-  },
+  // Order below is the field-team workflow: daily territory work first,
+  // then the periodic/utility apps, then the cross-cutting rollup last
+  // (Dashboard pulls data from everything above it, so it reads naturally
+  // as the capstone).
   {
     slug: "territory-planning",
     href: "/territory-planning",
@@ -62,6 +57,15 @@ export const MODULES: ModuleDef[] = [
     blurb: "Manage your KOLs, outreach cycles, and engagement.",
     ready: true,
     theme: t("#0d9488", "#0f766e", "#ccfbf1", "#14b8a6", "#0d9488", "#0891b2"),
+  },
+  {
+    slug: "meeting-prep",
+    href: "/meeting-prep",
+    label: "Meeting Prep",
+    icon: CalendarClock,
+    blurb: "Walk into every meeting fully briefed and rehearsed.",
+    ready: true,
+    theme: t("#0284c7", "#0369a1", "#e0f2fe", "#0ea5e9", "#3b82f6", "#6366f1"),
   },
   {
     slug: "insights",
@@ -73,13 +77,13 @@ export const MODULES: ModuleDef[] = [
     theme: t("#d97706", "#b45309", "#fef3c7", "#f59e0b", "#f97316", "#ea580c"),
   },
   {
-    slug: "meeting-prep",
-    href: "/meeting-prep",
-    label: "Meeting Prep",
-    icon: CalendarClock,
-    blurb: "Walk into every meeting fully briefed and rehearsed.",
+    slug: "conference-planning",
+    href: "/conference-planning",
+    label: "Conference Planning",
+    icon: Presentation,
+    blurb: "Plan and execute conference coverage.",
     ready: true,
-    theme: t("#0284c7", "#0369a1", "#e0f2fe", "#0ea5e9", "#3b82f6", "#6366f1"),
+    theme: t("#e11d48", "#be123c", "#ffe4e6", "#f43f5e", "#ec4899", "#d946ef"),
   },
   {
     slug: "writing-studio",
@@ -100,13 +104,13 @@ export const MODULES: ModuleDef[] = [
     theme: t("#c026d3", "#a21caf", "#fae8ff", "#d946ef", "#c026d3", "#9333ea"),
   },
   {
-    slug: "conference-planning",
-    href: "/conference-planning",
-    label: "Conference Planning",
-    icon: Presentation,
-    blurb: "Plan and execute conference coverage.",
+    slug: "interview-prep",
+    href: "/interview-prep",
+    label: "Interview Prep",
+    icon: Mic,
+    blurb: "Upload a recording, get a transcript and a nested summary.",
     ready: true,
-    theme: t("#e11d48", "#be123c", "#ffe4e6", "#f43f5e", "#ec4899", "#d946ef"),
+    theme: t("#4f46e5", "#4338ca", "#e0e7ff", "#4f46e5", "#7c3aed", "#db2777"),
   },
   {
     slug: "dashboard",

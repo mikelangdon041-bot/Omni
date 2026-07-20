@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Building2, Users, User, Upload, Settings2 } from "lucide-react";
+import { Building2, Users, User, Upload, Settings2, Plus } from "lucide-react";
 import { ModuleHero } from "@/components/ui/ModuleHero";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/Button";
@@ -15,6 +15,7 @@ import { DashboardChat } from "@/components/dashboard/DashboardChat";
 import { TileCard } from "@/components/dashboard/TileCard";
 import { ImportModal } from "@/components/dashboard/ImportModal";
 import { TeamManager } from "@/components/dashboard/TeamManager";
+import { CreateKpiModal } from "@/components/dashboard/CreateKpiModal";
 
 const SCOPE_COPY: Record<string, { icon: typeof User; text: string }> = {
   self: { icon: User, text: "You see only your own data here." },
@@ -35,6 +36,7 @@ export default function DashboardPage() {
   const { tiles, loading: tilesLoading, refresh } = useDashboardTiles();
   const [importOpen, setImportOpen] = useState(false);
   const [teamOpen, setTeamOpen] = useState(false);
+  const [kpiOpen, setKpiOpen] = useState(false);
 
   const scopeInfo = SCOPE_COPY[maxScope] || SCOPE_COPY.self;
 
@@ -55,7 +57,10 @@ export default function DashboardPage() {
               <Settings2 size={14} /> My team
             </Button>
             <Button variant="secondary" size="sm" onClick={() => setImportOpen(true)}>
-              <Upload size={14} /> Import spreadsheet
+              <Upload size={14} /> Import data
+            </Button>
+            <Button size="sm" onClick={() => setKpiOpen(true)}>
+              <Plus size={14} /> Create KPI
             </Button>
           </div>
         }
@@ -99,6 +104,13 @@ export default function DashboardPage() {
         onImported={refreshImports}
       />
       <TeamManager open={teamOpen} onClose={() => setTeamOpen(false)} />
+      <CreateKpiModal
+        open={kpiOpen}
+        onClose={() => setKpiOpen(false)}
+        maxScope={maxScope}
+        extraDatasets={importedDatasets}
+        onSaved={refresh}
+      />
     </>
   );
 }
