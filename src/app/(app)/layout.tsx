@@ -5,6 +5,7 @@ import { AppHeader } from "@/components/AppHeader";
 import { ImpersonationBanner } from "@/components/ImpersonationBanner";
 import { FeedbackProvider } from "@/components/ui/Feedback";
 import { PageContainer } from "@/components/PageContainer";
+import { ScrollMemory } from "@/components/ScrollMemory";
 
 export default async function AppLayout({
   children,
@@ -35,6 +36,7 @@ export default async function AppLayout({
 
   return (
     <FeedbackProvider>
+      <ScrollMemory />
       <div className="flex min-h-full flex-1 flex-col">
         {impersonating && (
           <ImpersonationBanner username={profile?.username || username} />

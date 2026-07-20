@@ -67,7 +67,10 @@ export function AppHeader({
 
   return (
     <>
-      <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border bg-surface/90 px-4 backdrop-blur">
+      <header
+        className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border bg-surface/90 px-4 backdrop-blur"
+        style={{ paddingTop: "env(safe-area-inset-top)", height: "calc(3.5rem + env(safe-area-inset-top))" }}
+      >
         {/* Left: just the app you're in (click → its home). Switch apps via the
             launcher on the right. */}
         {active.slug !== "" ? (

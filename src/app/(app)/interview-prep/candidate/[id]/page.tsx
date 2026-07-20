@@ -31,6 +31,7 @@ import { QuestionsTab } from "@/components/interview/QuestionsTab";
 import { ActivityTab } from "@/components/interview/ActivityTab";
 import { ResumeCard } from "@/components/interview/ResumeCard";
 import { ScorecardTab } from "@/components/interview/ScorecardTab";
+import { usePersistedState } from "@/lib/usePersistedState";
 
 const TABS = ["Overview", "Activity", "Interviews", "Questions", "Scorecard"] as const;
 type Tab = (typeof TABS)[number];
@@ -41,7 +42,8 @@ export default function CandidateDetailPage() {
   const { candidate, loading, update } = useCandidate(params.id);
   const activity = useCandidateActivity(params.id);
   const recordings = useCandidateRecordings(params.id);
-  const [tab, setTab] = useState<Tab>("Overview");
+  // Remembers which tab you were on for THIS candidate specifically.
+  const [tab, setTab] = usePersistedState<Tab>(`interview-tab:${params.id}`, "Overview", TABS);
 
   const canEdit = !!candidate && candidate.user_id === userId;
 

@@ -1,16 +1,18 @@
 "use client";
 
 // Meeting Prep — Setup: everything the AI needs to know. Autosaves.
-// Extras: pull attendees from Conference Planning, upload supporting
-// documents (with a note on why each matters), auto-fill the form from
-// free-text background, and generate the brief right from here.
+// Mirrors Writing Studio's intake pattern: one prominent, always-open box up
+// top — "Explain" — and everything else folded away in collapsible
+// IntakeSection panels until you want to fine-tune it.
 
 import { useState } from "react";
 import {
   ArrowRight,
   CalendarClock,
   FileText,
-  Lightbulb,
+  ListChecks,
+  MessageCircle,
+  Mic,
   Paperclip,
   Plus,
   Sparkles,
@@ -19,10 +21,11 @@ import {
   Wand2,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
-import { Input, Select, Textarea } from "@/components/ui/Input";
+import { Input, Select } from "@/components/ui/Input";
 import { RichText } from "@/components/ui/RichText";
 import { useToast } from "@/components/ui/Feedback";
 import { TranscriptCapture } from "@/components/studio/TranscriptCapture";
+import { IntakeSection } from "@/components/writer/IntakeSection";
 import { htmlToPlain } from "@/lib/writer/types";
 import { KolLink } from "./KolLink";
 import { ConferencePeopleButton } from "./ConferencePeople";
@@ -111,8 +114,8 @@ export function SetupTab({
     save({ attendees: [...real, a] });
   };
 
-  // Item 6: read the background (and documents) and fill the fields above —
-  // attendees mentioned, objectives, title, date, location…
+  // Read Explain (plus Background/documents, if used) and fill in the
+  // structured fields — attendees mentioned, objectives, title, date…
   async function autofill() {
     setAutofilling(true);
     try {
@@ -130,6 +133,7 @@ export function SetupTab({
             format: m.format,
             location: m.location,
             attendees: m.attendees,
+            explain: m.explain,
             objectives: m.objectives,
             background: m.background,
             concerns: m.concerns,
@@ -185,9 +189,18 @@ export function SetupTab({
           );
           if (hit) {
             let filled = false;
-            if (!hit.role.trim() && e.role) (hit.role = e.role), (filled = true);
-            if (!hit.org.trim() && e.org) (hit.org = e.org), (filled = true);
-            if (!hit.notes.trim() && e.notes) (hit.notes = e.notes), (filled = true);
+            if (!hit.role.trim() && e.role) {
+              hit.role = e.role;
+              filled = true;
+            }
+            if (!hit.org.trim() && e.org) {
+              hit.org = e.org;
+              filled = true;
+            }
+            if (!hit.notes.trim() && e.notes) {
+              hit.notes = e.notes;
+              filled = true;
+            }
             if (filled) changes++;
           } else {
             const blank = next.find(
@@ -203,7 +216,10 @@ export function SetupTab({
 
       if (changes) {
         save(p);
-        toast("success", `Auto-filled ${changes} thing${changes === 1 ? "" : "s"} from your background`);
+        toast(
+          "success",
+          `Filled in ${changes} thing${changes === 1 ? "" : "s"} below from what you wrote`,
+        );
       } else {
         toast("info", "Nothing new found to fill in — the fields already cover it.");
       }
@@ -243,6 +259,12 @@ export function SetupTab({
 
   const setDoc = (id: string, partial: Partial<MpDocument>) =>
     save({ documents: documents.map((d) => (d.id === id ? { ...d, ...partial } : d)) });
+
+  const specificsFilled = [m.objectives, m.background, m.concerns].filter((v) =>
+    htmlToPlain(v).trim(),
+  ).length;
+  const canAutofill = Boolean(htmlToPlain(m.explain).trim() || htmlToPlain(m.background).trim());
+  const attendeesFilled = attendees.filter((a) => a.name.trim()).length;
 
   return (
     <div className="grid gap-5 lg:grid-cols-2">
@@ -301,14 +323,47 @@ export function SetupTab({
         <KolLink userId={userId} kolId={m.kol_id} onLink={(id) => save({ kol_id: id })} />
       </section>
 
-      <section className="space-y-3 rounded-xl border border-border bg-surface p-4 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <CardTitle icon={Users}>Who&apos;s in the room</CardTitle>
-          <ConferencePeopleButton
-            existingNames={attendees.map((a) => a.name)}
-            onAdd={addAttendee}
-          />
+      {/* Explain — the fast path. Right after the meeting basics, before
+          anything else, so this is the first thing you fill in. */}
+      <section className="space-y-3 rounded-xl border border-[var(--accent)]/30 bg-gradient-to-br from-[var(--accent-soft)]/40 to-transparent p-4 shadow-sm">
+        <CardTitle icon={MessageCircle}>Explain</CardTitle>
+        <p className="text-xs leading-snug text-muted">
+          The fast way: just type out what&apos;s going on, in your own words —
+          who&apos;s involved, what you want, any backstory or worries. Press{" "}
+          <b className="text-ink">Fill in the details</b> and I&apos;ll pick out
+          attendees, objectives, and concerns and drop them into the specific
+          boxes below. You can also answer those directly instead — or as well,
+          for extra sharpness on any one of them — and anything you leave blank
+          there, I&apos;ll pull from what you write here when I build the brief
+          either way.
+        </p>
+        <RichText
+          value={m.explain}
+          onChange={(html) => save({ explain: html })}
+          placeholder='e.g. "Meeting with Dr. Chen and her VP, Melissa, about renewing the research grant. I want to leave with a signed LOI. They were burned by a late shipment last year so tread carefully there."'
+          minHeight="min-h-32"
+        />
+        <div className="flex justify-end">
+          <Button
+            size="sm"
+            disabled={autofilling || !canAutofill}
+            onClick={() => void autofill()}
+          >
+            <Wand2 size={14} /> {autofilling ? "Reading…" : "Fill in the details"}
+          </Button>
         </div>
+      </section>
+
+      <IntakeSection
+        icon={Users}
+        title="Who's in the room"
+        tint="bg-sky-100 text-sky-600"
+        badge={attendeesFilled ? `${attendeesFilled} added` : undefined}
+      >
+        <ConferencePeopleButton
+          existingNames={attendees.map((a) => a.name)}
+          onAdd={addAttendee}
+        />
         {attendees.map((a, i) => (
           <div
             key={i}
@@ -361,159 +416,138 @@ export function SetupTab({
         </Button>
         <p className="text-[11px] leading-snug text-muted">
           Tip: you don&apos;t have to fill this by hand — mention people in the
-          Background box below and press <b>Auto-fill</b>; anyone you say will be
-          there gets added here automatically.
+          Explain box above and press <b>Fill in the details</b>; anyone you say
+          will be there gets added here automatically.
         </p>
-      </section>
+      </IntakeSection>
 
-      <section className="space-y-4 rounded-xl border border-border bg-surface p-4 shadow-sm lg:col-span-2">
-        <CardTitle icon={Lightbulb}>What I should know</CardTitle>
-        <div className="grid gap-4 lg:grid-cols-3">
-          <div>
-            <p className="mb-1.5 text-sm font-medium text-ink">
-              Your objective — what does success look like?
-            </p>
-            <RichText
-              value={m.objectives}
-              onChange={(html) => save({ objectives: html })}
-              placeholder="What you want out of this meeting…"
-              minHeight="min-h-24"
-            />
-          </div>
-          <div>
-            <p className="mb-1.5 text-sm font-medium text-ink">Background</p>
-            <RichText
-              value={m.background}
-              onChange={(html) => save({ background: html })}
-              placeholder='Write or paste everything you know — people, history, goals, context. e.g. "Melissa, the head of the company, will be there. I want to showcase our KPIs…"'
-              minHeight="min-h-24"
-            />
-          </div>
-          <div>
-            <p className="mb-1.5 text-sm font-medium text-ink">
-              Concerns / what could go wrong
-            </p>
-            <RichText
-              value={m.concerns}
-              onChange={(html) => save({ concerns: html })}
-              placeholder="Sensitive topics, expected pushback, worries…"
-              minHeight="min-h-24"
-            />
-          </div>
-        </div>
-
-        {/* Item 6: auto-fill the structured fields from the free text above. */}
-        <div className="flex flex-col gap-2 rounded-lg border border-[var(--accent)]/25 bg-[var(--accent-soft)]/30 p-3 sm:flex-row sm:items-center">
-          <p className="flex-1 text-xs leading-snug text-muted">
-            <b className="text-ink">Wrote it all in Background?</b> I&apos;ll read
-            it (plus any documents below) and fill in the fields above for you —
-            attendees you mentioned, objectives, date, location. Nothing you
-            already typed gets overwritten.
+      {/* Folded away, same as Writing Studio's dials — Explain does this job
+          for most meetings; these are the "answer directly instead (or as
+          well, for extra sharpness)" path. */}
+      <IntakeSection
+        icon={ListChecks}
+        title="Answer more specifically"
+        tint="bg-violet-100 text-violet-600"
+        badge={specificsFilled ? `${specificsFilled}/3 filled` : undefined}
+      >
+        <div>
+          <p className="mb-1.5 text-sm font-medium text-ink">
+            Your objective — what does success look like?
           </p>
-          <Button
-            size="sm"
-            variant="secondary"
-            className="shrink-0 !border-[var(--accent)]/40"
-            disabled={autofilling || !htmlToPlain(m.background).trim()}
-            onClick={() => void autofill()}
-          >
-            <Wand2 size={14} /> {autofilling ? "Reading…" : "Auto-fill from background"}
-          </Button>
+          <RichText
+            value={m.objectives}
+            onChange={(html) => save({ objectives: html })}
+            placeholder="What you want out of this meeting…"
+            minHeight="min-h-20"
+          />
         </div>
+        <div>
+          <p className="mb-1.5 text-sm font-medium text-ink">Background</p>
+          <RichText
+            value={m.background}
+            onChange={(html) => save({ background: html })}
+            placeholder="History, prior emails, context — paste anything relevant…"
+            minHeight="min-h-20"
+          />
+        </div>
+        <div>
+          <p className="mb-1.5 text-sm font-medium text-ink">
+            Concerns / what could go wrong
+          </p>
+          <RichText
+            value={m.concerns}
+            onChange={(html) => save({ concerns: html })}
+            placeholder="Sensitive topics, expected pushback, worries…"
+            minHeight="min-h-20"
+          />
+        </div>
+      </IntakeSection>
 
-        {/* Item 4: supporting documents with a per-document relevance note. */}
-        <div className="rounded-lg border border-border p-3">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <p className="flex items-center gap-1.5 text-sm font-medium text-ink">
-              <Paperclip size={14} className="text-[var(--accent)]" /> Supporting
-              documents
-            </p>
-            <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted transition hover:text-ink">
-              <FileText size={14} />
-              {uploadingDoc ? "Reading document…" : "Upload PDF / Word / text"}
-              <input
-                type="file"
-                accept=".pdf,.doc,.docx,.txt,.md,text/plain"
-                className="hidden"
-                disabled={uploadingDoc}
-                onChange={(e) => {
-                  void uploadDoc(e.target.files?.[0] || null);
-                  e.target.value = "";
-                }}
-              />
-            </label>
+      {/* Supporting documents, with a per-document relevance note. */}
+      <IntakeSection
+        icon={Paperclip}
+        title="Supporting documents"
+        tint="bg-amber-100 text-amber-600"
+        badge={documents.length ? `${documents.length} attached` : undefined}
+      >
+        <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted transition hover:text-ink">
+          <FileText size={14} />
+          {uploadingDoc ? "Reading document…" : "Upload PDF / Word / text"}
+          <input
+            type="file"
+            accept=".pdf,.doc,.docx,.txt,.md,text/plain"
+            className="hidden"
+            disabled={uploadingDoc}
+            onChange={(e) => {
+              void uploadDoc(e.target.files?.[0] || null);
+              e.target.value = "";
+            }}
+          />
+        </label>
+        <p className="text-xs text-muted">
+          Attach agendas, slide decks, reports, emails — then tell me what to
+          look for in each one and I&apos;ll work it into the brief.
+        </p>
+        {documents.length > 0 && (
+          <ul className="space-y-2">
+            {documents.map((d) => (
+              <li key={d.id} className="rounded-lg border border-border bg-canvas/40 p-3">
+                <div className="mb-2 flex items-center gap-2">
+                  <FileText size={15} className="shrink-0 text-[var(--accent)]" />
+                  <p className="min-w-0 flex-1 truncate text-sm font-medium">{d.name}</p>
+                  <span className="shrink-0 text-[10px] text-muted">
+                    {d.text.length.toLocaleString()} chars
+                  </span>
+                  <button
+                    className="shrink-0 rounded p-1 text-muted hover:text-red-600"
+                    aria-label="Remove document"
+                    onClick={() => save({ documents: documents.filter((x) => x.id !== d.id) })}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+                <Input
+                  value={d.note}
+                  onChange={(e) => setDoc(d.id, { note: e.target.value })}
+                  placeholder='What should I look for in this? How is it relevant? e.g. "Pull the Q2 numbers from page 3 for the talking points"'
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+      </IntakeSection>
+
+      <IntakeSection
+        icon={Mic}
+        title="Previous meeting with these people?"
+        tint="bg-teal-100 text-teal-600"
+        badge={m.prior_transcript ? "Attached" : undefined}
+      >
+        <p className="text-xs text-muted">
+          Record, upload, or paste it — the brief will build on what was
+          already said.
+        </p>
+        {m.prior_transcript ? (
+          <div className="space-y-2">
+            <details>
+              <summary className="cursor-pointer text-xs font-medium text-[var(--accent)]">
+                Transcript attached ({m.prior_transcript.length.toLocaleString()} chars) — view
+              </summary>
+              <p className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs text-muted">
+                {m.prior_transcript}
+              </p>
+            </details>
+            <Button size="sm" variant="ghost" onClick={() => save({ prior_transcript: "" })}>
+              Remove transcript
+            </Button>
           </div>
-          <p className="mb-2 text-xs text-muted">
-            Attach agendas, slide decks, reports, emails — then tell me what to
-            look for in each one and I&apos;ll work it into the brief.
-          </p>
-          {documents.length > 0 && (
-            <ul className="space-y-2">
-              {documents.map((d) => (
-                <li key={d.id} className="rounded-lg border border-border bg-canvas/40 p-3">
-                  <div className="mb-2 flex items-center gap-2">
-                    <FileText size={15} className="shrink-0 text-[var(--accent)]" />
-                    <p className="min-w-0 flex-1 truncate text-sm font-medium">{d.name}</p>
-                    <span className="shrink-0 text-[10px] text-muted">
-                      {d.text.length.toLocaleString()} chars
-                    </span>
-                    <button
-                      className="shrink-0 rounded p-1 text-muted hover:text-red-600"
-                      aria-label="Remove document"
-                      onClick={() =>
-                        save({ documents: documents.filter((x) => x.id !== d.id) })
-                      }
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  </div>
-                  <Input
-                    value={d.note}
-                    onChange={(e) => setDoc(d.id, { note: e.target.value })}
-                    placeholder='What should I look for in this? How is it relevant? e.g. "Pull the Q2 numbers from page 3 for the talking points"'
-                  />
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        ) : (
+          <TranscriptCapture onTranscript={(text) => save({ prior_transcript: text })} />
+        )}
+      </IntakeSection>
 
-        <div className="rounded-lg border border-border p-3">
-          <p className="mb-1 text-sm font-medium text-ink">
-            Previous meeting with these people?
-          </p>
-          <p className="mb-2 text-xs text-muted">
-            Record, upload, or paste it — the brief will build on what was
-            already said.
-          </p>
-          {m.prior_transcript ? (
-            <div className="space-y-2">
-              <details>
-                <summary className="cursor-pointer text-xs font-medium text-[var(--accent)]">
-                  Transcript attached ({m.prior_transcript.length.toLocaleString()} chars) — view
-                </summary>
-                <p className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs text-muted">
-                  {m.prior_transcript}
-                </p>
-              </details>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => save({ prior_transcript: "" })}
-              >
-                Remove transcript
-              </Button>
-            </div>
-          ) : (
-            <TranscriptCapture
-              onTranscript={(text) => save({ prior_transcript: text })}
-            />
-          )}
-        </div>
-      </section>
-
-      {/* Item 7: generate straight from Setup — it jumps to the Brief tab and
-          keeps working in the background. */}
+      {/* Generate straight from Setup — it jumps to the Brief tab and keeps
+          working in the background. */}
       <section className="flex flex-col gap-3 rounded-xl border border-[var(--accent)]/30 bg-gradient-to-r from-[var(--accent-soft)]/60 to-transparent p-4 shadow-sm sm:flex-row sm:items-center lg:col-span-2">
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold">

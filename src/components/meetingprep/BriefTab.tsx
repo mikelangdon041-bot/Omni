@@ -11,6 +11,9 @@ import {
   AlertTriangle,
   CalendarPlus,
   CheckSquare,
+  ChevronDown,
+  ChevronsDownUp,
+  ChevronsUpDown,
   FileDown,
   FileText,
   HelpCircle,
@@ -32,12 +35,12 @@ import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { RichText } from "@/components/ui/RichText";
+import { RegenerateControl } from "@/components/ui/RegenerateControl";
 import { useToast } from "@/components/ui/Feedback";
 import { htmlToPlain } from "@/lib/writer/types";
 import type { GenerateOpts } from "@/lib/meetingprep/useBriefGenerator";
 import {
   meetingContextText,
-  type BriefSection,
   type CustomSection,
   type IdeaSuggestion,
   type MpMeeting,
@@ -88,12 +91,22 @@ export function BriefTab({
   const toast = useToast();
   const [showAdd, setShowAdd] = useState(false);
   const [showIdeas, setShowIdeas] = useState(false);
-  const [redoSection, setRedoSection] = useState<BriefSection | null>(null);
   const [guidance, setGuidance] = useState("");
   const [pushedTasks, setPushedTasks] = useState(false);
 
   const sections = m.brief?.sections || [];
   const hasBrief = sections.length > 0;
+  const collapsedKeys = new Set(m.brief?.collapsed || []);
+
+  function setCollapsed(keys: Set<string>) {
+    save({ brief: { ...m.brief, collapsed: Array.from(keys) } });
+  }
+  function toggleCollapsed(key: string) {
+    const next = new Set(collapsedKeys);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    setCollapsed(next);
+  }
 
   async function pushChecklist() {
     if (!userId) return;
@@ -217,6 +230,19 @@ export function BriefTab({
         <Button size="sm" variant="secondary" onClick={() => setShowAdd(true)}>
           <Plus size={14} /> Add section
         </Button>
+        {collapsedKeys.size > 0 ? (
+          <Button size="sm" variant="secondary" onClick={() => setCollapsed(new Set())}>
+            <ChevronsUpDown size={14} /> Expand all
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => setCollapsed(new Set(sections.map((s) => s.key)))}
+          >
+            <ChevronsDownUp size={14} /> Collapse all
+          </Button>
+        )}
         <span className="flex-1" />
         <Button size="sm" variant="secondary" onClick={() => void exportBriefDocx(m)}>
           <FileDown size={14} /> Word
@@ -235,41 +261,54 @@ export function BriefTab({
         </Button>
       </div>
 
-      {/* Sections — two-column magazine layout on large screens (item 11). */}
+      {/* Sections — two-column magazine layout on large screens (item 11).
+          Each one collapses (remembered per meeting) and carries its own
+          regenerate control: a plain "Redo" only once there's something to
+          redo (hand-edited, or the setup moved on since generation), plus an
+          always-available "Adjust" for explicit guidance. */}
       <div className="gap-4 lg:columns-2">
         {sections.map((s) => {
           const Icon = SECTION_ICONS[s.key] || FileText;
           const sectionBusy = busy === s.key;
+          const isCollapsed = collapsedKeys.has(s.key);
+          const isDirty = s.generatedContent !== undefined && s.content !== s.generatedContent;
           return (
             <section
               key={s.key}
               className="mb-4 break-inside-avoid rounded-xl border border-border bg-surface shadow-sm"
             >
-              <div className="flex items-center justify-between gap-2 rounded-t-xl border-b border-border bg-canvas/50 px-4 py-2.5">
+              <button
+                type="button"
+                onClick={() => toggleCollapsed(s.key)}
+                className="flex w-full items-center justify-between gap-2 rounded-t-xl border-b border-border bg-canvas/50 px-4 py-2.5 text-left"
+              >
                 <h3 className="flex items-center gap-2 text-sm font-semibold">
                   <Icon size={15} className="text-[var(--accent)]" />
                   {s.title}
                 </h3>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={!!busy}
-                  onClick={() => {
-                    setGuidance("");
-                    setRedoSection(s);
-                  }}
-                >
-                  <RefreshCw size={13} className={sectionBusy ? "animate-spin" : ""} />
-                  {sectionBusy ? "Redoing…" : "Redo"}
-                </Button>
-              </div>
-              <div className={`p-3 ${sectionBusy ? "opacity-50" : ""}`}>
-                <RichText
-                  value={s.content}
-                  onChange={(html) => setSection(s.key, html)}
-                  minHeight="min-h-16"
+                <ChevronDown
+                  size={16}
+                  className={`shrink-0 text-muted transition-transform ${isCollapsed ? "-rotate-90" : ""}`}
                 />
-              </div>
+              </button>
+              {!isCollapsed && (
+                <>
+                  <div className={`p-3 ${sectionBusy ? "opacity-50" : ""}`}>
+                    <RichText
+                      value={s.content}
+                      onChange={(html) => setSection(s.key, html)}
+                      minHeight="min-h-16"
+                    />
+                  </div>
+                  <div className="border-t border-border px-3 py-2">
+                    <RegenerateControl
+                      canRedoPlain={isDirty || briefStale}
+                      busy={sectionBusy}
+                      onRegenerate={(g) => void generate({ onlyKey: s.key, guidance: g })}
+                    />
+                  </div>
+                </>
+              )}
             </section>
           );
         })}
@@ -302,17 +341,7 @@ export function BriefTab({
         </div>
       </section>
 
-      {/* Item 8: redo one section, with optional guidance on what to change. */}
-      <RedoSectionModal
-        section={redoSection}
-        onClose={() => setRedoSection(null)}
-        onRedo={(key, g) => {
-          setRedoSection(null);
-          void generate({ onlyKey: key, guidance: g });
-        }}
-      />
-
-      {/* Item 9: creative brainstorm — suggestions you can add one by one. */}
+      {/* Creative brainstorm — suggestions you can add one by one. */}
       <IdeasModal
         open={showIdeas}
         onClose={() => setShowIdeas(false)}
@@ -332,60 +361,6 @@ export function BriefTab({
         }}
       />
     </div>
-  );
-}
-
-// Ask what should be different before redoing a section — or just redo it.
-function RedoSectionModal({
-  section,
-  onClose,
-  onRedo,
-}: {
-  section: BriefSection | null;
-  onClose: () => void;
-  onRedo: (key: string, guidance: string) => void;
-}) {
-  const [guidance, setGuidance] = useState("");
-  return (
-    <Modal
-      open={!!section}
-      onClose={() => {
-        setGuidance("");
-        onClose();
-      }}
-      title={section ? `Redo "${section.title}"` : ""}
-      size="sm"
-    >
-      <div className="space-y-3">
-        <Textarea
-          label="What should be different? (optional)"
-          value={guidance}
-          onChange={(e) => setGuidance(e.target.value)}
-          placeholder='e.g. "shorter and punchier", "focus on the budget angle", "less formal"'
-          className="min-h-20"
-          autoFocus
-        />
-        <div className="flex justify-end gap-2">
-          <Button
-            variant="ghost"
-            onClick={() => {
-              setGuidance("");
-              onClose();
-            }}
-          >
-            Cancel
-          </Button>
-          <Button
-            onClick={() => {
-              if (section) onRedo(section.key, guidance.trim());
-              setGuidance("");
-            }}
-          >
-            <RefreshCw size={14} /> Redo section
-          </Button>
-        </div>
-      </div>
-    </Modal>
   );
 }
 

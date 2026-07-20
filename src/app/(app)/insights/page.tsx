@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import Link from "next/link";
 import { Sparkles, ClipboardList, TrendingUp, Users } from "lucide-react";
 import { ModuleHero } from "@/components/ui/ModuleHero";
@@ -21,6 +21,7 @@ import { rosterStats } from "@/lib/insights/analytics";
 import { InsightsRoster } from "@/components/insights/InsightsRoster";
 import { AnalysisWorkbench } from "@/components/insights/AnalysisWorkbench";
 import type { SurveyAnswer } from "@/lib/insights/types";
+import { usePersistedState } from "@/lib/usePersistedState";
 
 const TABS = ["KOLs", "Analyze"] as const;
 type Tab = (typeof TABS)[number];
@@ -30,7 +31,7 @@ export default function InsightsPage() {
   const { isAdmin } = useOrgProfile();
   const { questions, options } = useSurveyDefinition();
   const { responses, answers } = useResponses(userId);
-  const [tab, setTab] = useState<Tab>("KOLs");
+  const [tab, setTab] = usePersistedState<Tab>("insights-tab", "KOLs", TABS);
 
   const tree = useMemo(
     () => buildTree(questions, options),

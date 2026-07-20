@@ -25,14 +25,22 @@ export interface BriefSection {
   key: string;
   title: string;
   content: string; // HTML
+  // Snapshot of `content` taken right after the AI last (re)generated this
+  // section. If `content` no longer matches, the user has hand-edited it —
+  // that's what makes a plain "Redo" (no guidance) meaningful again.
+  generatedContent?: string;
 }
 
 export interface Brief {
   sections?: BriefSection[];
   generatedAt?: string;
   // Fingerprint of the setup fields the brief was generated from, so the UI
-  // can tell when the setup changed and the brief is stale.
+  // can tell when the setup changed and the brief is stale. Only bumped by a
+  // full regenerate/refine — a single section redo shouldn't mark the whole
+  // brief "fresh" when the other sections weren't touched.
   sourceFingerprint?: string;
+  // Section keys the user has collapsed, remembered per meeting.
+  collapsed?: string[];
 }
 
 // A supporting document uploaded to the meeting, with the user's note on what
@@ -116,6 +124,9 @@ export interface MpMeeting {
   location: string;
   kol_id: string | null;
   attendees: Attendee[];
+  // The fast path: describe the meeting in plain language; extraction fills
+  // the structured fields below from it. Feeds the brief either way.
+  explain: string;
   objectives: string;
   background: string;
   concerns: string;
@@ -169,6 +180,7 @@ export function meetingContextText(m: MpMeeting): string {
     m.date && `When: ${new Date(m.date).toLocaleString()}`,
     `Duration: ${m.duration_min} minutes`,
     att && `Attendees:\n${att}`,
+    htmlToPlain(m.explain) && `In the writer's own words:\n${htmlToPlain(m.explain)}`,
     htmlToPlain(m.objectives) && `Objectives:\n${htmlToPlain(m.objectives)}`,
     htmlToPlain(m.background) && `Background:\n${htmlToPlain(m.background)}`,
     htmlToPlain(m.concerns) && `Concerns:\n${htmlToPlain(m.concerns)}`,
@@ -196,6 +208,7 @@ export function setupFingerprint(m: MpMeeting): string {
     m.location,
     m.kol_id,
     m.attendees,
+    m.explain,
     m.objectives,
     m.background,
     m.concerns,

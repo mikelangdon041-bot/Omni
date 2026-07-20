@@ -5,7 +5,7 @@
 // the Setup tab's "Generate brief" CTA can kick it off and jump to the Brief
 // tab immediately.
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useToast } from "@/components/ui/Feedback";
 import {
   DEFAULT_BRIEF_SECTIONS,
@@ -45,7 +45,9 @@ export function useBriefGenerator({
   // Always read the freshest meeting: the user may keep editing while a
   // generation is in flight.
   const mRef = useRef(meeting);
-  mRef.current = meeting;
+  useEffect(() => {
+    mRef.current = meeting;
+  }, [meeting]);
 
   const generate = useCallback(
     async (opts: GenerateOpts = {}): Promise<boolean> => {
@@ -80,6 +82,7 @@ export function useBriefGenerator({
               format: m.format,
               location: m.location,
               attendees: m.attendees,
+              explain: m.explain,
               objectives: m.objectives,
               background: m.background,
               concerns: m.concerns,
@@ -99,12 +102,18 @@ export function useBriefGenerator({
         });
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || "Brief generation failed");
-        const incoming: BriefSection[] = json.sections || [];
+        // Snapshot each freshly-written section's content so the UI can
+        // later tell it apart from a hand-edited (dirty) one.
+        const incoming: BriefSection[] = (json.sections || []).map((s: BriefSection) => ({
+          ...s,
+          generatedContent: s.content,
+        }));
 
         const latest = mRef.current;
         if (!latest) return false;
         const cur = latest.brief?.sections || [];
         let next: BriefSection[];
+        const fullRegen = !opts.extra && !opts.onlyKey;
         if (opts.extra) {
           next = [...cur, ...incoming];
         } else if (opts.onlyKey) {
@@ -114,9 +123,16 @@ export function useBriefGenerator({
         }
         save({
           brief: {
+            ...latest.brief,
             sections: next,
             generatedAt: new Date().toISOString(),
-            sourceFingerprint: setupFingerprint(latest),
+            // A single section redo (or adding one new section) only
+            // refreshes part of the brief — the rest may still be stale
+            // relative to the current setup, so only a full regenerate or
+            // whole-brief refine gets to clear the stale flag.
+            sourceFingerprint: fullRegen
+              ? setupFingerprint(latest)
+              : latest.brief?.sourceFingerprint,
           },
         });
         return true;

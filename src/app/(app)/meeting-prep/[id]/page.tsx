@@ -4,7 +4,6 @@
 // Brief generation lives here (not in the Brief tab) so it keeps running in
 // the background while the user moves between tabs.
 
-import { useState } from "react";
 import { useParams } from "next/navigation";
 import { Check, CloudUpload } from "lucide-react";
 import { BackButton } from "@/components/BackButton";
@@ -20,6 +19,7 @@ import {
 } from "@/lib/meetingprep/hooks";
 import { useBriefGenerator } from "@/lib/meetingprep/useBriefGenerator";
 import { meetingTypeLabel } from "@/lib/meetingprep/types";
+import { usePersistedState } from "@/lib/usePersistedState";
 
 const TABS = ["Setup", "Brief", "Grill me", "Debrief"] as const;
 type Tab = (typeof TABS)[number];
@@ -29,7 +29,8 @@ export default function MeetingPage() {
   const { userId } = useUserId();
   const { meeting, loading, save, flush, saveState } = useMpMeeting(id);
   const { settings, save: saveSettings } = useMpSettings(userId);
-  const [tab, setTab] = useState<Tab>("Setup");
+  // Remembers which tab you were on for THIS meeting specifically.
+  const [tab, setTab] = usePersistedState<Tab>(`mp-tab:${id}`, "Setup", TABS);
 
   const generator = useBriefGenerator({
     meeting,

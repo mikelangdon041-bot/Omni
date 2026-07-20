@@ -26,6 +26,7 @@ interface MeetingPayload {
   format?: string;
   location?: string;
   attendees?: { name?: string; role?: string; org?: string; notes?: string }[];
+  explain?: string;
   objectives?: string;
   background?: string;
   concerns?: string;
@@ -49,6 +50,7 @@ function meetingContext(m: MeetingPayload, kolBlock: string): string {
     m.format && `Format: ${m.format}`,
     m.location && `Location: ${m.location}`,
     att && `Attendees:\n${att}`,
+    m.explain && `In the writer's own words:\n${stripHtml(m.explain)}`,
     m.objectives && `The writer's objectives:\n${stripHtml(m.objectives)}`,
     m.background && `Background:\n${stripHtml(m.background)}`,
     m.concerns && `Concerns / sensitivities:\n${stripHtml(m.concerns)}`,

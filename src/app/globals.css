@@ -61,6 +61,9 @@ body {
   font-family: var(--font-sans), system-ui, -apple-system, Segoe UI, Roboto,
     Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
+  /* viewport-fit=cover lets the PWA draw under the iOS notch/home indicator
+     in standalone mode; pad the safe area back in so nothing sits behind it. */
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
 /* Rich-text editor: placeholder + list styling for contenteditable areas. */
@@ -175,4 +178,19 @@ body {
     var(--grad-via) 55%,
     var(--grad-to) 130%
   );
+}
+
+/* iOS Safari auto-zooms the page when a focused input's computed font-size
+   is under 16px, and routinely fails to zoom back out on blur — this is the
+   "have to pinch out" / "boxes overlap" bug reported throughout the app.
+   Our form fields render at 14px (text-sm) for a compact desktop look;
+   force 16px on phones (below Tailwind's sm breakpoint) so focusing a field
+   never triggers the zoom in the first place. Desktop is untouched. */
+@media (max-width: 639px) {
+  input,
+  textarea,
+  select,
+  .omni-rt {
+    font-size: 16px !important;
+  }
 }
