@@ -4,7 +4,7 @@
 
 import { openai } from "@/lib/openai";
 import { DASHBOARD_DATASETS, catalogText, getDataset } from "./catalog";
-import { defaultChartSpec, type ChartSpec, type ChartType } from "./types";
+import { defaultChartSpec, type ChartSpec, type ChartType, type DatasetDef } from "./types";
 
 const MODEL = process.env.OPENAI_SUMMARY_MODEL || "gpt-4o";
 
@@ -29,11 +29,14 @@ export interface ProposedChart {
   explanation: string;
 }
 
-export async function proposeChartSpec(prompt: string): Promise<ProposedChart> {
+export async function proposeChartSpec(
+  prompt: string,
+  extraDatasets: DatasetDef[] = [],
+): Promise<ProposedChart> {
   const system = `You convert a plain-English request into a strict ChartSpec JSON for a cross-app analytics dashboard. Return ONLY the JSON object, no prose.
 
-Available datasets (one per app):
-${catalogText()}
+Available datasets (built-in app modules, plus any uploaded spreadsheets):
+${catalogText(extraDatasets)}
 
 ${SPEC_SHAPE}`;
 
@@ -48,7 +51,7 @@ ${SPEC_SHAPE}`;
   });
 
   const parsed = safeParse(res.choices[0]?.message?.content || "{}");
-  return coerce(parsed);
+  return coerce(parsed, extraDatasets);
 }
 
 function safeParse(raw: string): Record<string, unknown> {
@@ -61,8 +64,8 @@ function safeParse(raw: string): Record<string, unknown> {
 
 const CHART_TYPES: ChartType[] = ["bar", "stackedBar", "line", "pie", "donut"];
 
-function coerce(raw: Record<string, unknown>): ProposedChart {
-  const dataset = getDataset(String(raw.datasetId || "")) || DASHBOARD_DATASETS[0];
+function coerce(raw: Record<string, unknown>, extraDatasets: DatasetDef[]): ProposedChart {
+  const dataset = getDataset(String(raw.datasetId || ""), extraDatasets) || DASHBOARD_DATASETS[0];
   const spec = defaultChartSpec(dataset.id);
 
   const dim = dataset.dimensions.find((d) => d.key === raw.groupBy);

@@ -1,11 +1,11 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Sparkles, Loader2, Check, RotateCcw, Building2, User } from "lucide-react";
+import { Sparkles, Loader2, Check, RotateCcw, Building2, Users, User } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { getDataset } from "@/lib/dashboard/catalog";
 import { getModule } from "@/lib/modules";
-import type { ChartResult, ChartSpec } from "@/lib/dashboard/types";
+import type { ChartResult, ChartSpec, DatasetDef, Scope } from "@/lib/dashboard/types";
 import { ChartCanvas } from "./ChartCanvas";
 
 const EXAMPLE_PROMPTS = [
@@ -13,6 +13,13 @@ const EXAMPLE_PROMPTS = [
   "Conference key contacts by tier",
   "My prepped meetings by type",
 ];
+
+const SCOPE_ORDER: Scope[] = ["self", "team", "org"];
+const SCOPE_META: Record<Scope, { icon: typeof User; label: string }> = {
+  self: { icon: User, label: "Just me" },
+  team: { icon: Users, label: "My team" },
+  org: { icon: Building2, label: "Whole company" },
+};
 
 interface Turn {
   id: number;
@@ -30,15 +37,18 @@ interface Turn {
 let nextId = 1;
 
 export function DashboardChat({
-  isManager,
+  maxScope,
+  extraDatasets,
   onSaved,
 }: {
-  isManager: boolean;
+  maxScope: Scope;
+  extraDatasets: DatasetDef[];
   onSaved: () => void;
 }) {
   const [prompt, setPrompt] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
+  const availableScopes = SCOPE_ORDER.slice(0, SCOPE_ORDER.indexOf(maxScope) + 1);
 
   function patchTurn(id: number, patch: Partial<Turn>) {
     setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
@@ -83,7 +93,7 @@ export function DashboardChat({
     }
   }
 
-  async function toggleScope(turn: Turn, scope: "self" | "org") {
+  async function toggleScope(turn: Turn, scope: Scope) {
     if (!turn.spec) return;
     const spec = { ...turn.spec, scope };
     patchTurn(turn.id, { spec });
@@ -169,7 +179,7 @@ export function DashboardChat({
                   {turn.status === "ready" && turn.spec && turn.result && (
                     <>
                       {(() => {
-                        const dataset = getDataset(turn.spec.datasetId);
+                        const dataset = getDataset(turn.spec.datasetId, extraDatasets);
                         const sourceModule = dataset ? getModule(dataset.module) : undefined;
                         return dataset ? (
                           <span
@@ -185,22 +195,23 @@ export function DashboardChat({
                       })()}
                       <p className="text-sm text-ink">{turn.explanation}</p>
 
-                      {isManager && getDataset(turn.spec.datasetId)?.ownerScoped && (
-                        <div className="mt-2.5 inline-flex rounded-lg border border-border bg-surface p-0.5 shadow-sm">
-                          <ScopeButton
-                            active={turn.spec.scope === "self"}
-                            onClick={() => toggleScope(turn, "self")}
-                            icon={User}
-                            label="Just me"
-                          />
-                          <ScopeButton
-                            active={turn.spec.scope === "org"}
-                            onClick={() => toggleScope(turn, "org")}
-                            icon={Building2}
-                            label="Whole team"
-                          />
-                        </div>
-                      )}
+                      {availableScopes.length > 1 &&
+                        getDataset(turn.spec.datasetId, extraDatasets)?.ownerScoped && (
+                          <div className="mt-2.5 inline-flex rounded-lg border border-border bg-surface p-0.5 shadow-sm">
+                            {availableScopes.map((s) => {
+                              const meta = SCOPE_META[s];
+                              return (
+                                <ScopeButton
+                                  key={s}
+                                  active={turn.spec!.scope === s}
+                                  onClick={() => toggleScope(turn, s)}
+                                  icon={meta.icon}
+                                  label={meta.label}
+                                />
+                              );
+                            })}
+                          </div>
+                        )}
 
                       <div className="mt-3 rounded-xl border border-border bg-surface p-3">
                         <ChartCanvas result={turn.result} chartType={turn.spec.chartType} height={260} />

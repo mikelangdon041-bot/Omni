@@ -1,12 +1,24 @@
 // Server-only: fetch raw rows for a dataset (scoped per the caller's role)
 // and aggregate them into chart-ready rows. Callers (the AI route, the tiles
-// route) are responsible for deciding whether "org" scope is allowed — this
-// module trusts the scope it's given.
+// route) are responsible for deciding whether "team"/"org" scope is allowed
+// — this module trusts the scope it's given.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getDataset } from "./catalog";
-import type { ChartResult, ChartSpec, DatasetDef, Scope } from "./types";
+import { datasetFromImport, getDataset } from "./catalog";
+import type { ChartResult, ChartSpec, DashboardImport, DatasetDef, Scope } from "./types";
+
+// The org's uploaded workbooks, shaped as datasets the AI/aggregator can
+// treat exactly like a built-in module. Org-shared, so the caller's own
+// RLS-scoped client already sees the right rows.
+export async function fetchImportedDatasets(
+  supabase: SupabaseClient,
+): Promise<DatasetDef[]> {
+  const { data } = await supabase
+    .from("dashboard_imports")
+    .select("id, org_id, created_by, title, columns, row_count, created_at");
+  return ((data as DashboardImport[]) || []).map(datasetFromImport);
+}
 
 export interface FetchCtx {
   supabase: SupabaseClient; // RLS-scoped client for the signed-in user
@@ -21,76 +33,142 @@ async function orgMemberIds(orgId: string): Promise<string[]> {
   return (data || []).map((r) => r.id as string);
 }
 
-// Two-step lookup: KOL ids owned by the relevant rep(s), for tables that only
-// carry kol_id (activities, meetings) rather than user_id directly.
-async function relevantKolIds(ctx: FetchCtx): Promise<string[]> {
-  if (ctx.scope === "self") {
-    const { data } = await ctx.supabase.from("kols").select("id").eq("user_id", ctx.userId);
-    return (data || []).map((r) => r.id as string);
-  }
+// The manager's own team roster (dashboard_teams is one-per-manager).
+async function teamMemberIds(managerId: string): Promise<string[]> {
   const admin = createAdminClient();
-  const memberIds = ctx.orgId ? await orgMemberIds(ctx.orgId) : [ctx.userId];
-  const { data } = await admin.from("kols").select("id").in("user_id", memberIds);
-  return (data || []).map((r) => r.id as string);
+  const { data: team } = await admin
+    .from("dashboard_teams")
+    .select("id")
+    .eq("manager_id", managerId)
+    .maybeSingle();
+  if (!team) return [managerId];
+  const { data } = await admin.from("dashboard_team_members").select("user_id").eq("team_id", team.id);
+  const ids = (data || []).map((r) => r.user_id as string);
+  return ids.length ? ids : [managerId];
 }
 
-async function fetchRows(datasetId: string, ctx: FetchCtx): Promise<Record<string, unknown>[]> {
+// The set of user ids a given scope covers.
+async function scopedUserIds(ctx: FetchCtx): Promise<string[]> {
+  if (ctx.scope === "self") return [ctx.userId];
+  if (ctx.scope === "team") return teamMemberIds(ctx.userId);
+  return ctx.orgId ? orgMemberIds(ctx.orgId) : [ctx.userId];
+}
+
+// "rep" display names for a set of user ids — resolved once per fetch so
+// multi-user scopes can label rows by who they belong to.
+async function resolveDisplayNames(userIds: string[]): Promise<Map<string, string>> {
+  if (userIds.length === 0) return new Map();
+  const admin = createAdminClient();
+  const { data } = await admin.from("profiles").select("id, username, display_name").in("id", userIds);
+  const map = new Map<string, string>();
+  for (const p of data || []) {
+    map.set(p.id as string, (p.display_name as string) || (p.username as string) || p.id);
+  }
+  return map;
+}
+
+// Two-step lookup: KOL id -> owning rep, for tables that only carry kol_id
+// (activities, meetings) rather than user_id directly.
+async function relevantKols(ctx: FetchCtx): Promise<{ id: string; user_id: string }[]> {
+  if (ctx.scope === "self") {
+    const { data } = await ctx.supabase.from("kols").select("id, user_id").eq("user_id", ctx.userId);
+    return data || [];
+  }
+  const admin = createAdminClient();
+  const memberIds = await scopedUserIds(ctx);
+  const { data } = await admin.from("kols").select("id, user_id").in("user_id", memberIds);
+  return data || [];
+}
+
+function attachRep<T extends { user_id?: string }>(
+  rows: T[],
+  names: Map<string, string>,
+): Record<string, unknown>[] {
+  return rows.map((r) => ({ ...r, rep: r.user_id ? names.get(r.user_id) || "Unknown" : "Unknown" }));
+}
+
+async function fetchRows(datasetId: string, ctx: FetchCtx, extra: DatasetDef[]): Promise<Record<string, unknown>[]> {
+  if (datasetId.startsWith("import:")) {
+    const importId = datasetId.slice("import:".length);
+    // Org-shared, so the caller's own RLS-scoped client already sees it.
+    const { data } = await ctx.supabase.from("dashboard_imports").select("rows").eq("id", importId).maybeSingle();
+    return (data?.rows as Record<string, unknown>[]) || [];
+  }
+
   switch (datasetId) {
     case "territory.kols": {
-      const cols = "specialty,tier,relationship_level,institution,kol_status,how_met,engagement_score,priority";
+      const cols = "user_id,specialty,tier,relationship_level,institution,kol_status,how_met,engagement_score,priority";
       if (ctx.scope === "self") {
         const { data } = await ctx.supabase.from("kols").select(cols).eq("user_id", ctx.userId);
-        return data || [];
+        return attachRep(data || [], new Map([[ctx.userId, "You"]]));
       }
       const admin = createAdminClient();
-      const memberIds = ctx.orgId ? await orgMemberIds(ctx.orgId) : [ctx.userId];
+      const memberIds = await scopedUserIds(ctx);
       const { data } = await admin.from("kols").select(cols).in("user_id", memberIds);
-      return data || [];
+      const names = await resolveDisplayNames(memberIds);
+      return attachRep(data || [], names);
     }
 
     case "territory.activities": {
-      const kolIds = await relevantKolIds(ctx);
-      if (!kolIds.length) return [];
-      const cols = "type,status,outreach_method";
+      const kols = await relevantKols(ctx);
+      if (!kols.length) return [];
+      const kolToUser = new Map(kols.map((k) => [k.id, k.user_id]));
+      const cols = "kol_id,type,status,outreach_method";
       const client = ctx.scope === "self" ? ctx.supabase : createAdminClient();
-      const { data } = await client.from("activities").select(cols).in("kol_id", kolIds);
-      return data || [];
+      const { data } = await client.from("activities").select(cols).in("kol_id", [...kolToUser.keys()]);
+      const names = await resolveDisplayNames([...new Set(kols.map((k) => k.user_id))]);
+      return (data || []).map((r) => ({
+        ...r,
+        rep: names.get(kolToUser.get(r.kol_id as string) || "") || "Unknown",
+      }));
     }
 
     case "territory.meetings": {
-      const kolIds = await relevantKolIds(ctx);
-      if (!kolIds.length) return [];
-      const cols = "meeting_method,confirmed";
+      const kols = await relevantKols(ctx);
+      if (!kols.length) return [];
+      const kolToUser = new Map(kols.map((k) => [k.id, k.user_id]));
+      const cols = "kol_id,meeting_method,confirmed";
       const client = ctx.scope === "self" ? ctx.supabase : createAdminClient();
-      const { data } = await client.from("meetings").select(cols).in("kol_id", kolIds);
-      return data || [];
+      const { data } = await client.from("meetings").select(cols).in("kol_id", [...kolToUser.keys()]);
+      const names = await resolveDisplayNames([...new Set(kols.map((k) => k.user_id))]);
+      return (data || []).map((r) => ({
+        ...r,
+        rep: names.get(kolToUser.get(r.kol_id as string) || "") || "Unknown",
+      }));
     }
 
     case "insights.responses": {
-      const cols = "status,kol:kols(specialty,tier)";
+      const cols = "user_id,status,kol:kols(specialty,tier)";
       if (ctx.scope === "self") {
         const { data } = await ctx.supabase.from("survey_responses").select(cols).eq("user_id", ctx.userId);
-        return flattenKol(data);
+        return flattenKol(data, new Map([[ctx.userId, "You"]]));
       }
       const admin = createAdminClient();
-      const { data } = await admin.from("survey_responses").select(cols).eq("org_id", ctx.orgId || "");
-      return flattenKol(data);
+      const memberIds = await scopedUserIds(ctx);
+      const { data } = await admin
+        .from("survey_responses")
+        .select(cols)
+        .eq("org_id", ctx.orgId || "")
+        .in("user_id", memberIds);
+      const names = await resolveDisplayNames(memberIds);
+      return flattenKol(data, names);
     }
 
     case "meeting_prep.meetings": {
-      const cols = "meeting_type,format,duration_min";
+      const cols = "user_id,meeting_type,format,duration_min";
       if (ctx.scope === "self") {
         const { data } = await ctx.supabase.from("mp_meetings").select(cols).eq("user_id", ctx.userId);
-        return data || [];
+        return attachRep(data || [], new Map([[ctx.userId, "You"]]));
       }
       const admin = createAdminClient();
-      const memberIds = ctx.orgId ? await orgMemberIds(ctx.orgId) : [ctx.userId];
+      const memberIds = await scopedUserIds(ctx);
       const { data } = await admin.from("mp_meetings").select(cols).in("user_id", memberIds);
-      return data || [];
+      const names = await resolveDisplayNames(memberIds);
+      return attachRep(data || [], names);
     }
 
     // Conference data is already a shared, org-wide team workspace (RLS scopes
-    // every conf_ table to the signed-in user's org) — no self/org split.
+    // every conf_ table to the signed-in user's org) — no self/team/org split.
     case "conference.contacts": {
       const { data } = await ctx.supabase
         .from("conf_contacts")
@@ -108,6 +186,7 @@ async function fetchRows(datasetId: string, ctx: FetchCtx): Promise<Record<strin
     }
 
     default:
+      void extra; // reserved for future dataset kinds that need catalog metadata to fetch
       return [];
   }
 }
@@ -115,11 +194,17 @@ async function fetchRows(datasetId: string, ctx: FetchCtx): Promise<Record<strin
 type KolRef = { specialty?: string; tier?: string };
 
 function flattenKol(
-  rows: Array<{ status?: string; kol?: KolRef | KolRef[] | null }> | null,
+  rows: Array<{ user_id?: string; status?: string; kol?: KolRef | KolRef[] | null }> | null,
+  names: Map<string, string>,
 ): Record<string, unknown>[] {
   return (rows || []).map((r) => {
     const kol = Array.isArray(r.kol) ? r.kol[0] : r.kol;
-    return { status: r.status, specialty: kol?.specialty, tier: kol?.tier };
+    return {
+      status: r.status,
+      specialty: kol?.specialty,
+      tier: kol?.tier,
+      rep: r.user_id ? names.get(r.user_id) || "Unknown" : "Unknown",
+    };
   });
 }
 
@@ -177,10 +262,14 @@ export function aggregateRows(
   return { empty: false, categories, seriesKey: measureDef.label, rows: outRows };
 }
 
-export async function runChart(spec: ChartSpec, ctx: FetchCtx): Promise<ChartResult> {
-  const dataset = getDataset(spec.datasetId);
+export async function runChart(
+  spec: ChartSpec,
+  ctx: FetchCtx,
+  extraDatasets: DatasetDef[] = [],
+): Promise<ChartResult> {
+  const dataset = getDataset(spec.datasetId, extraDatasets);
   if (!dataset) return { empty: true, categories: [], seriesKey: "", rows: [] };
   const effectiveScope: Scope = dataset.ownerScoped ? ctx.scope : "org";
-  const rows = await fetchRows(spec.datasetId, { ...ctx, scope: effectiveScope });
+  const rows = await fetchRows(spec.datasetId, { ...ctx, scope: effectiveScope }, extraDatasets);
   return aggregateRows(rows, dataset, spec);
 }

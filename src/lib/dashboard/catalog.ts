@@ -6,9 +6,10 @@
 // To add a new module to the dashboard: add a DatasetDef here, then a matching
 // fetcher in data.ts.
 
-import type { DatasetDef } from "./types";
+import type { DashboardImport, DatasetDef } from "./types";
+import { REP_DIMENSION } from "./types";
 
-export const DASHBOARD_DATASETS: DatasetDef[] = [
+const BASE_DATASETS: DatasetDef[] = [
   {
     id: "territory.kols",
     module: "territory-planning",
@@ -120,15 +121,54 @@ export const DASHBOARD_DATASETS: DatasetDef[] = [
   },
 ];
 
-export function getDataset(id: string): DatasetDef | undefined {
-  return DASHBOARD_DATASETS.find((d) => d.id === id);
+// Owner-scoped datasets get the "rep" dimension for free — it only does
+// anything once a manager's viewing team/org scope (more than one rep's
+// rows), but there's no harm listing it for self scope too.
+export const DASHBOARD_DATASETS: DatasetDef[] = BASE_DATASETS.map((d) =>
+  d.ownerScoped ? { ...d, dimensions: [REP_DIMENSION, ...d.dimensions] } : d,
+);
+
+export function getDataset(id: string, extra: DatasetDef[] = []): DatasetDef | undefined {
+  return [...DASHBOARD_DATASETS, ...extra].find((d) => d.id === id);
 }
 
-// Compact text catalog for the AI prompt.
-export function catalogText(): string {
-  return DASHBOARD_DATASETS.map((d) => {
-    const dims = d.dimensions.map((f) => f.key).join(", ");
-    const measures = d.measures.map((m) => `${m.key} (${m.agg})`).join(", ");
-    return `- id=${d.id} | app=${d.moduleLabel} | "${d.label}" — ${d.description}\n  dimensions: ${dims}\n  measures: ${measures}`;
-  }).join("\n");
+// Compact text catalog for the AI prompt. `extra` merges in the org's
+// uploaded-workbook datasets alongside the built-in app modules.
+export function catalogText(extra: DatasetDef[] = []): string {
+  return [...DASHBOARD_DATASETS, ...extra]
+    .map((d) => {
+      const dims = d.dimensions.map((f) => f.key).join(", ");
+      const measures = d.measures.map((m) => `${m.key} (${m.agg})`).join(", ");
+      return `- id=${d.id} | app=${d.moduleLabel} | "${d.label}" — ${d.description}\n  dimensions: ${dims}\n  measures: ${measures}`;
+    })
+    .join("\n");
+}
+
+// Shape a stored workbook import as a chartable dataset — string columns
+// become dimensions, number columns become measures (plus a row-count
+// measure that always applies).
+export function datasetFromImport(imp: DashboardImport): DatasetDef {
+  const dimensions = imp.columns
+    .filter((c) => c.type === "string")
+    .map((c) => ({ key: c.key, label: c.label }));
+  const measures = [
+    { key: "*", label: "Number of rows", agg: "count" as const },
+    ...imp.columns
+      .filter((c) => c.type === "number")
+      .flatMap((c) => [
+        { key: c.key, label: `Average ${c.label}`, agg: "avg" as const },
+        { key: c.key, label: `Total ${c.label}`, agg: "sum" as const },
+      ]),
+  ];
+  return {
+    id: `import:${imp.id}`,
+    module: "dashboard",
+    moduleLabel: "Imported data",
+    label: imp.title,
+    description: `An uploaded spreadsheet ("${imp.title}", ${imp.row_count} rows) with columns: ${imp.columns.map((c) => c.label).join(", ")}.`,
+    ownerScoped: false,
+    source: "import",
+    dimensions,
+    measures,
+  };
 }
