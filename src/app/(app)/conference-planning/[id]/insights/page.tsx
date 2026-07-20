@@ -41,20 +41,27 @@ import {
   useInsights,
   usePosters,
 } from "@/lib/conference/hooks";
+import { usePersistedFilter } from "@/lib/conference/usePersistedFilter";
 import { CategoryChip, GenerateInsightsModal } from "@/components/conference/InsightAI";
 import { PriorityPill, PriorityEditorModal } from "@/components/conference/Priority";
+import { EditQuestionsButton, QuestionsEditorModal } from "@/components/conference/Questions";
 import {
+  BUILTIN_BOOTH_KEYS,
   SOURCE_TYPES,
+  boothQuestions,
   priorityRank,
   type BoothLog,
   type DailySummary,
   type Insight,
   type Priority,
+  type QuestionDef,
 } from "@/lib/conference/types";
 import {
   dateKeyInTz,
   fmtDayKeyLong,
+  legacyPlainToHtml,
   listDays,
+  nestedHtmlToPlainText,
   normalizeFreeDate,
   stripHtml,
   todayKey,
@@ -76,9 +83,9 @@ export default function InsightsPage() {
   const [photoUrls, setPhotoUrls] = useState<string[] | null>(null);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [photoPct, setPhotoPct] = useState(0);
-  const [catFilter, setCatFilter] = useState<string[]>([]);
-  const [personFilter, setPersonFilter] = useState("all");
-  const [dayFilter, setDayFilter] = useState("all");
+  const [catFilter, setCatFilter] = usePersistedFilter<string[]>(conference.id, "insights_cat", []);
+  const [personFilter, setPersonFilter] = usePersistedFilter(conference.id, "insights_person", "all");
+  const [dayFilter, setDayFilter] = usePersistedFilter(conference.id, "insights_day", "all");
   const [collapsedDays, setCollapsedDays] = useState<Record<string, boolean>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [priorityFor, setPriorityFor] = useState<Insight | null>(null);
@@ -177,19 +184,23 @@ export default function InsightsPage() {
     return null;
   }
 
-  // Plain-text digest of the currently filtered insights (for email).
+  // Plain-text digest of the currently filtered insights (for email). Real
+  // bullets (•/◦), not dashes, and non-breaking-space indentation — regular
+  // spaces get collapsed by most mail clients, silently flattening structure.
   function digestText(): string {
+    const NBSP = "  ";
     const lines: string[] = [];
     for (const [day, list] of groups) {
       lines.push(day === "No date" ? "No date" : fmtDayKeyLong(day));
-      for (const i of list) {
-        lines.push(`- ${i.title}${i.source_type ? ` (${i.source_type})` : ""}`);
-        if (i.notes) lines.push(`  ${stripHtml(i.notes)}`);
-        for (const c of childrenOf(i.id)) lines.push(`  - ${c.title}`);
-      }
       lines.push("");
+      for (const i of list) {
+        lines.push(`• ${i.title}${i.source_type ? ` (${i.source_type})` : ""}`);
+        if (i.notes) lines.push(`${NBSP}${nestedHtmlToPlainText(i.notes)}`);
+        for (const c of childrenOf(i.id)) lines.push(`${NBSP}◦ ${c.title}`);
+        lines.push("");
+      }
     }
-    return lines.join("\n").trim();
+    return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
   }
 
   async function emailInsights() {
@@ -274,9 +285,9 @@ export default function InsightsPage() {
         <Link
           href={`/conference-planning/${conference.id}/recap`}
           className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-muted transition hover:text-ink"
-          title="Everything captured, day by day, per MSL"
+          title="Everything captured, day by day, per rep"
         >
-          <NotebookPen size={15} /> MSL Recap
+          <NotebookPen size={15} /> Team Recap
         </Link>
         <button
           onClick={emailInsights}
@@ -519,6 +530,7 @@ export default function InsightsPage() {
 
       {summaryDay && (
         <DailyRollupModal
+          key={summaryDay}
           day={summaryDay}
           onClose={() => setSummaryDay(null)}
           insights={parents.filter(
@@ -653,13 +665,15 @@ function DailyRollupModal({
   insights: Insight[];
   childrenOf: (parentId: string) => Insight[];
 }) {
-  const { conference } = useConferenceCtx();
+  const { conference, updateConference, canManage } = useConferenceCtx();
   const toast = useToast();
   const summaryRow = useDailyRow<DailySummary>("conf_daily_summaries", conference.id, day);
   const boothRow = useDailyRow<BoothLog>("conf_booth_logs", conference.id, day);
   const [guidance, setGuidance] = useState("");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
+  const [questionsOpen, setQuestionsOpen] = useState(false);
+  const questions = boothQuestions(conference);
 
   const sourceText = useMemo(() => {
     const parts = insights.map((i) => {
@@ -670,15 +684,20 @@ function DailyRollupModal({
       }${bullets ? `\n${bullets}` : ""}`;
     });
     const booth = boothRow.row;
-    if (booth && (booth.patterns || booth.standout || booth.attendee_count)) {
-      parts.push(
-        `Booth log: ~${booth.attendee_count || "?"} visitors. Patterns: ${stripHtml(
-          booth.patterns,
-        )}. Stood out: ${stripHtml(booth.standout)}. ${stripHtml(booth.custom)}`,
-      );
+    if (booth) {
+      const answers = questions
+        .map((q) => {
+          const builtin = BUILTIN_BOOTH_KEYS.includes(q.key);
+          const val = builtin
+            ? (booth[q.key as "attendee_count" | "standout" | "patterns"] as string)
+            : booth.custom_answers?.[q.key];
+          return val ? `${q.label}: ${stripHtml(val)}` : "";
+        })
+        .filter(Boolean);
+      if (answers.length) parts.push(`Booth log: ${answers.join(". ")}`);
     }
     return parts.join("\n\n");
-  }, [insights, childrenOf, boothRow.row]);
+  }, [insights, childrenOf, boothRow.row, questions]);
 
   async function generate() {
     setRunning(true);
@@ -708,29 +727,34 @@ function DailyRollupModal({
           summary (items confirmed “Not relevant” are excluded).
         </p>
 
-        {/* Booth log */}
+        {/* Booth log — organizer-configurable questions (Edit questions).
+            Gated on boothRow.loaded: mounting these before the async fetch
+            resolves bakes in an empty defaultValue that never refreshes. */}
         <div className="space-y-2 rounded-lg bg-canvas p-3">
-          <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
-            <Store size={13} /> Booth log for this day
-          </p>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <Input
-              label="Approx. attendee count"
-              defaultValue={boothRow.row?.attendee_count || ""}
-              onBlur={(e) => boothRow.upsert({ attendee_count: e.target.value })}
-            />
-            <Input
-              label="What stood out"
-              defaultValue={boothRow.row?.standout || ""}
-              onBlur={(e) => boothRow.upsert({ standout: e.target.value })}
-            />
+          <div className="flex items-center justify-between">
+            <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
+              <Store size={13} /> Booth log for this day
+            </p>
+            {canManage && <EditQuestionsButton onClick={() => setQuestionsOpen(true)} />}
           </div>
-          <Textarea
-            label="Patterns observed"
-            defaultValue={boothRow.row?.patterns || ""}
-            onBlur={(e) => boothRow.upsert({ patterns: e.target.value })}
-          />
+          {boothRow.loaded ? (
+            <BoothFields questions={questions} booth={boothRow.row} onSave={boothRow.upsert} />
+          ) : (
+            <p className="text-xs text-muted">Loading…</p>
+          )}
         </div>
+
+        <QuestionsEditorModal
+          open={questionsOpen}
+          onClose={() => setQuestionsOpen(false)}
+          title="Booth log questions"
+          questions={questions}
+          onSave={(qs) =>
+            updateConference({
+              settings: { ...(conference.settings || {}), booth_questions: qs },
+            })
+          }
+        />
 
         <Textarea
           label="Guidance (optional)"
@@ -754,18 +778,17 @@ function DailyRollupModal({
 
         {summaryRow.row?.content && (
           <>
-            <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-lg border border-border bg-surface p-4 font-sans text-sm leading-relaxed">
-              {summaryRow.row.content}
-            </pre>
+            <div className="max-h-72 overflow-y-auto rounded-lg border border-border bg-surface p-4">
+              <RichTextView html={legacyPlainToHtml(summaryRow.row.content)} />
+            </div>
             <div className="flex flex-wrap gap-2">
               <Button
                 size="sm"
                 variant="secondary"
                 onClick={async () => {
                   const subject = `${conference.name} — daily insights, ${fmtDayKeyLong(day)}`;
-                  await navigator.clipboard.writeText(
-                    `${subject}\n\n${summaryRow.row!.content}`,
-                  );
+                  const plain = nestedHtmlToPlainText(legacyPlainToHtml(summaryRow.row!.content));
+                  await navigator.clipboard.writeText(`${subject}\n\n${plain}`);
                   toast("success", "Digest copied — paste it into an email.");
                 }}
               >
@@ -774,7 +797,9 @@ function DailyRollupModal({
               <a
                 href={`mailto:?subject=${encodeURIComponent(
                   `${conference.name} — daily insights, ${fmtDayKeyLong(day)}`,
-                )}&body=${encodeURIComponent(summaryRow.row.content.slice(0, 1800))}`}
+                )}&body=${encodeURIComponent(
+                  nestedHtmlToPlainText(legacyPlainToHtml(summaryRow.row.content)).slice(0, 1800),
+                )}`}
                 className="inline-flex items-center rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs font-medium text-ink transition hover:bg-canvas"
               >
                 Open in email app
@@ -784,5 +809,61 @@ function DailyRollupModal({
         )}
       </div>
     </Modal>
+  );
+}
+
+// Controlled (not defaultValue) booth-log fields — the previous version used
+// defaultValue on an async-loaded row, so a save was invisible: the input
+// rendered blank on every reopen even though the value was in the database.
+function BoothFields({
+  questions,
+  booth,
+  onSave,
+}: {
+  questions: QuestionDef[];
+  booth: BoothLog | null;
+  onSave: (partial: Record<string, unknown>) => Promise<void>;
+}) {
+  const [values, setValues] = useState<Record<string, string>>(() => {
+    const v: Record<string, string> = {};
+    for (const q of questions) {
+      v[q.key] = BUILTIN_BOOTH_KEYS.includes(q.key)
+        ? (booth?.[q.key as "attendee_count" | "standout" | "patterns"] as string) || ""
+        : booth?.custom_answers?.[q.key] || "";
+    }
+    return v;
+  });
+
+  function save(key: string) {
+    if (BUILTIN_BOOTH_KEYS.includes(key)) {
+      onSave({ [key]: values[key] });
+    } else {
+      onSave({ custom_answers: { ...(booth?.custom_answers || {}), [key]: values[key] } });
+    }
+  }
+
+  return (
+    <>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {questions.slice(0, 2).map((q) => (
+          <Input
+            key={q.key}
+            label={q.label}
+            value={values[q.key] || ""}
+            onChange={(e) => setValues((prev) => ({ ...prev, [q.key]: e.target.value }))}
+            onBlur={() => save(q.key)}
+          />
+        ))}
+      </div>
+      {questions.slice(2).map((q) => (
+        <Textarea
+          key={q.key}
+          label={q.label}
+          value={values[q.key] || ""}
+          onChange={(e) => setValues((prev) => ({ ...prev, [q.key]: e.target.value }))}
+          onBlur={() => save(q.key)}
+        />
+      ))}
+    </>
   );
 }

@@ -15,6 +15,7 @@ import {
   Send,
   Trash2,
 } from "lucide-react";
+import { BackButton } from "@/components/BackButton";
 import { Button } from "@/components/ui/Button";
 import { Input, Select } from "@/components/ui/Input";
 import { cn } from "@/lib/ui";
@@ -113,6 +114,8 @@ export default function FoodOrderPage({
 
   return (
     <div className="mx-auto max-w-2xl space-y-5">
+      <BackButton label="Back to food" />
+
       {/* Header */}
       <div className="rounded-xl border border-border bg-surface p-5">
         <div className="flex items-start justify-between gap-3">

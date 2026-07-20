@@ -3,9 +3,11 @@
 export function EngagementRing({
   score,
   size = 48,
+  className,
 }: {
   score: number;
   size?: number;
+  className?: string;
 }) {
   const stroke = size <= 40 ? 4 : 5;
   const r = (size - stroke) / 2;
@@ -13,7 +15,10 @@ export function EngagementRing({
   const pct = Math.max(0, Math.min(1, score / 100));
 
   return (
-    <div className="relative shrink-0" style={{ width: size, height: size }}>
+    <div
+      className={`relative shrink-0${className ? ` ${className}` : ""}`}
+      style={{ width: size, height: size }}
+    >
       <svg width={size} height={size} className="-rotate-90">
         <circle
           cx={size / 2}

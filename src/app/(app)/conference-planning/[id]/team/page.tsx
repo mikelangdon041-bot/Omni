@@ -136,7 +136,7 @@ export default function TeamPage() {
           }
         />
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-2 gap-2.5 sm:gap-4 lg:grid-cols-3">
           {filtered.map((a) => (
             <div
               key={a.id}
@@ -393,7 +393,7 @@ function AttendeeModal({
           <Input label="Phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <Input label="Role" value={role} onChange={(e) => setRole(e.target.value)} placeholder="e.g. MSL" />
+          <Input label="Role" value={role} onChange={(e) => setRole(e.target.value)} placeholder="e.g. Field Rep" />
           <div>
             <Input
               label="Department"

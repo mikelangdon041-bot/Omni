@@ -88,8 +88,8 @@ Rules:
             role: "system",
             content: `You distill field intelligence captured across ${scope} into an executive summary for headquarters.
 
-- Output a nested bullet outline: "- " bullets, 2-space indents, no headings/markdown bold, no preamble.
-- Top-level bullets are the key themes/findings; nested bullets carry the supporting specifics (numbers, names, who said what).
+- Output ONLY a nested HTML bullet list: <ul><li>theme<ul><li>supporting detail</li></ul></li></ul>. No headings, no markdown, no bold, no preamble or closing remarks, no code fences — the response body must start with "<ul>" and end with "</ul>".
+- Top-level <li> are the key themes/findings; nested <ul><li> one level down carry the supporting specifics (numbers, names, who said what).
 - Include only genuine, actionable intelligence; group related ideas; no repetition.
 - Preserve every specific figure and name. NEVER invent anything not in the source.`,
           },
@@ -99,7 +99,10 @@ Rules:
           },
         ],
       });
-      return NextResponse.json({ content: res.choices[0]?.message?.content?.trim() || "" });
+      const raw = res.choices[0]?.message?.content?.trim() || "";
+      // Strip a stray ```html fence if the model added one despite instructions.
+      const content = raw.replace(/^```(?:html)?\s*/i, "").replace(/```\s*$/i, "").trim();
+      return NextResponse.json({ content });
     }
 
     if (action === "poster_summary") {

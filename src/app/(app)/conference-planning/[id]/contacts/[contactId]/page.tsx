@@ -9,6 +9,7 @@ import { Loading, ProgressBar } from "@/components/conference/Bits";
 import Link from "next/link";
 import {
   Camera,
+  ChevronDown,
   Download,
   ExternalLink,
   MapPin,
@@ -16,6 +17,7 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
+import { BackButton } from "@/components/BackButton";
 import { exportKolDocx } from "@/lib/conference/exports";
 import { Button } from "@/components/ui/Button";
 import { useConfirm, useToast } from "@/components/ui/Feedback";
@@ -49,7 +51,7 @@ import {
   type QuickLink,
   type Tier,
 } from "@/lib/conference/types";
-import { fmtDayKeyLong, initials, stripHtml } from "@/lib/conference/utils";
+import { fmtDayKeyLong, initials, legacyPlainToHtml, stripHtml } from "@/lib/conference/utils";
 
 export default function ContactDetailPage({
   params,
@@ -69,6 +71,10 @@ export default function ContactDetailPage({
 
   const [aiOpen, setAiOpen] = useState(false);
   const [summaryRunning, setSummaryRunning] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(true);
+  // Bumped only when the AI (re)generates — remounts the editor so it picks
+  // up the fresh text instead of showing whatever was loaded at mount.
+  const [summaryVersion, setSummaryVersion] = useState(0);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [questionsOpen, setQuestionsOpen] = useState(false);
   const questions = kolQuestions(conference);
@@ -122,7 +128,11 @@ export default function ContactDetailPage({
         body: JSON.stringify({ action: "meeting_summary", text: meetingNotesText }),
       });
       const json = await res.json();
-      if (res.ok && json.content) await update({ ai_summary: json.content });
+      if (res.ok && json.content) {
+        await update({ ai_summary: json.content });
+        setSummaryVersion((v) => v + 1);
+        setSummaryOpen(true);
+      }
     } finally {
       setSummaryRunning(false);
     }
@@ -143,6 +153,8 @@ export default function ContactDetailPage({
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
+      <BackButton label="Back to KOLs" />
+
       {/* Profile header */}
       <div className="rounded-xl border border-border bg-surface p-5">
         <div className="flex items-start gap-4">
@@ -306,12 +318,22 @@ export default function ContactDetailPage({
         defaultTitle={`Meeting with ${contact.name}`}
       />
 
-      {/* AI summary */}
+      {/* AI summary — collapsible, and editable in place (autosaves) once
+          generated. Real bullets: the AI now replies in HTML, not dashes. */}
       <section className="rounded-xl border border-border bg-surface p-5">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
+          <button
+            onClick={() => contact.ai_summary && setSummaryOpen((v) => !v)}
+            className="flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wide text-muted"
+          >
             AI meeting summary
-          </h2>
+            {contact.ai_summary && (
+              <ChevronDown
+                size={14}
+                className={cn("transition-transform", !summaryOpen && "-rotate-90")}
+              />
+            )}
+          </button>
           <Button size="sm" variant="secondary" onClick={generateSummary} disabled={summaryRunning}>
             <Sparkles size={14} />
             {summaryRunning ? "Generating…" : contact.ai_summary ? "Reanalyze with AI" : "Generate with AI"}
@@ -324,10 +346,15 @@ export default function ContactDetailPage({
             className="mt-3"
           />
         )}
-        {contact.ai_summary && (
-          <pre className="mt-3 whitespace-pre-wrap font-sans text-sm leading-relaxed text-ink/90">
-            {contact.ai_summary}
-          </pre>
+        {contact.ai_summary && summaryOpen && (
+          <div className="mt-3" key={summaryVersion}>
+            <AutoRichField
+              label=""
+              initialHtml={legacyPlainToHtml(contact.ai_summary)}
+              canEdit
+              onSave={(html) => update({ ai_summary: html })}
+            />
+          </div>
         )}
       </section>
 

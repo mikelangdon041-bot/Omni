@@ -17,6 +17,7 @@ import {
   Trash2,
   Users,
 } from "lucide-react";
+import { BackButton } from "@/components/BackButton";
 import { Button } from "@/components/ui/Button";
 import { useConfirm, useToast } from "@/components/ui/Feedback";
 import { AutoRichField } from "@/components/ui/AutoRichField";
@@ -151,6 +152,8 @@ export default function PosterDetailPage({
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
+      <BackButton label="Back to posters" />
+
       {/* Header */}
       <div className="rounded-xl border border-border bg-surface p-5">
         <div className="flex items-start justify-between gap-3">

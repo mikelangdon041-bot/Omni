@@ -219,7 +219,7 @@ export function ConferenceProvider({
           header store — one merged piece of chrome. Tabs scroll horizontally
           instead of ever overlapping the date/location meta. */}
       <div className="-mt-5 mb-5 border-b border-border bg-surface sm:-mt-8 mx-[calc(50%-50vw)]">
-        <div className="relative mx-auto flex max-w-5xl items-center gap-1 px-3 sm:px-8">
+        <div className="relative mx-auto flex max-w-[1600px] items-center gap-1 px-3 sm:px-8">
           {/* faint identity wash so the strip doesn't read as a plain bar */}
           <div
             aria-hidden

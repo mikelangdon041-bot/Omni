@@ -27,17 +27,18 @@ export function CandidateCard({
   return (
     <Link
       href={`/interview-prep/candidate/${candidate.id}`}
-      className="flex flex-col rounded-xl border border-border bg-surface p-4 shadow-sm transition hover:border-[var(--accent)]/40 hover:shadow"
+      className="flex flex-col rounded-xl border border-border bg-surface p-2.5 shadow-sm transition hover:border-[var(--accent)]/40 hover:shadow sm:p-4"
     >
-      <div className="flex items-start gap-3">
-        <Avatar initials={candidateInitials(candidate)} size={44} />
+      <div className="flex items-start gap-2 sm:gap-3">
+        <Avatar initials={candidateInitials(candidate)} size={36} className="sm:hidden" />
+        <Avatar initials={candidateInitials(candidate)} size={44} className="hidden sm:block" />
         <div className="min-w-0 flex-1">
-          <p className="truncate font-semibold">{candidateName(candidate)}</p>
+          <p className="truncate text-sm font-semibold sm:text-base">{candidateName(candidate)}</p>
           {candidate.role_title && (
             <p className="truncate text-xs text-muted">{candidate.role_title}</p>
           )}
           {candidate.location && (
-            <p className="mt-0.5 flex items-center gap-1 truncate text-xs text-muted">
+            <p className="mt-0.5 hidden items-center gap-1 truncate text-xs text-muted sm:flex">
               <MapPin size={11} className="shrink-0" />
               {candidate.location}
             </p>
@@ -51,7 +52,7 @@ export function CandidateCard({
       </div>
 
       {/* facts */}
-      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-muted">
+      <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-xs text-muted sm:mt-3 sm:gap-x-3">
         <span
           className="flex items-center gap-1"
           title={`${interviews} interview${interviews === 1 ? "" : "s"}`}
@@ -65,14 +66,14 @@ export function CandidateCard({
           <MessageCircleQuestion size={13} /> {questions}
         </span>
         <span
-          className={`flex items-center gap-1 ${hasResume ? "text-status-complete" : ""}`}
+          className={`hidden items-center gap-1 sm:flex ${hasResume ? "text-status-complete" : ""}`}
           title={hasResume ? "Resume added" : "No resume yet"}
         >
           <FileText size={13} /> {hasResume ? "Resume" : "No resume"}
         </span>
       </div>
 
-      <div className="mt-3">
+      <div className="mt-2 sm:mt-3">
         <Badge className={STATUS_COLORS[candidate.status]}>
           {STATUS_LABELS[candidate.status]}
         </Badge>

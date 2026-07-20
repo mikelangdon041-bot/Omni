@@ -7,19 +7,30 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
-import { Images, Landmark, Mic2, NotebookPen, Presentation, Sparkles } from "lucide-react";
+import {
+  ChevronDown,
+  Images,
+  Landmark,
+  Mic2,
+  NotebookPen,
+  Presentation,
+  Sparkles,
+} from "lucide-react";
 import { cn } from "@/lib/ui";
 import { Button } from "@/components/ui/Button";
 import { useToast } from "@/components/ui/Feedback";
+import { AutoRichField } from "@/components/ui/AutoRichField";
 import { ProgressBar } from "@/components/conference/Bits";
 import { DeckDialog } from "@/components/conference/DeckDialog";
 import { exportPhotosZip } from "@/lib/conference/exports";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
 import {
+  useDailyRow,
   useEvents,
   useInsights,
   usePosters,
 } from "@/lib/conference/hooks";
+import { usePersistedFilter } from "@/lib/conference/usePersistedFilter";
 import { PriorityPill } from "@/components/conference/Priority";
 import {
   SESSION_TYPES,
@@ -32,7 +43,9 @@ import {
   fmtDayKey,
   fmtDayKeyLong,
   fmtTime,
+  legacyPlainToHtml,
   listDays,
+  nestedHtmlToPlainText,
   normalizeFreeDate,
   todayKey,
 } from "@/lib/conference/utils";
@@ -50,11 +63,13 @@ export default function RecapPage() {
 
   const days = listDays(conference.start_date, conference.end_date);
   const today = todayKey(tz);
-  const [day, setDay] = useState(days.includes(today) ? today : days[0] || today);
-  const [person, setPerson] = useState("all");
+  const [day, setDay] = usePersistedFilter(conference.id, "recap_day", days.includes(today) ? today : days[0] || today);
+  const [person, setPerson] = usePersistedFilter(conference.id, "recap_person", "all");
   const [meetings, setMeetings] = useState<ContactMeeting[]>([]);
   const [contactNames, setContactNames] = useState<Record<string, string>>({});
-  const [summary, setSummary] = useState<DailySummary | null>(null);
+  const summaryRow = useDailyRow<DailySummary>("conf_daily_summaries", conference.id, day);
+  const [summaryOpen, setSummaryOpen] = useState(true);
+  const [expandedInsight, setExpandedInsight] = useState<string | null>(null);
   const [deckOpen, setDeckOpen] = useState(false);
   const [zipProgress, setZipProgress] = useState("");
   const [zipPct, setZipPct] = useState<number | null>(null);
@@ -83,27 +98,19 @@ export default function RecapPage() {
     setZipPct(null);
   }
 
-  // Contact meetings + names + stored daily summary for the chosen day.
+  // Contact meetings + names for the chosen day (the AI summary itself
+  // loads via useDailyRow above, shared with the generation modal).
   useEffect(() => {
     let active = true;
     (async () => {
-      const [mRes, sRes] = await Promise.all([
-        supabase
-          .from("conf_contact_meetings")
-          .select("*")
-          .eq("conference_id", conference.id)
-          .eq("meeting_date", day),
-        supabase
-          .from("conf_daily_summaries")
-          .select("*")
-          .eq("conference_id", conference.id)
-          .eq("date", day)
-          .maybeSingle(),
-      ]);
+      const { data } = await supabase
+        .from("conf_contact_meetings")
+        .select("*")
+        .eq("conference_id", conference.id)
+        .eq("meeting_date", day);
       if (!active) return;
-      const ms = (mRes.data as ContactMeeting[]) || [];
+      const ms = (data as ContactMeeting[]) || [];
       setMeetings(ms);
-      setSummary((sRes.data as DailySummary) || null);
       const ids = [...new Set(ms.map((m) => m.contact_id))];
       if (ids.length) {
         const { data } = await supabase
@@ -243,14 +250,47 @@ export default function RecapPage() {
         {personAttendee ? ` — ${personAttendee.name}` : ""}
       </h1>
 
-      {summary?.content && (
+      {summaryRow.loaded && summaryRow.row?.content && (
         <section className="rounded-xl border border-border bg-surface p-5">
-          <h2 className="mb-2 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wide text-muted">
-            <Sparkles size={14} /> AI daily summary
-          </h2>
-          <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-ink/90">
-            {summary.content}
-          </pre>
+          <button
+            onClick={() => setSummaryOpen((v) => !v)}
+            className="flex w-full items-center justify-between gap-2 text-left"
+          >
+            <span className="flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wide text-muted">
+              <Sparkles size={14} /> AI daily summary
+            </span>
+            <span className="flex items-center gap-2">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const subject = `${conference.name} — daily insights, ${fmtDayKeyLong(day)}`;
+                  const plain = nestedHtmlToPlainText(legacyPlainToHtml(summaryRow.row!.content));
+                  navigator.clipboard.writeText(`${subject}\n\n${plain}`).then(() =>
+                    toast("success", "Digest copied — paste it into an email."),
+                  );
+                }}
+                className="rounded-lg border border-border bg-surface px-2.5 py-1 text-xs font-medium text-muted transition hover:text-ink"
+              >
+                Copy for email
+              </button>
+              <ChevronDown
+                size={16}
+                className={cn("text-muted transition-transform", !summaryOpen && "-rotate-90")}
+              />
+            </span>
+          </button>
+          {summaryOpen && (
+            // Keyed by day: switching days swaps the underlying row, and
+            // AutoRichField only reads its initialHtml prop once per mount.
+            <div className="mt-3" key={day}>
+              <AutoRichField
+                label=""
+                initialHtml={legacyPlainToHtml(summaryRow.row.content)}
+                canEdit
+                onSave={(html) => summaryRow.upsert({ content: html })}
+              />
+            </div>
+          )}
         </section>
       )}
 
@@ -322,21 +362,51 @@ export default function RecapPage() {
         color="#d97706"
         title={`Insights (${dayInsights.length})`}
       >
-        {dayInsights.map((i) => (
-          <div key={i.id} className="rounded-lg border border-border px-3 py-2.5">
-            <div className="flex items-center gap-2">
-              <p className="min-w-0 flex-1 text-sm font-medium">{i.title}</p>
-              <PriorityPill suspected={i.suspected_priority} confirmed={i.confirmed_priority} />
+        {dayInsights.map((i) => {
+          const kids = childrenOf(i.id);
+          const isOpen = expandedInsight === i.id;
+          const href = i.event_id
+            ? `${base}/sessions/${i.event_id}`
+            : i.poster_id
+              ? `${base}/posters/${i.poster_id}`
+              : i.contact_id
+                ? `${base}/contacts/${i.contact_id}`
+                : null;
+          return (
+            <div key={i.id} className="rounded-lg border border-border px-3 py-2.5">
+              <button
+                onClick={() => setExpandedInsight(isOpen ? null : i.id)}
+                className="flex w-full items-center gap-2 text-left"
+              >
+                <p className="min-w-0 flex-1 text-sm font-medium">{i.title}</p>
+                {kids.length > 0 && (
+                  <span className="text-xs text-muted">{kids.length} bullet{kids.length === 1 ? "" : "s"}</span>
+                )}
+                <PriorityPill suspected={i.suspected_priority} confirmed={i.confirmed_priority} />
+                <ChevronDown
+                  size={14}
+                  className={cn("shrink-0 text-muted transition-transform", !isOpen && "-rotate-90")}
+                />
+              </button>
+              {isOpen && (
+                <div className="mt-2 space-y-2 border-t border-border pt-2">
+                  {kids.length > 0 && (
+                    <ul className="list-disc space-y-0.5 pl-5 text-xs text-muted">
+                      {kids.map((c) => (
+                        <li key={c.id}>{c.title}</li>
+                      ))}
+                    </ul>
+                  )}
+                  {href && (
+                    <Link href={href} className="block text-xs font-medium text-[var(--accent)] hover:underline">
+                      Open source →
+                    </Link>
+                  )}
+                </div>
+              )}
             </div>
-            {childrenOf(i.id).length > 0 && (
-              <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-muted">
-                {childrenOf(i.id).map((c) => (
-                  <li key={c.id}>{c.title}</li>
-                ))}
-              </ul>
-            )}
-          </div>
-        ))}
+          );
+        })}
       </RecapSection>
 
       <DeckDialog open={deckOpen} onClose={() => setDeckOpen(false)} />

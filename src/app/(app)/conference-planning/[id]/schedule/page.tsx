@@ -48,6 +48,7 @@ import {
   fmtTime,
   listDays,
 } from "@/lib/conference/utils";
+import { usePersistedFilter } from "@/lib/conference/usePersistedFilter";
 import { useRouter } from "next/navigation";
 
 export default function SchedulePage() {
@@ -68,18 +69,16 @@ export default function SchedulePage() {
   const { posters } = usePosters(conference.id);
 
   // Filters (persisted per conference).
-  const [myOnly, setMyOnly] = usePersisted(`omni_conf_myonly_${conference.id}`, false);
-  const [hiddenTypes, setHiddenTypes] = usePersisted<EventType[]>(
-    `omni_conf_hidden_${conference.id}`,
+  const [myOnly, setMyOnly] = usePersistedFilter(conference.id, "myonly", false);
+  const [hiddenTypes, setHiddenTypes] = usePersistedFilter<EventType[]>(
+    conference.id,
+    "hidden",
     [],
   );
-  const [showPosters, setShowPosters] = usePersisted(
-    `omni_conf_posters_${conference.id}`,
-    false,
-  );
-  const [personFilter, setPersonFilter] = useState<string>("all");
-  const [dayFilter, setDayFilter] = useState<string | null>(null);
-  const [view, setView] = useState<"calendar" | "list" | "who">("calendar");
+  const [showPosters, setShowPosters] = usePersistedFilter(conference.id, "posters", false);
+  const [personFilter, setPersonFilter] = usePersistedFilter(conference.id, "sched_person", "all");
+  const [dayFilter, setDayFilter] = usePersistedFilter<string | null>(conference.id, "sched_day", null);
+  const [view, setView] = usePersistedFilter<"calendar" | "list" | "who">(conference.id, "sched_view", "calendar");
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   // Multi-select (list view) for bulk actions. Select mode is explicit: while
@@ -824,26 +823,4 @@ function WhoIsWhere({ events }: { events: EventWithPeople[] }) {
       ))}
     </div>
   );
-}
-
-// localStorage-persisted state, keyed per conference (spec §18.9).
-function usePersisted<T>(key: string, initial: T): [T, (v: T) => void] {
-  const [value, setValue] = useState<T>(() => {
-    if (typeof window === "undefined") return initial;
-    try {
-      const raw = localStorage.getItem(key);
-      return raw ? (JSON.parse(raw) as T) : initial;
-    } catch {
-      return initial;
-    }
-  });
-  const set = (v: T) => {
-    setValue(v);
-    try {
-      localStorage.setItem(key, JSON.stringify(v));
-    } catch {
-      // ignore
-    }
-  };
-  return [value, set];
 }

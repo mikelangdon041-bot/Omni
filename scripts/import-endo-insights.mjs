@@ -192,13 +192,16 @@ const P_OK = new Set(["high", "medium", "low"]);
 const C_OK = new Set(["high", "medium", "low", "not_relevant"]);
 function row(i) {
   const author = teamName.get(i.created_by) || "";
+  // Children carry their parent's title in `title` and the actual bullet
+  // text in `summary` — Omni renders child.title, so swap them in.
+  const displayTitle = i.parent_id && i.summary ? i.summary : i.title;
   const r = {
     id: i.id,
     conference_id: DST,
     user_id: attendeeUser.get(norm(author)) || null,
     parent_id: i.parent_id,
     sort_order: i.sort_order || 0,
-    title: decode(i.title).slice(0, 2000),
+    title: decode(displayTitle).slice(0, 2000),
     notes: i.image_url ? `<p><a href="${i.image_url}" target="_blank" rel="noreferrer">Photo</a></p>` : "",
     transcription: i.transcription || "",
     summary: i.summary || "",

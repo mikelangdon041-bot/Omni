@@ -254,7 +254,7 @@ export function firstName(name: string): string {
 // Strip HTML to plain text (for search haystacks and AI payloads).
 export function stripHtml(html: string): string {
   return (html || "")
-    .replace(/<li[^>]*>/gi, "\n- ")
+    .replace(/<li[^>]*>/gi, "\n• ") // bullet, not a dash
     .replace(/<\/(p|div|ul|ol|h\d)>/gi, "\n")
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<[^>]+>/g, "")
@@ -264,6 +264,64 @@ export function stripHtml(html: string): string {
     .replace(/&gt;/g, ">")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+// Like stripHtml, but preserves list nesting as indented bullets (•, then ◦
+// one level down) instead of flattening every <li> to the same depth. Used
+// for plain-text emails built from AI summaries, which nest sub-points under
+// themes. Indentation uses non-breaking spaces — most email clients collapse
+// runs of regular spaces, which silently un-indents plain-text mail.
+export function nestedHtmlToPlainText(html: string): string {
+  let s = html || "";
+  const NBSP = "  ";
+  // Flatten innermost lists (no <ul>/<ol> inside) first, as sub-bullets, and
+  // repeat outward so any nesting depth collapses to "top bullet / sub bullet".
+  const innerListRe = /<(ul|ol)[^>]*>((?:(?!<ul\b|<ol\b)[\s\S])*?)<\/\1>/gi;
+  let prev: string;
+  do {
+    prev = s;
+    s = s.replace(innerListRe, (_m, _tag, inner: string) => {
+      const items = inner.split(/<li[^>]*>/gi).slice(1);
+      return (
+        "\n" +
+        items
+          .map((it) => `${NBSP}◦ ${it.replace(/<\/li>/gi, "").trim()}`)
+          .join("\n")
+      );
+    });
+  } while (s !== prev && /<(ul|ol)[^>]*>/i.test(s));
+  // Anything left is a top-level <li> (no surviving nested markers above it).
+  s = s.replace(/<li[^>]*>/gi, "\n• ").replace(/<\/li>/gi, "");
+  return stripHtml(s);
+}
+
+// AI daily/meeting summaries generated before the AI started replying in
+// HTML were stored as plain text with "- "/"  - " dash bullets. Handed
+// straight to a contentEditable div's innerHTML, that text's newlines
+// collapse (HTML ignores bare whitespace) into one run-on paragraph — so
+// legacy content needs converting to real markup first. Nesting is inferred
+// from each dash line's leading indent (2 spaces = one level down).
+export function legacyPlainToHtml(text: string): string {
+  if (!text?.trim()) return "";
+  if (/<[a-z][\s\S]*>/i.test(text)) return text; // already HTML — leave it alone
+
+  const out: string[] = [];
+  let openLists = 0; // how many <ul> are currently open
+  for (const raw of text.split("\n")) {
+    const m = /^(\s*)[-•◦]\s+(.*)$/.exec(raw);
+    if (!m) {
+      if (!raw.trim()) continue;
+      while (openLists > 0) { out.push("</ul>"); openLists--; }
+      out.push(`<p>${raw.trim()}</p>`);
+      continue;
+    }
+    const depth = Math.min(1, Math.floor(m[1].length / 2)); // one nested level, matches the AI prompt's shape
+    while (openLists <= depth) { out.push("<ul>"); openLists++; }
+    while (openLists > depth + 1) { out.push("</ul>"); openLists--; }
+    out.push(`<li>${m[2]}</li>`);
+  }
+  while (openLists > 0) { out.push("</ul>"); openLists--; }
+  return out.join("");
 }
 
 // Platform maps link for a location string.

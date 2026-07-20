@@ -1019,9 +1019,14 @@ export function useDailyRow<T extends { date: string }>(
   date: string,
 ) {
   const [row, setRow] = useState<T | null>(null);
+  // Consumers with uncontrolled inputs (defaultValue) need to know when the
+  // async fetch has actually landed — mounting them before it does bakes in
+  // an empty value that React won't refresh once the real row arrives.
+  const [loaded, setLoaded] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!conferenceId || !date) return;
+    setLoaded(false);
     const { data } = await supabase
       .from(table)
       .select("*")
@@ -1029,6 +1034,7 @@ export function useDailyRow<T extends { date: string }>(
       .eq("date", date)
       .maybeSingle();
     setRow((data as T) || null);
+    setLoaded(true);
   }, [table, conferenceId, date]);
 
   useEffect(() => {
@@ -1051,7 +1057,7 @@ export function useDailyRow<T extends { date: string }>(
     [table, conferenceId, date],
   );
 
-  return { row, refresh, upsert };
+  return { row, loaded, refresh, upsert };
 }
 
 export type { DailySummary, BoothLog };

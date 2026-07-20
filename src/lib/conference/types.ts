@@ -32,6 +32,7 @@ export interface ConferenceSettings {
   enabled_tabs?: string[]; // tab segs; missing/empty = all tabs on
   session_questions?: QuestionDef[];
   kol_questions?: QuestionDef[];
+  booth_questions?: QuestionDef[];
 }
 
 export interface Conference {
@@ -264,6 +265,7 @@ export interface BoothLog {
   patterns: string;
   standout: string;
   custom: string;
+  custom_answers?: Record<string, string>;
   updated_at: string;
 }
 
@@ -512,6 +514,18 @@ export function sessionQuestions(conf: Conference): QuestionDef[] {
 export function kolQuestions(conf: Conference): QuestionDef[] {
   const q = conf.settings?.kol_questions;
   return Array.isArray(q) && q.length ? q : DEFAULT_KOL_QUESTIONS;
+}
+
+export const DEFAULT_BOOTH_QUESTIONS: QuestionDef[] = [
+  { key: "attendee_count", label: "Approx. attendee count" },
+  { key: "standout", label: "What stood out" },
+  { key: "patterns", label: "Patterns observed" },
+];
+export const BUILTIN_BOOTH_KEYS = ["attendee_count", "standout", "patterns"];
+
+export function boothQuestions(conf: Conference): QuestionDef[] {
+  const q = conf.settings?.booth_questions;
+  return Array.isArray(q) && q.length ? q : DEFAULT_BOOTH_QUESTIONS;
 }
 
 export const COMMON_TIMEZONES = [

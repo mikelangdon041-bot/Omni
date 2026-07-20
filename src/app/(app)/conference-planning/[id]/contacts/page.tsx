@@ -163,7 +163,7 @@ export default function ContactsPage() {
           }
         />
       ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-3">
           {filtered.map((c) => (
             <div
               key={c.id}
@@ -172,18 +172,19 @@ export default function ContactsPage() {
               <div className="h-1.5 w-full" style={{ background: TIERS[c.tier].color }} />
               <Link
                 href={`/conference-planning/${conference.id}/contacts/${c.id}`}
-                className="flex items-start gap-3 p-4"
+                className="flex items-start gap-2 p-2.5 sm:gap-3 sm:p-4"
               >
-                <Avatar src={c.photo_url || null} initials={initials(c.name)} size={44} />
+                <Avatar src={c.photo_url || null} initials={initials(c.name)} size={36} className="sm:hidden" />
+                <Avatar src={c.photo_url || null} initials={initials(c.name)} size={44} className="hidden sm:block" />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate font-semibold">{c.name}</p>
-                  {c.title && <p className="truncate text-sm text-muted">{c.title}</p>}
+                  <p className="truncate text-sm font-semibold sm:text-base">{c.name}</p>
+                  {c.title && <p className="truncate text-xs text-muted sm:text-sm">{c.title}</p>}
                   {c.institution && (
-                    <p className="truncate text-xs text-muted">{c.institution}</p>
+                    <p className="hidden truncate text-xs text-muted sm:block">{c.institution}</p>
                   )}
                 </div>
                 <span
-                  className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold"
+                  className="shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-bold sm:px-2 sm:text-[10px]"
                   style={{ background: TIERS[c.tier].soft, color: TIERS[c.tier].color }}
                 >
                   {TIERS[c.tier].label}
@@ -507,7 +508,7 @@ function AddContactModal({
             />
             <div className="flex flex-wrap gap-1.5">
               {mslOptions.length > 1 &&
-                filterSelect(mslFilter, setMslFilter, "All MSLs",
+                filterSelect(mslFilter, setMslFilter, "All Reps",
                   mslOptions.map((id) => ({
                     value: id,
                     label: id === me?.id ? "My KOLs" : owners[id] || "Teammate",

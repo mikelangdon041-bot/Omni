@@ -8,6 +8,7 @@ import { use, useMemo, useState } from "react";
 import { Loading, ProgressBar } from "@/components/conference/Bits";
 import Link from "next/link";
 import { Clock, ImagePlus, MapPin, Pencil, Sparkles, Trash2, Users } from "lucide-react";
+import { BackButton } from "@/components/BackButton";
 import { Button } from "@/components/ui/Button";
 import { useConfirm, useToast } from "@/components/ui/Feedback";
 import { AutoRichField } from "@/components/ui/AutoRichField";
@@ -135,6 +136,11 @@ export default function SessionDetailPage({
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
+      {/* Installed as a PWA, there's no browser chrome back button — give
+          every detail page an explicit way out (and back to whatever
+          filtered view the user actually came from). */}
+      <BackButton label="Back to sessions" />
+
       {/* Header */}
       <div className="rounded-xl border border-border bg-surface p-5">
         <div className="flex items-start justify-between gap-3">
