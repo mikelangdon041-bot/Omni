@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { getCached, setCached } from "@/lib/cache";
 import type {
   Activity,
   KOL,
@@ -11,17 +12,27 @@ import type {
 } from "./types";
 
 const supabase = createClient();
+const UID_CACHE_KEY = "uid";
 
-// Resolve the current rep's auth user id (client-side, from the session cookie).
+// Resolve the current rep's auth user id (client-side, from the session
+// cookie). `supabase.auth.getUser()` is itself a network round trip, which
+// otherwise serializes in front of every per-user data fetch that depends on
+// it (meetings, docs, decks, KOLs…). We remember the last-resolved id in
+// localStorage and hand it back synchronously on mount so those downstream
+// hooks can start their own cached-instant-paint immediately, while this
+// still reconfirms with Supabase in the background and corrects itself
+// (including clearing to null) if the session has changed.
 export function useUserId() {
-  const [userId, setUserId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [userId, setUserId] = useState<string | null>(() => getCached<string>(UID_CACHE_KEY));
+  const [loading, setLoading] = useState(() => !getCached<string>(UID_CACHE_KEY));
   useEffect(() => {
     let active = true;
     supabase.auth.getUser().then(({ data }) => {
       if (!active) return;
-      setUserId(data.user?.id ?? null);
+      const uid = data.user?.id ?? null;
+      setUserId(uid);
       setLoading(false);
+      if (uid) setCached(UID_CACHE_KEY, uid);
     });
     return () => {
       active = false;

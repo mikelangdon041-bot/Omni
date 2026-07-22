@@ -29,7 +29,7 @@ type Tab = (typeof TABS)[number];
 export default function MeetingPage() {
   const { id } = useParams<{ id: string }>();
   const { userId } = useUserId();
-  const { meeting, loading, save, flush, saveState } = useMpMeeting(id);
+  const { meeting, loading, save, flush, saveState } = useMpMeeting(id, userId);
   const { settings, save: saveSettings } = useMpSettings(userId);
   // Remembers which tab you were on for THIS meeting specifically.
   const [tab, setTab] = usePersistedState<Tab>(`mp-tab:${id}`, "Setup", TABS);

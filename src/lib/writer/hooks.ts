@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { dropCached, getCached, setCached } from "@/lib/cache";
 import {
   EMPTY_CONTEXT,
   type WriterDoc,
@@ -16,6 +17,13 @@ function normalizeDoc(row: WriterDoc): WriterDoc {
   return { ...row, context: { ...EMPTY_CONTEXT, ...(row.context || {}) } };
 }
 
+// The list query below already selects every column, so each row IS the same
+// full record the detail page needs — no separate per-item fetch required to
+// warm the detail cache (unlike a list endpoint that returns a slim row).
+function cacheEachDoc(userId: string, rows: WriterDoc[]) {
+  for (const row of rows) setCached(`doc:${userId}:${row.id}`, { _t: Date.now(), row });
+}
+
 export function useWriterDocs(userId: string | null) {
   const [docs, setDocs] = useState<WriterDoc[]>([]);
   const [loading, setLoading] = useState(true);
@@ -28,13 +36,26 @@ export function useWriterDocs(userId: string | null) {
       .eq("user_id", userId)
       .order("updated_at", { ascending: false })
       .limit(300);
-    setDocs(((data as WriterDoc[]) || []).map(normalizeDoc));
+    const rows = ((data as WriterDoc[]) || []).map(normalizeDoc);
+    setDocs(rows);
     setLoading(false);
+    setCached(`docs:${userId}`, rows);
+    // Warm every doc's detail cache in the background so opening any one of
+    // them from the list — even on a first visit — instant-paints.
+    cacheEachDoc(userId, rows);
   }, [userId]);
 
   useEffect(() => {
+    // Instant paint from cache, then refresh in the background.
+    if (userId) {
+      const cached = getCached<WriterDoc[]>(`docs:${userId}`);
+      if (cached) {
+        setDocs(cached);
+        setLoading(false);
+      }
+    }
     void refresh();
-  }, [refresh]);
+  }, [refresh, userId]);
 
   const add = useCallback(
     async (partial: Partial<WriterDoc>) => {
@@ -44,27 +65,52 @@ export function useWriterDocs(userId: string | null) {
         .insert({ ...partial, user_id: userId })
         .select("*")
         .single();
-      if (data) setDocs((prev) => [normalizeDoc(data as WriterDoc), ...prev]);
+      if (data) {
+        setDocs((prev) => {
+          const next = [normalizeDoc(data as WriterDoc), ...prev];
+          setCached(`docs:${userId}`, next);
+          return next;
+        });
+      }
       return (data as WriterDoc) || null;
     },
     [userId],
   );
 
-  const remove = useCallback(async (id: string) => {
-    setDocs((prev) => prev.filter((d) => d.id !== id));
-    await supabase.from("writer_docs").delete().eq("id", id);
-  }, []);
+  const remove = useCallback(
+    async (id: string) => {
+      setDocs((prev) => {
+        const next = prev.filter((d) => d.id !== id);
+        if (userId) setCached(`docs:${userId}`, next);
+        return next;
+      });
+      await supabase.from("writer_docs").delete().eq("id", id);
+      if (userId) dropCached(`doc:${userId}:${id}`);
+    },
+    [userId],
+  );
 
   return { docs, loading, add, remove, refresh };
 }
 
-export function useWriterDoc(id: string) {
+export function useWriterDoc(id: string, userId: string | null) {
   const [doc, setDoc] = useState<WriterDoc | null>(null);
   const [versions, setVersions] = useState<WriterVersion[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Instant paint from cache (warmed by the docs list, or by a previous
+    // visit to this doc), then refresh — including versions — in the
+    // background.
     let active = true;
+    const cacheKey = userId ? `doc:${userId}:${id}` : null;
+    const cached = cacheKey ? getCached<{ _t: number; row: WriterDoc }>(cacheKey) : null;
+    if (cached?.row) {
+      setDoc(cached.row);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
     void (async () => {
       const [{ data: d }, { data: v }] = await Promise.all([
         supabase.from("writer_docs").select("*").eq("id", id).maybeSingle(),
@@ -76,14 +122,21 @@ export function useWriterDoc(id: string) {
           .limit(100),
       ]);
       if (!active) return;
-      setDoc(d ? normalizeDoc(d as WriterDoc) : null);
+      const row = d ? normalizeDoc(d as WriterDoc) : null;
+      setDoc(row);
       setVersions((v as WriterVersion[]) || []);
       setLoading(false);
+      if (row && cacheKey) setCached(cacheKey, { _t: Date.now(), row });
     })();
     return () => {
       active = false;
     };
-  }, [id]);
+  }, [id, userId]);
+
+  // Any edit (autosave, AI generate/refine) refreshes the instant-paint cache.
+  useEffect(() => {
+    if (doc && userId) setCached(`doc:${userId}:${id}`, { _t: Date.now(), row: doc });
+  }, [doc, userId, id]);
 
   // Autosave: optimistic local update immediately, debounced merged write to
   // the database (typing in rich-text fields would otherwise write per key).

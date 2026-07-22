@@ -52,7 +52,7 @@ export default function WriterDocPage() {
   const { id } = useParams<{ id: string }>();
   const toast = useToast();
   const { userId } = useUserId();
-  const { doc, versions, loading, save, flush, addVersion } = useWriterDoc(id);
+  const { doc, versions, loading, save, flush, addVersion } = useWriterDoc(id, userId);
   const { settings } = useWriterSettings(userId);
   const { styles } = useWriterStyles(userId);
 

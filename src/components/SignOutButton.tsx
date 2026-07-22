@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
+import { clearAllCached } from "@/lib/cache";
 
 export function SignOutButton() {
   const router = useRouter();
@@ -10,6 +11,9 @@ export function SignOutButton() {
       method: "POST",
       credentials: "same-origin",
     });
+    // Wipe the instant-paint cache so a shared device signing in as someone
+    // else never flashes the previous person's cached data.
+    clearAllCached();
     router.push("/login");
     router.refresh();
   }
