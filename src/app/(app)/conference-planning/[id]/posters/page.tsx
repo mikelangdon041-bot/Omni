@@ -16,13 +16,14 @@ import { PosterModal } from "@/components/conference/PosterModal";
 import { ImportScheduleModal } from "@/components/conference/ImportScheduleModal";
 import { PriorityPill } from "@/components/conference/Priority";
 import { normalizeFreeDate } from "@/lib/conference/utils";
+import { usePersistedFilter } from "@/lib/conference/usePersistedFilter";
 
 const DATE_COLORS = ["#0d9488", "#7c3aed", "#d97706", "#0284c7", "#be123c", "#4f46e5", "#ca8a04"];
 
 export default function PostersPage() {
   const { conference, attendees } = useConferenceCtx();
   const { posters, loading, save } = usePosters(conference.id);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = usePersistedFilter(conference.id, "posters_q", "");
   const [showAdd, setShowAdd] = useState(false);
   const [showImport, setShowImport] = useState(false);
 

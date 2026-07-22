@@ -73,12 +73,19 @@ Rules:
     if (action === "daily_summary" || action === "meeting_summary") {
       const text: string = (body?.text || "").slice(0, 60000);
       const guidance: string = body?.guidance || "";
+      // "Saturday, June 13 of ENDO 2026" — lets the intro paragraph name the
+      // actual day/conference instead of reading as a generic template.
+      const context: string = body?.context || "";
       if (!text.trim()) return NextResponse.json({ content: "" });
 
       const scope =
         action === "daily_summary"
           ? "one day of a conference (sessions, contact meetings, posters, booth activity, standalone insights)"
           : "everything captured about one key contact (meeting notes and insights)";
+      const introInstruction =
+        action === "daily_summary"
+          ? `- Open with a single <p> of 1-2 plain-English sentences naming the day${context ? ` (${context})` : ""} and giving a real read on booth traffic/attendance if the source mentions it (e.g. "Day 2 of ENDO 2026 — booth traffic was steady with ~50 attendees; several asked about..."). Skip this <p> entirely if the source has no booth/attendance info to report — don't invent a generic opener.\n`
+          : "";
       const res = await openai().chat.completions.create({
         model: MODEL,
         temperature: 0.3,
@@ -88,7 +95,7 @@ Rules:
             role: "system",
             content: `You distill field intelligence captured across ${scope} into an executive summary for headquarters.
 
-- Output ONLY a nested HTML bullet list: <ul><li>theme<ul><li>supporting detail</li></ul></li></ul>. No headings, no markdown, no bold, no preamble or closing remarks, no code fences — the response body must start with "<ul>" and end with "</ul>".
+${introInstruction}- After that (or first, for a meeting summary), output a nested HTML bullet list: <ul><li>theme<ul><li>supporting detail</li></ul></li></ul>. No headings, no markdown, no bold, no closing remarks, no code fences — the response body must start with "${introInstruction ? "<p>\" or \"<ul>" : "<ul>"}" and end with "</ul>".
 - Top-level <li> are the key themes/findings; nested <ul><li> one level down carry the supporting specifics (numbers, names, who said what).
 - Include only genuine, actionable intelligence; group related ideas; no repetition.
 - Preserve every specific figure and name. NEVER invent anything not in the source.`,

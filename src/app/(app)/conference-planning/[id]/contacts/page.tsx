@@ -28,15 +28,26 @@ export default function ContactsPage() {
   const { conference } = useConferenceCtx();
   const { contacts, loading, add, update } = useContacts(conference.id);
 
+  // URL first (so a shared link wins), then whatever was last used for this
+  // conference, so the filter survives a plain revisit — not just Back.
+  const storeKey = `omni_conf_${conference.id}_kols_filter`;
+  const stored = ((): { q: string; tier: string } => {
+    if (typeof window === "undefined") return { q: "", tier: "all" };
+    try {
+      return JSON.parse(localStorage.getItem(storeKey) || "null") || { q: "", tier: "all" };
+    } catch {
+      return { q: "", tier: "all" };
+    }
+  })();
   const [search, setSearch] = useState(() =>
     typeof window === "undefined"
       ? ""
-      : new URLSearchParams(window.location.search).get("q") || "",
+      : new URLSearchParams(window.location.search).get("q") || stored.q,
   );
   const [tier, setTier] = useState<"all" | Tier>(() =>
     typeof window === "undefined"
       ? "all"
-      : ((new URLSearchParams(window.location.search).get("tier") as Tier) || "all"),
+      : ((new URLSearchParams(window.location.search).get("tier") as Tier) || (stored.tier as Tier | "all")),
   );
   const [showArchived, setShowArchived] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
@@ -69,6 +80,11 @@ export default function ContactsPage() {
       "",
       `/conference-planning/${conference.id}/contacts${qs ? `?${qs}` : ""}`,
     );
+    try {
+      localStorage.setItem(storeKey, JSON.stringify({ q, tier: t }));
+    } catch {
+      // ignore
+    }
   }
 
   const filtered = useMemo(() => {

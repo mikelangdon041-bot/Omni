@@ -58,6 +58,7 @@ import {
 } from "@/lib/conference/types";
 import {
   dateKeyInTz,
+  fmtDayKey,
   fmtDayKeyLong,
   legacyPlainToHtml,
   listDays,
@@ -86,6 +87,7 @@ export default function InsightsPage() {
   const [catFilter, setCatFilter] = usePersistedFilter<string[]>(conference.id, "insights_cat", []);
   const [personFilter, setPersonFilter] = usePersistedFilter(conference.id, "insights_person", "all");
   const [dayFilter, setDayFilter] = usePersistedFilter(conference.id, "insights_day", "all");
+  const [view, setView] = usePersistedFilter<"list" | "booth">(conference.id, "insights_view", "list");
   const [collapsedDays, setCollapsedDays] = useState<Record<string, boolean>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [priorityFor, setPriorityFor] = useState<Insight | null>(null);
@@ -189,7 +191,12 @@ export default function InsightsPage() {
   // spaces get collapsed by most mail clients, silently flattening structure.
   function digestText(): string {
     const NBSP = "  ";
-    const lines: string[] = [];
+    const dayCount = groups.length;
+    const intro =
+      dayFilter !== "all"
+        ? `${fmtDayKeyLong(dayFilter)} of ${conference.name} — field insights below.`
+        : `${conference.name} — field insights across ${dayCount} day${dayCount === 1 ? "" : "s"}.`;
+    const lines: string[] = [intro, ""];
     for (const [day, list] of groups) {
       lines.push(day === "No date" ? "No date" : fmtDayKeyLong(day));
       lines.push("");
@@ -227,8 +234,38 @@ export default function InsightsPage() {
 
   return (
     <div>
+      {/* Insights / Booth sub-tabs */}
+      <div className="mb-4 flex gap-1 border-b border-border">
+        <button
+          onClick={() => setView("list")}
+          className={cn(
+            "-mb-px border-b-2 px-3 py-2 text-sm font-medium transition",
+            view === "list"
+              ? "border-[var(--accent)] text-[var(--accent)]"
+              : "border-transparent text-muted hover:text-ink",
+          )}
+        >
+          Insights
+        </button>
+        <button
+          onClick={() => setView("booth")}
+          className={cn(
+            "-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium transition",
+            view === "booth"
+              ? "border-[var(--accent)] text-[var(--accent)]"
+              : "border-transparent text-muted hover:text-ink",
+          )}
+        >
+          <Store size={14} /> Booth
+        </button>
+      </div>
+
+      {view === "booth" ? (
+        <BoothTabView />
+      ) : (
+        <>
       {/* Filters */}
-      <div className="mb-4 flex flex-wrap items-center gap-2">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
         <select
           value={dayFilter}
           onChange={(e) => setDayFilter(e.target.value)}
@@ -281,75 +318,83 @@ export default function InsightsPage() {
             </button>
           ))}
         </div>
-        <span className="flex-1" />
-        <Link
-          href={`/conference-planning/${conference.id}/recap`}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-muted transition hover:text-ink"
-          title="Everything captured, day by day, per rep"
-        >
-          <NotebookPen size={15} /> Team Recap
-        </Link>
-        <button
-          onClick={emailInsights}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-muted transition hover:text-ink"
-          title="Email the filtered insights"
-        >
-          <Mail size={15} /> Send email
-        </button>
-        <div className="relative">
-          <select
-            value=""
-            onChange={(e) => {
-              const fmt = e.target.value;
-              if (!fmt) return;
-              const ctx = { dayOf, childrenOf, nameOf: userName };
-              const name = `${conference.name} — insights${dayFilter !== "all" ? ` ${dayFilter}` : ""}`;
-              if (fmt === "xlsx") exportInsightsXlsx(filtered, ctx, name);
-              if (fmt === "docx") void exportInsightsDocx(filtered, ctx, name, name);
-              if (fmt === "pdf") exportInsightsPdf(filtered, ctx, name, name);
-            }}
-            className="w-9 cursor-pointer appearance-none rounded-full border border-border bg-surface py-1.5 pl-2.5 text-transparent outline-none"
-            title="Export the filtered insights"
+      </div>
+
+      {/* Toolbar: utilities on the left (one consistent style), the primary
+          action isolated on the right — these used to be five differently
+          shaped buttons (a pill, a bare circle, another pill…) crammed
+          together with no grouping. */}
+      <div className="mb-4 flex flex-wrap items-center gap-2 border-t border-border pt-3">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Link
+            href={`/conference-planning/${conference.id}/recap`}
+            className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted transition hover:bg-canvas hover:text-ink"
+            title="Everything captured, day by day, per rep"
           >
-            <option value="">Export…</option>
-            <option value="xlsx" className="text-ink">Excel (.xlsx)</option>
-            <option value="docx" className="text-ink">Word (.docx)</option>
-            <option value="pdf" className="text-ink">PDF</option>
-          </select>
-          <Download
-            size={15}
-            className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted"
-          />
-        </div>
-        <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-muted transition hover:text-ink">
-          <Sparkles size={15} />
-          {photoBusy ? "Uploading…" : "From photo"}
-          <input
-            type="file"
-            accept="image/*"
-            multiple
-            className="hidden"
-            onChange={async (e) => {
-              const files = Array.from(e.target.files || []);
-              if (!files.length) return;
-              setPhotoBusy(true);
-              setPhotoPct(0);
-              try {
-                const urls: string[] = [];
-                for (let i = 0; i < files.length; i++) {
-                  const url = await uploadConferenceFile(conference.id, "insight-photos", files[i]);
-                  if (url) urls.push(url);
-                  setPhotoPct(((i + 1) / files.length) * 100);
+            <NotebookPen size={14} /> Team Recap
+          </Link>
+          <button
+            onClick={emailInsights}
+            className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted transition hover:bg-canvas hover:text-ink"
+            title="Email the filtered insights"
+          >
+            <Mail size={14} /> Send email
+          </button>
+          <div className="relative">
+            <select
+              value=""
+              onChange={(e) => {
+                const fmt = e.target.value;
+                if (!fmt) return;
+                const ctx = { dayOf, childrenOf, nameOf: userName };
+                const name = `${conference.name} — insights${dayFilter !== "all" ? ` ${dayFilter}` : ""}`;
+                if (fmt === "xlsx") exportInsightsXlsx(filtered, ctx, name);
+                if (fmt === "docx") void exportInsightsDocx(filtered, ctx, name, name);
+                if (fmt === "pdf") exportInsightsPdf(filtered, ctx, name, name);
+              }}
+              className="peer absolute inset-0 cursor-pointer opacity-0"
+              title="Export the filtered insights"
+            >
+              <option value="">Export…</option>
+              <option value="xlsx">Excel (.xlsx)</option>
+              <option value="docx">Word (.docx)</option>
+              <option value="pdf">PDF</option>
+            </select>
+            <span className="pointer-events-none inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted transition peer-hover:bg-canvas peer-hover:text-ink">
+              <Download size={14} /> Export
+            </span>
+          </div>
+          <label className="relative inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted transition hover:bg-canvas hover:text-ink">
+            <Sparkles size={14} />
+            {photoBusy ? "Uploading…" : "From photo"}
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={async (e) => {
+                const files = Array.from(e.target.files || []);
+                if (!files.length) return;
+                setPhotoBusy(true);
+                setPhotoPct(0);
+                try {
+                  const urls: string[] = [];
+                  for (let i = 0; i < files.length; i++) {
+                    const url = await uploadConferenceFile(conference.id, "insight-photos", files[i]);
+                    if (url) urls.push(url);
+                    setPhotoPct(((i + 1) / files.length) * 100);
+                  }
+                  if (urls.length) setPhotoUrls(urls);
+                } catch (err) {
+                  toast("error", (err as Error).message);
+                } finally {
+                  setPhotoBusy(false);
                 }
-                if (urls.length) setPhotoUrls(urls);
-              } catch (err) {
-                toast("error", (err as Error).message);
-              } finally {
-                setPhotoBusy(false);
-              }
-            }}
-          />
-        </label>
+              }}
+            />
+          </label>
+        </div>
+        <span className="flex-1" />
         <Button onClick={() => setShowAdd(true)}>
           <Plus size={16} /> Add insight
         </Button>
@@ -494,6 +539,8 @@ export default function InsightsPage() {
           })}
         </div>
       )}
+        </>
+      )}
 
       <AddInsightModal
         open={showAdd}
@@ -539,6 +586,71 @@ export default function InsightsPage() {
           childrenOf={childrenOf}
         />
       )}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------
+
+// Booth log, front and center (was previously only reachable by opening the
+// Daily Rollup AI modal). Same organizer-configurable questions, same
+// controlled BoothFields — just its own tab so it's a place to log booth
+// activity as it happens, not a side effect of generating a summary.
+function BoothTabView() {
+  const { conference, canManage, updateConference } = useConferenceCtx();
+  const tz = conference.timezone;
+  const days = listDays(conference.start_date, conference.end_date);
+  const today = todayKey(tz);
+  const [day, setDay] = usePersistedFilter(conference.id, "booth_day", days.includes(today) ? today : days[0] || today);
+  const boothRow = useDailyRow<BoothLog>("conf_booth_logs", conference.id, day);
+  const [questionsOpen, setQuestionsOpen] = useState(false);
+  const questions = boothQuestions(conference);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex gap-1.5 overflow-x-auto">
+          {days.map((d) => (
+            <button
+              key={d}
+              onClick={() => setDay(d)}
+              className={cn(
+                "shrink-0 rounded-full border px-3.5 py-1.5 text-xs font-medium transition",
+                day === d
+                  ? "border-transparent bg-[var(--accent)] text-white"
+                  : "border-border bg-surface text-muted hover:text-ink",
+              )}
+            >
+              {fmtDayKey(d)}
+            </button>
+          ))}
+        </div>
+        <span className="flex-1" />
+        {canManage && <EditQuestionsButton onClick={() => setQuestionsOpen(true)} />}
+      </div>
+
+      <div className="rounded-xl border border-border bg-surface p-5">
+        <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wide text-muted">
+          <Store size={14} /> Booth log — {fmtDayKeyLong(day)}
+        </h2>
+        {boothRow.loaded ? (
+          <BoothFields questions={questions} booth={boothRow.row} onSave={boothRow.upsert} />
+        ) : (
+          <p className="text-sm text-muted">Loading…</p>
+        )}
+      </div>
+
+      <QuestionsEditorModal
+        open={questionsOpen}
+        onClose={() => setQuestionsOpen(false)}
+        title="Booth log questions"
+        questions={questions}
+        onSave={(qs) =>
+          updateConference({
+            settings: { ...(conference.settings || {}), booth_questions: qs },
+          })
+        }
+      />
     </div>
   );
 }
@@ -707,7 +819,12 @@ function DailyRollupModal({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
-        body: JSON.stringify({ action: "daily_summary", text: sourceText, guidance }),
+        body: JSON.stringify({
+          action: "daily_summary",
+          text: sourceText,
+          guidance,
+          context: `${fmtDayKeyLong(day)} of ${conference.name}`,
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "AI request failed");

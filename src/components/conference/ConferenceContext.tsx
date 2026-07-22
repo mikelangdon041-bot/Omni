@@ -24,10 +24,12 @@ import {
   Megaphone,
   Mic2,
   NotebookPen,
+  Settings,
   Sparkles,
   Users,
   UtensilsCrossed,
 } from "lucide-react";
+import { ConferenceModal } from "@/components/conference/ConferenceModal";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Textarea } from "@/components/ui/Input";
@@ -107,6 +109,7 @@ export function ConferenceProvider({
   );
 
   const [showAnnounce, setShowAnnounce] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   // Food-tab unread badge: count messages since this device last opened Food.
   const [foodUnread, setFoodUnread] = useState(0);
@@ -268,6 +271,18 @@ export function ConferenceProvider({
               </span>
             )}
           </span>
+          {/* Per-conference settings (tabs shown, session/KOL/booth questions)
+              lived only behind a hover-only pencil on the conferences list —
+              nothing inside the conference itself pointed to it. */}
+          {canManage && (
+            <button
+              onClick={() => setShowSettings(true)}
+              title="Conference settings"
+              className="relative z-10 shrink-0 rounded-lg p-2 text-muted transition hover:bg-canvas hover:text-ink"
+            >
+              <Settings size={17} />
+            </button>
+          )}
         </div>
       </div>
 
@@ -277,6 +292,15 @@ export function ConferenceProvider({
         open={showAnnounce}
         onClose={() => setShowAnnounce(false)}
         conferenceId={conference.id}
+      />
+
+      <ConferenceModal
+        open={showSettings}
+        onClose={() => setShowSettings(false)}
+        conference={conference}
+        onSave={async (partial) => {
+          await update(partial);
+        }}
       />
 
       {/* Roster has placeholder people (e.g. from a schedule import) and this
