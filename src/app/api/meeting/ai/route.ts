@@ -1,14 +1,12 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { openai } from "@/lib/openai";
+import { anthropic, WRITER_MODEL } from "@/lib/anthropic";
 import { stripHtml } from "@/lib/territory/utils";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
-const MODEL = process.env.OPENAI_SUMMARY_MODEL || "gpt-4o";
-
-// Meeting Prep AI. Actions:
+// Meeting Prep AI — powered by Claude (same model as Writing Studio). Actions:
 //   brief    { meeting, sections:[{key,title,prompt}], kolId?, guidance?,
 //              previousSections? }             → { sections:[{key,title,content}] }
 //   autofill { meeting }                       → { title, location, durationMin,
@@ -17,6 +15,11 @@ const MODEL = process.env.OPENAI_SUMMARY_MODEL || "gpt-4o";
 //   grill    { context, briefText?, count? }   → { questions:[{question,modelAnswer}] }
 //   coach    { question, modelAnswer, userAnswer, context } → { coaching }
 //   debrief  { transcript, context }           → { summary, actions:[] }
+
+function firstText(res: { content: { type: string; text?: string }[] }): string {
+  const block = res.content.find((b) => b.type === "text");
+  return (block?.text || "").trim();
+}
 
 interface MeetingPayload {
   title?: string;
@@ -112,6 +115,108 @@ async function kolBlockFor(
     .join("\n");
 }
 
+// Formatting rule shared by every action that writes brief content — Claude's
+// default house style leans on bold labels and headers; this app renders
+// content as plain prose in a document, not a chat bubble.
+const NO_FORMATTING_RULE =
+  "Plain prose. No bold, no markdown, no headers, no emoji. Use <b> only mid-sentence for a genuinely critical word or number, never to label a whole line or start a bullet. Write like a person handing over notes, not like an AI assistant's answer.";
+
+const BRIEF_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    sections: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: {
+          key: { type: "string" as const },
+          title: { type: "string" as const },
+          content: { type: "string" as const },
+        },
+        required: ["key", "title", "content"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["sections"],
+  additionalProperties: false,
+};
+
+const AUTOFILL_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    title: { type: "string" as const },
+    location: { type: "string" as const },
+    durationMin: { type: "number" as const },
+    date: { type: "string" as const },
+    attendees: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: {
+          name: { type: "string" as const },
+          role: { type: "string" as const },
+          org: { type: "string" as const },
+          notes: { type: "string" as const },
+        },
+        required: ["name", "role", "org", "notes"],
+        additionalProperties: false,
+      },
+    },
+    objectives: { type: "string" as const },
+    concerns: { type: "string" as const },
+  },
+  required: ["title", "location", "durationMin", "date", "attendees", "objectives", "concerns"],
+  additionalProperties: false,
+};
+
+const IDEAS_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    ideas: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: { title: { type: "string" as const }, detail: { type: "string" as const } },
+        required: ["title", "detail"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["ideas"],
+  additionalProperties: false,
+};
+
+const GRILL_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    questions: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: {
+          question: { type: "string" as const },
+          modelAnswer: { type: "string" as const },
+        },
+        required: ["question", "modelAnswer"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["questions"],
+  additionalProperties: false,
+};
+
+const DEBRIEF_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    summary: { type: "string" as const },
+    actions: { type: "array" as const, items: { type: "string" as const } },
+  },
+  required: ["summary", "actions"],
+  additionalProperties: false,
+};
+
 export async function POST(req: Request) {
   const supabase = await createClient();
   const {
@@ -137,32 +242,30 @@ export async function POST(req: Request) {
       const context = meetingContext(meeting, kolBlock);
 
       const wanted = onlyKey ? sections.filter((s) => s.key === onlyKey) : sections;
-      const res = await openai().chat.completions.create({
-        model: MODEL,
+      const res = await anthropic().messages.create({
+        model: WRITER_MODEL,
         temperature: 0.4,
-        max_tokens: 4000,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content: `You are a world-class chief of staff writing a pre-meeting brief. Return ONLY JSON:
-{"sections":[{"key":"...","title":"...","content":"..."}]} — one entry per requested section, same keys and titles, in the same order.
+        max_tokens: 6000,
+        output_config: { format: { type: "json_schema", schema: BRIEF_SCHEMA } },
+        system: `You are a sharp, experienced chief of staff writing a pre-meeting brief for someone about to walk into the room. Produce sections a real person would hand another person, not an AI-generated report.
 
-"content" is simple HTML: <p> paragraphs, <ul>/<ol>/<li> lists, <b> sparingly. No headings (the title is rendered separately), no markdown.
+${NO_FORMATTING_RULE}
 
-Rules:
-- Ground everything in the provided context. NEVER invent facts, names, data, or commitments not present. When the context is thin, give the best genuinely useful general guidance for this meeting type instead of fabricating specifics.
+Hard rules:
+- Ground everything in the provided meeting context. NEVER invent facts, names, data, or commitments not present. When context is thin for a section, give genuinely useful general guidance for this type of meeting instead of fabricating specifics — say less rather than make things up.
+- When a previous version of a section is provided, that is the user's own current text (possibly hand-edited). Build on it and extend it — keep everything in it that the guidance didn't ask you to change. Do not silently rewrite it into your own voice or drop details it already has. Only make the specific change the guidance asks for; if no guidance is given, make the smallest improvement that adds real value (fix a gap, sharpen something vague) rather than a wholesale rewrite.
 - Be concrete and practical — things you could actually say or do, not platitudes.
 - Suggested answers must be usable verbatim as a starting point.
-- Keep each section tight; this is read on the way into the room.`,
-          },
+- Keep each section tight; this is read on the way into the room.
+- Return one entry per requested section, same keys and titles, in the same order.`,
+        messages: [
           {
             role: "user",
             content: `Meeting context:\n${context || "(minimal context provided)"}\n\nSections to write (key — title — what it should contain):\n${wanted
               .map((s) => `- ${s.key} — ${s.title} — ${s.prompt}`)
               .join("\n")}${
               previous
-                ? `\n\nA previous version of the brief exists. Revise it per this guidance, keeping what wasn't asked to change:\n${JSON.stringify(previous).slice(0, 20000)}\n\nGuidance: ${guidance || "(light general improvement)"}`
+                ? `\n\nThe user's current version of ${previous.length === 1 ? "this section" : "these sections"} (build on it, don't discard it):\n${JSON.stringify(previous).slice(0, 20000)}\n\nGuidance: ${guidance || "(no specific guidance — make only a small, genuinely useful improvement)"}`
                 : guidance
                   ? `\n\nExtra guidance from the writer: ${guidance}`
                   : ""
@@ -170,7 +273,12 @@ Rules:
           },
         ],
       });
-      const parsed = JSON.parse(res.choices[0]?.message?.content || "{}");
+      if (res.stop_reason === "refusal")
+        return NextResponse.json(
+          { error: "The model declined this request — try rephrasing." },
+          { status: 502 },
+        );
+      const parsed = JSON.parse(firstText(res) || "{}");
       const out = (Array.isArray(parsed.sections) ? parsed.sections : []).map(
         (s: { key?: unknown; title?: unknown; content?: unknown }) => ({
           key: String(s?.key || ""),
@@ -184,16 +292,12 @@ Rules:
     if (action === "autofill") {
       const meeting: MeetingPayload = body?.meeting || {};
       const context = meetingContext(meeting, "");
-      const res = await openai().chat.completions.create({
-        model: MODEL,
+      const res = await anthropic().messages.create({
+        model: WRITER_MODEL,
         temperature: 0.1,
         max_tokens: 1500,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content: `You extract structured meeting details from free-form background text, notes, and documents the writer provided. Return ONLY JSON:
-{"title":"","location":"","durationMin":0,"date":"","attendees":[{"name":"","role":"","org":"","notes":""}],"objectives":"","concerns":""}
+        output_config: { format: { type: "json_schema", schema: AUTOFILL_SCHEMA } },
+        system: `You extract structured meeting details from free-form background text, notes, and documents the writer provided.
 
 Rules:
 - Extract ONLY what is explicitly stated or unambiguously implied in the provided context. Never invent or guess.
@@ -204,11 +308,9 @@ Rules:
 - objectives: the writer's goals for the meeting, in their voice, plain text. "" if not stated.
 - concerns: worries/sensitivities stated, plain text. "" if none.
 - Use "" / [] / 0 for anything not present.`,
-          },
-          { role: "user", content: `Context:\n${context || "(empty)"}` },
-        ],
+        messages: [{ role: "user", content: `Context:\n${context || "(empty)"}` }],
       });
-      const parsed = JSON.parse(res.choices[0]?.message?.content || "{}");
+      const parsed = JSON.parse(firstText(res) || "{}");
       return NextResponse.json({
         title: String(parsed.title || ""),
         location: String(parsed.location || ""),
@@ -231,27 +333,27 @@ Rules:
       const context = String(body?.context || "").slice(0, 30000);
       const focus = String(body?.focus || "").slice(0, 2000);
       const count = Math.min(12, Math.max(4, Number(body?.count) || 8));
-      const res = await openai().chat.completions.create({
-        model: MODEL,
+      const res = await anthropic().messages.create({
+        model: WRITER_MODEL,
         temperature: 0.8,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content: `You are a creative, experienced strategist brainstorming for an upcoming meeting. The writer wants ideas for what ELSE they could bring up, showcase, or prepare — the things the sharpest people in their position would do. Return ONLY JSON {"ideas":[{"title":"...","detail":"..."}]} with exactly ${count} items.
+        max_tokens: 3000,
+        output_config: { format: { type: "json_schema", schema: IDEAS_SCHEMA } },
+        system: `You are a creative, experienced strategist brainstorming for an upcoming meeting. The writer wants ideas for what ELSE they could bring up, showcase, or prepare — the things the sharpest people in their position would do. Produce exactly ${count} items.
+
+${NO_FORMATTING_RULE}
 
 - Draw on what high performers typically present in this kind of meeting: relevant KPIs and metrics, wins worth showcasing, stories, data, pre-empting questions, smart asks.
 - title: a short punchy label (3-8 words).
 - detail: 1-3 sentences making it concrete — if you suggest "showcase KPIs", NAME the specific KPIs someone in their role would show. It's fine to suggest ideas beyond the provided context here (they are suggestions, clearly framed as such), but tailor everything to the meeting type, audience, and objectives.
 - No duplicates of what's obviously already in their plan; add angles they haven't thought of.`,
-          },
+        messages: [
           {
             role: "user",
             content: `Meeting context:\n${context}${focus ? `\n\nThe writer wants ideas about: ${focus}` : ""}`,
           },
         ],
       });
-      const parsed = JSON.parse(res.choices[0]?.message?.content || "{}");
+      const parsed = JSON.parse(firstText(res) || "{}");
       const ideas = (Array.isArray(parsed.ideas) ? parsed.ideas : []).map(
         (i: { title?: unknown; detail?: unknown }) => ({
           title: String(i?.title || ""),
@@ -265,25 +367,25 @@ Rules:
       const context = String(body?.context || "").slice(0, 30000);
       const briefText = String(body?.briefText || "").slice(0, 20000);
       const count = Math.min(12, Math.max(3, Number(body?.count) || 8));
-      const res = await openai().chat.completions.create({
-        model: MODEL,
+      const res = await anthropic().messages.create({
+        model: WRITER_MODEL,
         temperature: 0.6,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content: `You play the toughest realistic version of the other side of an upcoming meeting. Return ONLY JSON {"questions":[{"question":"...","modelAnswer":"..."}]} with exactly ${count} items.
+        max_tokens: 4000,
+        output_config: { format: { type: "json_schema", schema: GRILL_SCHEMA } },
+        system: `You play the toughest realistic version of the other side of an upcoming meeting. Produce exactly ${count} items.
+
+${NO_FORMATTING_RULE}
 
 - Questions: the hardest things they could genuinely ask given the context — skeptical, specific, occasionally uncomfortable. No softballs. Vary the angle (data, motives, competition, logistics, past failures).
 - modelAnswer: a strong, honest answer the writer could give, grounded only in the provided context (2-5 sentences, spoken language). Where the context lacks the needed fact, show how to answer gracefully without making things up.`,
-          },
+        messages: [
           {
             role: "user",
             content: `Meeting context:\n${context}${briefText ? `\n\nThe prepared brief:\n${briefText}` : ""}`,
           },
         ],
       });
-      const parsed = JSON.parse(res.choices[0]?.message?.content || "{}");
+      const parsed = JSON.parse(firstText(res) || "{}");
       const questions = (Array.isArray(parsed.questions) ? parsed.questions : []).map(
         (q: { question?: unknown; modelAnswer?: unknown }) => ({
           question: String(q?.question || ""),
@@ -298,30 +400,25 @@ Rules:
       const modelAnswer = String(body?.modelAnswer || "");
       const userAnswer = String(body?.userAnswer || "").slice(0, 8000);
       const context = String(body?.context || "").slice(0, 20000);
-      const res = await openai().chat.completions.create({
-        model: MODEL,
+      const res = await anthropic().messages.create({
+        model: WRITER_MODEL,
         temperature: 0.4,
         max_tokens: 800,
-        messages: [
-          {
-            role: "system",
-            content: `You are a sharp, supportive speaking coach. The user practiced answering a hard meeting question out loud (you see the transcript) or in writing. Give coaching as short plain text:
+        system: `You are a sharp, supportive speaking coach. The user practiced answering a hard meeting question out loud (you see the transcript) or in writing. Give coaching as short plain text:
 
 1. One sentence on what worked.
 2. 2-4 specific improvements (structure, evidence, confidence, length, hedging, filler) — quote their words where useful.
 3. A one-line stronger version of their core message.
 
-Be direct and specific to THEIR answer, never generic. No markdown headings, no bullets symbols other than "-".`,
-          },
+Be direct and specific to THEIR answer, never generic. No markdown headings, no bold, no bullet symbols other than "-".`,
+        messages: [
           {
             role: "user",
             content: `Meeting context:\n${context}\n\nQuestion asked: ${question}\n\nTheir answer:\n${userAnswer}\n\n(For your reference, a strong model answer: ${modelAnswer})`,
           },
         ],
       });
-      return NextResponse.json({
-        coaching: res.choices[0]?.message?.content?.trim() || "",
-      });
+      return NextResponse.json({ coaching: firstText(res) });
     }
 
     if (action === "debrief") {
@@ -329,26 +426,23 @@ Be direct and specific to THEIR answer, never generic. No markdown headings, no 
       const context = String(body?.context || "").slice(0, 10000);
       if (!transcript.trim())
         return NextResponse.json({ error: "No transcript provided" }, { status: 400 });
-      const res = await openai().chat.completions.create({
-        model: MODEL,
+      const res = await anthropic().messages.create({
+        model: WRITER_MODEL,
         temperature: 0.3,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content: `You distill a meeting transcript/notes into a debrief. Return ONLY JSON:
-{"summary":"...","actions":["...","..."]}
+        max_tokens: 4000,
+        output_config: { format: { type: "json_schema", schema: DEBRIEF_SCHEMA } },
+        system: `You distill a meeting transcript/notes into a debrief.
 
-- summary: a nested bullet outline as plain text ("- " bullets, 2-space indents): what was discussed, decisions, positions taken, open items. Complete sentences, preserve names/figures, never invent.
+- summary: a nested bullet outline as plain text ("- " bullets, 2-space indents): what was discussed, decisions, positions taken, open items. Complete sentences, preserve names/figures, never invent. No bold, no markdown.
 - actions: every concrete follow-up action implied or promised, each a single imperative sentence with owner if stated (e.g. "Send Dr. Chen the phase 3 subgroup data by Friday").`,
-          },
+        messages: [
           {
             role: "user",
             content: `${context ? `Meeting context:\n${context}\n\n` : ""}Transcript/notes:\n${transcript}`,
           },
         ],
       });
-      const parsed = JSON.parse(res.choices[0]?.message?.content || "{}");
+      const parsed = JSON.parse(firstText(res) || "{}");
       return NextResponse.json({
         summary: String(parsed.summary || ""),
         actions: (Array.isArray(parsed.actions) ? parsed.actions : []).map(String),

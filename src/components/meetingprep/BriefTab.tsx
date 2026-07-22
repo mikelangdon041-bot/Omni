@@ -73,7 +73,8 @@ export function BriefTab({
   userId,
   busy,
   briefStale,
-  generate,
+  generateDirect,
+  generateWithPreview,
   goSetup,
   customSections,
   saveCustomSections,
@@ -83,7 +84,10 @@ export function BriefTab({
   userId: string | null;
   busy: string | null;
   briefStale: boolean;
-  generate: (opts?: GenerateOpts) => Promise<boolean>;
+  /** Only for the very first generation — applies straight away. */
+  generateDirect: (opts?: GenerateOpts) => Promise<void>;
+  /** Everything else — shows a preview the user must apply. */
+  generateWithPreview: (opts?: GenerateOpts) => Promise<void>;
   goSetup: () => void;
   customSections: CustomSection[];
   saveCustomSections: (s: CustomSection[]) => void;
@@ -190,7 +194,7 @@ export function BriefTab({
               <Button variant="secondary" onClick={goSetup}>
                 Back to Setup
               </Button>
-              <Button onClick={() => void generate()}>
+              <Button onClick={() => void generateDirect()}>
                 <Sparkles size={16} /> Generate the brief
               </Button>
             </div>
@@ -214,7 +218,7 @@ export function BriefTab({
             size="sm"
             className="shrink-0 !bg-amber-600 hover:!bg-amber-700"
             disabled={!!busy}
-            onClick={() => void generate()}
+            onClick={() => void generateWithPreview()}
           >
             <RefreshCw size={14} className={busy === "all" ? "animate-spin" : ""} />
             {busy === "all" ? "Updating…" : "Update the brief"}
@@ -304,7 +308,9 @@ export function BriefTab({
                     <RegenerateControl
                       canRedoPlain={isDirty || briefStale}
                       busy={sectionBusy}
-                      onRegenerate={(g) => void generate({ onlyKey: s.key, guidance: g })}
+                      onRegenerate={(g) =>
+                        void generateWithPreview({ onlyKey: s.key, guidance: g })
+                      }
                     />
                   </div>
                 </>
@@ -332,8 +338,8 @@ export function BriefTab({
             disabled={!!busy || !guidance.trim()}
             onClick={async () => {
               const g = guidance.trim();
-              const ok = await generate({ refine: true, guidance: g });
-              if (ok) setGuidance("");
+              await generateWithPreview({ refine: true, guidance: g });
+              setGuidance("");
             }}
           >
             <Sparkles size={14} /> {busy === "all" ? "Refining…" : "Refine brief"}
@@ -357,7 +363,7 @@ export function BriefTab({
           const key = `custom_${Date.now()}`;
           if (permanent) saveCustomSections([...customSections, { key, title, prompt }]);
           setShowAdd(false);
-          void generate({ extra: { key, title, prompt } });
+          void generateWithPreview({ extra: { key, title, prompt } });
         }}
       />
     </div>

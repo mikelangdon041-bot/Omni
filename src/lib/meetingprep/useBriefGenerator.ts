@@ -4,6 +4,11 @@
 // tab) so a running generation keeps going while the user switches tabs, and
 // the Setup tab's "Generate brief" CTA can kick it off and jump to the Brief
 // tab immediately.
+//
+// `generate()` only fetches the AI's proposal — it never writes to the
+// meeting. The caller previews the proposal (old vs new) and calls
+// `applyGenerated()` to actually save it, so nothing the AI writes lands on
+// the brief without the user seeing it first.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useToast } from "@/components/ui/Feedback";
@@ -17,7 +22,7 @@ import {
 } from "./types";
 
 export interface GenerateOpts {
-  /** Redo just this section (previous content is provided to the AI). */
+  /** Redo just this section (only that section's own current content is sent as context). */
   onlyKey?: string;
   /** Free-text guidance about what should be different. */
   guidance?: string;
@@ -25,6 +30,12 @@ export interface GenerateOpts {
   refine?: boolean;
   /** Generate one brand-new section and append it. */
   extra?: { key: string; title: string; prompt: string };
+}
+
+export interface GenerateResult {
+  /** The sections the AI proposed (only — never auto-applied). */
+  incoming: BriefSection[];
+  opts: GenerateOpts;
 }
 
 export function useBriefGenerator({
@@ -50,9 +61,9 @@ export function useBriefGenerator({
   }, [meeting]);
 
   const generate = useCallback(
-    async (opts: GenerateOpts = {}): Promise<boolean> => {
+    async (opts: GenerateOpts = {}): Promise<GenerateResult | null> => {
       const m = mRef.current;
-      if (!m) return false;
+      if (!m) return null;
       const sections = m.brief?.sections || [];
 
       // Standard sections + saved profile sections + any one-off sections
@@ -64,6 +75,15 @@ export function useBriefGenerator({
           blueprint.push({ key: s.key, title: s.title, prompt: `Section "${s.title}" as before.` });
         }
       }
+
+      // A section redo only sends THAT section's own current content as
+      // context — never the rest of the brief — so the model can't touch
+      // anything else and has nothing to "improve" beyond what was asked.
+      const previousSections = opts.onlyKey
+        ? sections.filter((s) => s.key === opts.onlyKey)
+        : opts.refine
+          ? sections
+          : undefined;
 
       setBusy(opts.extra ? opts.extra.key : opts.onlyKey || "all");
       try {
@@ -93,57 +113,67 @@ export function useBriefGenerator({
                 text: d.text,
               })),
             },
-            sections: opts.extra ? [opts.extra] : blueprint,
+            sections: opts.extra
+              ? [opts.extra]
+              : opts.onlyKey
+                ? blueprint.filter((s) => s.key === opts.onlyKey)
+                : blueprint,
             kolId: m.kol_id || "",
             guidance: opts.guidance || "",
-            previousSections: opts.refine || opts.onlyKey ? sections : undefined,
+            previousSections,
             onlyKey: opts.onlyKey || "",
           }),
         });
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || "Brief generation failed");
-        // Snapshot each freshly-written section's content so the UI can
-        // later tell it apart from a hand-edited (dirty) one.
-        const incoming: BriefSection[] = (json.sections || []).map((s: BriefSection) => ({
-          ...s,
-          generatedContent: s.content,
-        }));
-
-        const latest = mRef.current;
-        if (!latest) return false;
-        const cur = latest.brief?.sections || [];
-        let next: BriefSection[];
-        const fullRegen = !opts.extra && !opts.onlyKey;
-        if (opts.extra) {
-          next = [...cur, ...incoming];
-        } else if (opts.onlyKey) {
-          next = cur.map((s) => incoming.find((n) => n.key === s.key) || s);
-        } else {
-          next = incoming;
-        }
-        save({
-          brief: {
-            ...latest.brief,
-            sections: next,
-            generatedAt: new Date().toISOString(),
-            // A single section redo (or adding one new section) only
-            // refreshes part of the brief — the rest may still be stale
-            // relative to the current setup, so only a full regenerate or
-            // whole-brief refine gets to clear the stale flag.
-            sourceFingerprint: fullRegen
-              ? setupFingerprint(latest)
-              : latest.brief?.sourceFingerprint,
-          },
-        });
-        return true;
+        const incoming: BriefSection[] = json.sections || [];
+        if (!incoming.length) throw new Error("The model returned nothing usable — try again.");
+        return { incoming, opts };
       } catch (e) {
         toast("error", (e as Error).message);
-        return false;
+        return null;
       } finally {
         setBusy(null);
       }
     },
-    [customSections, flush, save, toast],
+    [customSections, flush, toast],
+  );
+
+  // Writes a previously-fetched proposal to the meeting. Called only after
+  // the user reviews and accepts it.
+  const applyGenerated = useCallback(
+    (incoming: BriefSection[], opts: GenerateOpts) => {
+      const latest = mRef.current;
+      if (!latest) return;
+      // Snapshot each freshly-written section's content so the UI can later
+      // tell it apart from a hand-edited (dirty) one.
+      const stamped = incoming.map((s) => ({ ...s, generatedContent: s.content }));
+      const cur = latest.brief?.sections || [];
+      let next: BriefSection[];
+      const fullRegen = !opts.extra && !opts.onlyKey;
+      if (opts.extra) {
+        next = [...cur, ...stamped];
+      } else if (opts.onlyKey) {
+        next = cur.map((s) => stamped.find((n) => n.key === s.key) || s);
+      } else {
+        next = stamped;
+      }
+      save({
+        brief: {
+          ...latest.brief,
+          sections: next,
+          generatedAt: new Date().toISOString(),
+          // A single section redo (or adding one new section) only
+          // refreshes part of the brief — the rest may still be stale
+          // relative to the current setup, so only a full regenerate or
+          // whole-brief refine gets to clear the stale flag.
+          sourceFingerprint: fullRegen
+            ? setupFingerprint(latest)
+            : latest.brief?.sourceFingerprint,
+        },
+      });
+    },
+    [save],
   );
 
   const m = meeting;
@@ -154,5 +184,5 @@ export function useBriefGenerator({
       m.brief.sourceFingerprint !== setupFingerprint(m),
   );
 
-  return { busy, generate, briefStale };
+  return { busy, generate, applyGenerated, briefStale };
 }
