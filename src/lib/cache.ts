@@ -7,10 +7,11 @@ const PREFIX = "omni-cache:";
 const MAX_ITEM_ENTRIES = 10;
 
 // Namespaces that hold larger per-item payloads (a full meeting brief, a
-// full doc, a full deck…) get pruned to the most-recently-written N entries
-// so localStorage doesn't blow its quota. Add a namespace here any time a
-// module starts caching a per-item detail record.
-const PRUNED_NAMESPACES = ["mtg:", "doc:", "deck:"];
+// full doc, a full deck, a full conference contact or KOL profile…) get
+// pruned to the most-recently-written N entries so localStorage doesn't blow
+// its quota. Add a namespace here any time a module starts caching a
+// per-item detail record that isn't naturally bounded to a handful of rows.
+const PRUNED_NAMESPACES = ["mtg:", "doc:", "deck:", "conf-contact:", "terr-kol:"];
 
 export function getCached<T>(key: string): T | null {
   try {

@@ -14,6 +14,13 @@ import type {
 const supabase = createClient();
 const UID_CACHE_KEY = "uid";
 
+// Unlike Conference Planning, Territory data is per-rep (every query below
+// filters by user_id or kol_id) with no realtime subscription anywhere in
+// this module — it's a plain one-shot fetch, same shape as Meeting Prep /
+// Writing Studio. So these hooks use the simple instant-paint-then-refresh
+// pattern (read cache on mount, paint it, refetch in the background, write
+// the cache back on every change) with no ordering guard needed.
+
 // Resolve the current rep's auth user id (client-side, from the session
 // cookie). `supabase.auth.getUser()` is itself a network round trip, which
 // otherwise serializes in front of every per-user data fetch that depends on
@@ -44,9 +51,16 @@ export function useUserId() {
 // ------------------------------------------------------------------
 // KOLs
 // ------------------------------------------------------------------
+function cacheEachKOL(rows: KOL[]) {
+  // The list query already selects every column, so each row IS the same
+  // full record the detail page needs — warm every KOL's detail cache too.
+  for (const row of rows) setCached(`terr-kol:${row.id}`, { _t: Date.now(), row });
+}
+
 export function useKOLs(userId: string | null) {
-  const [kols, setKols] = useState<KOL[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = userId ? `terr-kols:${userId}` : null;
+  const [kols, setKols] = useState<KOL[]>(() => (cacheKey && getCached<KOL[]>(cacheKey)) || []);
+  const [loading, setLoading] = useState(() => !(cacheKey && getCached<KOL[]>(cacheKey)));
 
   const refresh = useCallback(async () => {
     if (!userId) return;
@@ -55,8 +69,11 @@ export function useKOLs(userId: string | null) {
       .select("*")
       .eq("user_id", userId)
       .order("created_at", { ascending: false });
-    setKols((data as KOL[]) || []);
+    const rows = (data as KOL[]) || [];
+    setKols(rows);
     setLoading(false);
+    setCached(`terr-kols:${userId}`, rows);
+    cacheEachKOL(rows);
   }, [userId]);
 
   useEffect(() => {
@@ -73,7 +90,12 @@ export function useKOLs(userId: string | null) {
         .single();
       if (error || !data) return null;
       const kol = data as KOL;
-      setKols((prev) => [kol, ...prev]);
+      setKols((prev) => {
+        const next = [kol, ...prev];
+        if (userId) setCached(`terr-kols:${userId}`, next);
+        return next;
+      });
+      setCached(`terr-kol:${kol.id}`, { _t: Date.now(), row: kol });
 
       // Auto-geocode the address in the background so it appears on the map.
       if (kol.address && (kol.latitude == null || kol.longitude == null)) {
@@ -87,9 +109,13 @@ export function useKOLs(userId: string | null) {
           .then(({ lat, lng }) => {
             if (lat != null && lng != null) {
               supabase.from("kols").update({ latitude: lat, longitude: lng }).eq("id", kol.id);
-              setKols((prev) =>
-                prev.map((k) => (k.id === kol.id ? { ...k, latitude: lat, longitude: lng } : k)),
-              );
+              setKols((prev) => {
+                const next = prev.map((k) =>
+                  k.id === kol.id ? { ...k, latitude: lat, longitude: lng } : k,
+                );
+                if (userId) setCached(`terr-kols:${userId}`, next);
+                return next;
+              });
             }
           })
           .catch(() => {});
@@ -106,23 +132,45 @@ export function useKOLs(userId: string | null) {
       const rows = partials.map((p) => ({ ...p, user_id: userId }));
       const { data, error } = await supabase.from("kols").insert(rows).select("*");
       if (error) throw new Error(error.message);
-      if (data) setKols((prev) => [...(data as KOL[]), ...prev]);
+      if (data) {
+        const inserted = data as KOL[];
+        setKols((prev) => {
+          const next = [...inserted, ...prev];
+          setCached(`terr-kols:${userId}`, next);
+          return next;
+        });
+        cacheEachKOL(inserted);
+      }
       return data?.length ?? 0;
     },
     [userId],
   );
 
-  const update = useCallback(async (id: string, partial: Partial<KOL>) => {
-    setKols((prev) =>
-      prev.map((k) => (k.id === id ? { ...k, ...partial } : k)),
-    );
-    await supabase.from("kols").update(partial).eq("id", id);
-  }, []);
+  const update = useCallback(
+    async (id: string, partial: Partial<KOL>) => {
+      setKols((prev) => {
+        const next = prev.map((k) => (k.id === id ? { ...k, ...partial } : k));
+        if (userId) setCached(`terr-kols:${userId}`, next);
+        const updated = next.find((k) => k.id === id);
+        if (updated) setCached(`terr-kol:${id}`, { _t: Date.now(), row: updated });
+        return next;
+      });
+      await supabase.from("kols").update(partial).eq("id", id);
+    },
+    [userId],
+  );
 
-  const remove = useCallback(async (id: string) => {
-    setKols((prev) => prev.filter((k) => k.id !== id));
-    await supabase.from("kols").delete().eq("id", id);
-  }, []);
+  const remove = useCallback(
+    async (id: string) => {
+      setKols((prev) => {
+        const next = prev.filter((k) => k.id !== id);
+        if (userId) setCached(`terr-kols:${userId}`, next);
+        return next;
+      });
+      await supabase.from("kols").delete().eq("id", id);
+    },
+    [userId],
+  );
 
   // Combine duplicate KOLs into one profile: reassign their history to the
   // primary, fill any empty fields on the primary from the duplicates, then
@@ -178,13 +226,16 @@ export function useKOLs(userId: string | null) {
 }
 
 export function useKOL(id: string) {
-  const [kol, setKol] = useState<KOL | null>(null);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = `terr-kol:${id}`;
+  const [kol, setKol] = useState<KOL | null>(() => getCached<{ row: KOL }>(cacheKey)?.row ?? null);
+  const [loading, setLoading] = useState(() => !getCached<{ row: KOL }>(cacheKey));
 
   const refresh = useCallback(async () => {
     const { data } = await supabase.from("kols").select("*").eq("id", id).single();
-    setKol((data as KOL) || null);
+    const row = (data as KOL) || null;
+    setKol(row);
     setLoading(false);
+    if (row) setCached(`terr-kol:${id}`, { _t: Date.now(), row });
   }, [id]);
 
   useEffect(() => {
@@ -195,7 +246,11 @@ export function useKOL(id: string) {
   // surface silent failures (e.g. a column that needs a pending migration).
   const update = useCallback(
     async (partial: Partial<KOL>) => {
-      setKol((prev) => (prev ? { ...prev, ...partial } : prev));
+      setKol((prev) => {
+        const next = prev ? { ...prev, ...partial } : prev;
+        if (next) setCached(`terr-kol:${id}`, { _t: Date.now(), row: next });
+        return next;
+      });
       const { error } = await supabase.from("kols").update(partial).eq("id", id);
       return error?.message ?? null;
     },
@@ -209,8 +264,9 @@ export function useKOL(id: string) {
 // Activities
 // ------------------------------------------------------------------
 export function useActivities(kolId: string) {
-  const [activities, setActivities] = useState<Activity[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = `terr-activities:${kolId}`;
+  const [activities, setActivities] = useState<Activity[]>(() => getCached<Activity[]>(cacheKey) || []);
+  const [loading, setLoading] = useState(() => !getCached<Activity[]>(cacheKey));
 
   const refresh = useCallback(async () => {
     const { data } = await supabase
@@ -218,8 +274,10 @@ export function useActivities(kolId: string) {
       .select("*")
       .eq("kol_id", kolId)
       .order("date", { ascending: false });
-    setActivities((data as Activity[]) || []);
+    const rows = (data as Activity[]) || [];
+    setActivities(rows);
     setLoading(false);
+    setCached(`terr-activities:${kolId}`, rows);
   }, [kolId]);
 
   useEffect(() => {
@@ -233,7 +291,13 @@ export function useActivities(kolId: string) {
         .insert({ ...partial, kol_id: kolId })
         .select("*")
         .single();
-      if (data) setActivities((prev) => [data as Activity, ...prev]);
+      if (data) {
+        setActivities((prev) => {
+          const next = [data as Activity, ...prev];
+          setCached(`terr-activities:${kolId}`, next);
+          return next;
+        });
+      }
       return (data as Activity) || null;
     },
     [kolId],
@@ -246,8 +310,9 @@ export function useActivities(kolId: string) {
 // Meetings
 // ------------------------------------------------------------------
 export function useMeetings(kolId: string) {
-  const [meetings, setMeetings] = useState<Meeting[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = `terr-meetings:${kolId}`;
+  const [meetings, setMeetings] = useState<Meeting[]>(() => getCached<Meeting[]>(cacheKey) || []);
+  const [loading, setLoading] = useState(() => !getCached<Meeting[]>(cacheKey));
 
   const refresh = useCallback(async () => {
     const { data } = await supabase
@@ -255,8 +320,10 @@ export function useMeetings(kolId: string) {
       .select("*")
       .eq("kol_id", kolId)
       .order("meeting_number", { ascending: false });
-    setMeetings((data as Meeting[]) || []);
+    const rows = (data as Meeting[]) || [];
+    setMeetings(rows);
     setLoading(false);
+    setCached(`terr-meetings:${kolId}`, rows);
   }, [kolId]);
 
   useEffect(() => {
@@ -270,23 +337,41 @@ export function useMeetings(kolId: string) {
         .insert({ ...partial, kol_id: kolId })
         .select("*")
         .single();
-      if (data) setMeetings((prev) => [data as Meeting, ...prev]);
+      if (data) {
+        setMeetings((prev) => {
+          const next = [data as Meeting, ...prev];
+          setCached(`terr-meetings:${kolId}`, next);
+          return next;
+        });
+      }
       return (data as Meeting) || null;
     },
     [kolId],
   );
 
-  const update = useCallback(async (id: string, partial: Partial<Meeting>) => {
-    setMeetings((prev) =>
-      prev.map((m) => (m.id === id ? { ...m, ...partial } : m)),
-    );
-    await supabase.from("meetings").update(partial).eq("id", id);
-  }, []);
+  const update = useCallback(
+    async (id: string, partial: Partial<Meeting>) => {
+      setMeetings((prev) => {
+        const next = prev.map((m) => (m.id === id ? { ...m, ...partial } : m));
+        setCached(`terr-meetings:${kolId}`, next);
+        return next;
+      });
+      await supabase.from("meetings").update(partial).eq("id", id);
+    },
+    [kolId],
+  );
 
-  const remove = useCallback(async (id: string) => {
-    setMeetings((prev) => prev.filter((m) => m.id !== id));
-    await supabase.from("meetings").delete().eq("id", id);
-  }, []);
+  const remove = useCallback(
+    async (id: string) => {
+      setMeetings((prev) => {
+        const next = prev.filter((m) => m.id !== id);
+        setCached(`terr-meetings:${kolId}`, next);
+        return next;
+      });
+      await supabase.from("meetings").delete().eq("id", id);
+    },
+    [kolId],
+  );
 
   return { meetings, loading, refresh, add, update, remove };
 }
@@ -295,8 +380,9 @@ export function useMeetings(kolId: string) {
 // Quarterly goals
 // ------------------------------------------------------------------
 export function useQuarterlyGoals(kolId: string) {
-  const [goals, setGoals] = useState<QuarterlyGoal[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = `terr-goals:${kolId}`;
+  const [goals, setGoals] = useState<QuarterlyGoal[]>(() => getCached<QuarterlyGoal[]>(cacheKey) || []);
+  const [loading, setLoading] = useState(() => !getCached<QuarterlyGoal[]>(cacheKey));
 
   const refresh = useCallback(async () => {
     const { data } = await supabase
@@ -306,8 +392,10 @@ export function useQuarterlyGoals(kolId: string) {
       .order("year", { ascending: true })
       .order("quarter", { ascending: true })
       .order("sort_order", { ascending: true });
-    setGoals((data as QuarterlyGoal[]) || []);
+    const rows = (data as QuarterlyGoal[]) || [];
+    setGoals(rows);
     setLoading(false);
+    setCached(`terr-goals:${kolId}`, rows);
   }, [kolId]);
 
   useEffect(() => {
@@ -321,7 +409,13 @@ export function useQuarterlyGoals(kolId: string) {
         .insert({ ...partial, kol_id: kolId })
         .select("*")
         .single();
-      if (data) setGoals((prev) => [...prev, data as QuarterlyGoal]);
+      if (data) {
+        setGoals((prev) => {
+          const next = [...prev, data as QuarterlyGoal];
+          setCached(`terr-goals:${kolId}`, next);
+          return next;
+        });
+      }
       return (data as QuarterlyGoal) || null;
     },
     [kolId],
@@ -329,18 +423,27 @@ export function useQuarterlyGoals(kolId: string) {
 
   const update = useCallback(
     async (id: string, partial: Partial<QuarterlyGoal>) => {
-      setGoals((prev) =>
-        prev.map((g) => (g.id === id ? { ...g, ...partial } : g)),
-      );
+      setGoals((prev) => {
+        const next = prev.map((g) => (g.id === id ? { ...g, ...partial } : g));
+        setCached(`terr-goals:${kolId}`, next);
+        return next;
+      });
       await supabase.from("quarterly_goals").update(partial).eq("id", id);
     },
-    [],
+    [kolId],
   );
 
-  const remove = useCallback(async (id: string) => {
-    setGoals((prev) => prev.filter((g) => g.id !== id));
-    await supabase.from("quarterly_goals").delete().eq("id", id);
-  }, []);
+  const remove = useCallback(
+    async (id: string) => {
+      setGoals((prev) => {
+        const next = prev.filter((g) => g.id !== id);
+        setCached(`terr-goals:${kolId}`, next);
+        return next;
+      });
+      await supabase.from("quarterly_goals").delete().eq("id", id);
+    },
+    [kolId],
+  );
 
   const carryForward = useCallback(
     async (goal: QuarterlyGoal, toYear: number, toQuarter: number) => {
@@ -356,10 +459,16 @@ export function useQuarterlyGoals(kolId: string) {
         })
         .select("*")
         .single();
-      if (data) setGoals((prev) => [...prev, data as QuarterlyGoal]);
+      if (data) {
+        setGoals((prev) => {
+          const next = [...prev, data as QuarterlyGoal];
+          setCached(`terr-goals:${kolId}`, next);
+          return next;
+        });
+      }
       return (data as QuarterlyGoal) || null;
     },
-    [],
+    [kolId],
   );
 
   return { goals, loading, refresh, add, update, remove, carryForward };
@@ -369,8 +478,11 @@ export function useQuarterlyGoals(kolId: string) {
 // Reminders / tasks
 // ------------------------------------------------------------------
 export function useReminders(userId: string | null) {
-  const [reminders, setReminders] = useState<Reminder[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = userId ? `terr-reminders:${userId}` : null;
+  const [reminders, setReminders] = useState<Reminder[]>(
+    () => (cacheKey && getCached<Reminder[]>(cacheKey)) || [],
+  );
+  const [loading, setLoading] = useState(() => !(cacheKey && getCached<Reminder[]>(cacheKey)));
 
   const refresh = useCallback(async () => {
     if (!userId) return;
@@ -380,8 +492,10 @@ export function useReminders(userId: string | null) {
       .eq("user_id", userId)
       .eq("dismissed", false)
       .order("due_date", { ascending: true });
-    setReminders((data as Reminder[]) || []);
+    const rows = (data as Reminder[]) || [];
+    setReminders(rows);
     setLoading(false);
+    setCached(`terr-reminders:${userId}`, rows);
   }, [userId]);
 
   useEffect(() => {
@@ -396,31 +510,54 @@ export function useReminders(userId: string | null) {
         .insert({ ...partial, user_id: userId })
         .select("*")
         .single();
-      if (data) setReminders((prev) => [...prev, data as Reminder]);
+      if (data) {
+        setReminders((prev) => {
+          const next = [...prev, data as Reminder];
+          setCached(`terr-reminders:${userId}`, next);
+          return next;
+        });
+      }
       return (data as Reminder) || null;
     },
     [userId],
   );
 
-  const complete = useCallback(async (id: string) => {
-    const at = new Date().toISOString();
-    setReminders((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, completed_at: at } : r)),
-    );
-    await supabase.from("reminders").update({ completed_at: at }).eq("id", id);
-  }, []);
+  const complete = useCallback(
+    async (id: string) => {
+      const at = new Date().toISOString();
+      setReminders((prev) => {
+        const next = prev.map((r) => (r.id === id ? { ...r, completed_at: at } : r));
+        if (userId) setCached(`terr-reminders:${userId}`, next);
+        return next;
+      });
+      await supabase.from("reminders").update({ completed_at: at }).eq("id", id);
+    },
+    [userId],
+  );
 
-  const uncomplete = useCallback(async (id: string) => {
-    setReminders((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, completed_at: null } : r)),
-    );
-    await supabase.from("reminders").update({ completed_at: null }).eq("id", id);
-  }, []);
+  const uncomplete = useCallback(
+    async (id: string) => {
+      setReminders((prev) => {
+        const next = prev.map((r) => (r.id === id ? { ...r, completed_at: null } : r));
+        if (userId) setCached(`terr-reminders:${userId}`, next);
+        return next;
+      });
+      await supabase.from("reminders").update({ completed_at: null }).eq("id", id);
+    },
+    [userId],
+  );
 
-  const dismiss = useCallback(async (id: string) => {
-    setReminders((prev) => prev.filter((r) => r.id !== id));
-    await supabase.from("reminders").update({ dismissed: true }).eq("id", id);
-  }, []);
+  const dismiss = useCallback(
+    async (id: string) => {
+      setReminders((prev) => {
+        const next = prev.filter((r) => r.id !== id);
+        if (userId) setCached(`terr-reminders:${userId}`, next);
+        return next;
+      });
+      await supabase.from("reminders").update({ dismissed: true }).eq("id", id);
+    },
+    [userId],
+  );
 
   const undismiss = useCallback(
     async (id: string) => {
@@ -430,12 +567,17 @@ export function useReminders(userId: string | null) {
     [refresh],
   );
 
-  const update = useCallback(async (id: string, partial: Partial<Reminder>) => {
-    setReminders((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, ...partial } : r)),
-    );
-    await supabase.from("reminders").update(partial).eq("id", id);
-  }, []);
+  const update = useCallback(
+    async (id: string, partial: Partial<Reminder>) => {
+      setReminders((prev) => {
+        const next = prev.map((r) => (r.id === id ? { ...r, ...partial } : r));
+        if (userId) setCached(`terr-reminders:${userId}`, next);
+        return next;
+      });
+      await supabase.from("reminders").update(partial).eq("id", id);
+    },
+    [userId],
+  );
 
   return {
     reminders,

@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { getCached, setCached } from "@/lib/cache";
 import {
   DEFAULT_CATEGORIES,
   type Announcement,
@@ -123,11 +124,47 @@ export function useRealtime(
 }
 
 // ------------------------------------------------------------------
+// Instant-paint cache for the list/detail hooks below (localStorage; see
+// src/lib/cache.ts). On mount each hook paints whatever it last saw instead
+// of a spinner, then refreshes in the background.
+//
+// For the hooks that also call useRealtime: realtime doesn't hand you a
+// payload to diff — it just tells you *something* on these tables changed,
+// and the existing pattern (above) is to re-run the same `refresh()` the
+// hook already uses on mount. So there's no per-row `updated_at` to compare
+// a cached snapshot against; the actual hazard is ordering, not staleness of
+// content. If the mount's catch-up refresh() is still in flight when a
+// realtime event fires a second refresh(), the two network calls can settle
+// out of order — the older one (started first) can resolve *after* the
+// newer one and stomp a fresher read with a staler one.
+//
+// useFetchGuard() closes that gap with a monotonic ticket instead: every
+// refresh() call grabs the next ticket when it *starts*, and only commits
+// its result if no newer refresh() has started by the time it *finishes*.
+// That's enough to guarantee the last-started fetch always wins, regardless
+// of which one's network response comes back first — without needing the
+// rows to carry a timestamp at all. (Local optimistic edits below don't get
+// their own cache write for the same reason: any write to one of these
+// org-shared tables — including ones made by this same tab — comes back
+// through the postgres_changes subscription and re-runs a guarded refresh(),
+// which is what actually persists it to cache.)
+function useFetchGuard() {
+  const gen = useRef(0);
+  const start = useCallback(() => ++gen.current, []);
+  const isCurrent = useCallback((ticket: number) => ticket === gen.current, []);
+  return { start, isCurrent };
+}
+
+// ------------------------------------------------------------------
 // Conferences
 // ------------------------------------------------------------------
+const CONFERENCES_CACHE_KEY = "conf-list";
+
 export function useConferences() {
-  const [conferences, setConferences] = useState<Conference[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [conferences, setConferences] = useState<Conference[]>(
+    () => getCached<Conference[]>(CONFERENCES_CACHE_KEY) || [],
+  );
+  const [loading, setLoading] = useState(() => !getCached<Conference[]>(CONFERENCES_CACHE_KEY));
 
   const refresh = useCallback(async () => {
     const { data } = await supabase
@@ -135,14 +172,18 @@ export function useConferences() {
       .select("*")
       .eq("active", true)
       .order("start_date", { ascending: false });
-    setConferences((data as Conference[]) || []);
+    const rows = (data as Conference[]) || [];
+    setConferences(rows);
     setLoading(false);
+    setCached(CONFERENCES_CACHE_KEY, rows);
   }, []);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
+  // No realtime on this list, so (unlike the hooks further down) optimistic
+  // edits here need their own cache write to keep the next instant-paint accurate.
   const add = useCallback(async (partial: Partial<Conference>) => {
     const {
       data: { user },
@@ -159,14 +200,20 @@ export function useConferences() {
       .select("*")
       .single();
     if (error || !data) return null;
-    setConferences((prev) => [data as Conference, ...prev]);
+    setConferences((prev) => {
+      const next = [data as Conference, ...prev];
+      setCached(CONFERENCES_CACHE_KEY, next);
+      return next;
+    });
     return data as Conference;
   }, []);
 
   const update = useCallback(async (id: string, partial: Partial<Conference>) => {
-    setConferences((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, ...partial } : c)),
-    );
+    setConferences((prev) => {
+      const next = prev.map((c) => (c.id === id ? { ...c, ...partial } : c));
+      setCached(CONFERENCES_CACHE_KEY, next);
+      return next;
+    });
     await supabase.from("conferences").update(partial).eq("id", id);
   }, []);
 
@@ -174,8 +221,11 @@ export function useConferences() {
 }
 
 export function useConference(id: string) {
-  const [conference, setConference] = useState<Conference | null>(null);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = `conf:${id}`;
+  const [conference, setConference] = useState<Conference | null>(
+    () => getCached<Conference>(cacheKey),
+  );
+  const [loading, setLoading] = useState(() => !getCached<Conference>(cacheKey));
 
   const refresh = useCallback(async () => {
     const { data } = await supabase
@@ -183,8 +233,10 @@ export function useConference(id: string) {
       .select("*")
       .eq("id", id)
       .single();
-    setConference((data as Conference) || null);
+    const row = (data as Conference) || null;
+    setConference(row);
     setLoading(false);
+    if (row) setCached(`conf:${id}`, row);
   }, [id]);
 
   useEffect(() => {
@@ -192,10 +244,15 @@ export function useConference(id: string) {
   }, [refresh]);
 
   // Optimistic; returns the DB error message (if any) so callers can surface
-  // silent failures (e.g. a column that needs a pending migration).
+  // silent failures (e.g. a column that needs a pending migration). No
+  // realtime on this hook, so keep the cache in sync here too.
   const update = useCallback(
     async (partial: Partial<Conference>) => {
-      setConference((prev) => (prev ? { ...prev, ...partial } : prev));
+      setConference((prev) => {
+        const next = prev ? { ...prev, ...partial } : prev;
+        if (next) setCached(`conf:${id}`, next);
+        return next;
+      });
       const { error } = await supabase.from("conferences").update(partial).eq("id", id);
       return error?.message ?? null;
     },
@@ -209,20 +266,28 @@ export function useConference(id: string) {
 // Attendees
 // ------------------------------------------------------------------
 export function useAttendees(conferenceId: string | null) {
-  const [attendees, setAttendees] = useState<Attendee[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = conferenceId ? `conf-attendees:${conferenceId}` : null;
+  const [attendees, setAttendees] = useState<Attendee[]>(
+    () => (cacheKey && getCached<Attendee[]>(cacheKey)) || [],
+  );
+  const [loading, setLoading] = useState(() => !(cacheKey && getCached<Attendee[]>(cacheKey)));
+  const { start, isCurrent } = useFetchGuard();
 
   const refresh = useCallback(async () => {
     if (!conferenceId) return;
+    const ticket = start();
     const { data } = await supabase
       .from("conference_attendees")
       .select("*")
       .eq("conference_id", conferenceId)
       .eq("active", true)
       .order("name");
-    setAttendees((data as Attendee[]) || []);
+    if (!isCurrent(ticket)) return; // a newer refresh (e.g. realtime) already landed
+    const rows = (data as Attendee[]) || [];
+    setAttendees(rows);
     setLoading(false);
-  }, [conferenceId]);
+    setCached(`conf-attendees:${conferenceId}`, rows);
+  }, [conferenceId, start, isCurrent]);
 
   useEffect(() => {
     void refresh();
@@ -354,11 +419,16 @@ export interface ShiftInput {
 }
 
 export function useEvents(conferenceId: string | null, userId?: string | null) {
-  const [events, setEvents] = useState<EventWithPeople[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = conferenceId ? `conf-events:${conferenceId}` : null;
+  const [events, setEvents] = useState<EventWithPeople[]>(
+    () => (cacheKey && getCached<EventWithPeople[]>(cacheKey)) || [],
+  );
+  const [loading, setLoading] = useState(() => !(cacheKey && getCached<EventWithPeople[]>(cacheKey)));
+  const { start, isCurrent } = useFetchGuard();
 
   const refresh = useCallback(async () => {
     if (!conferenceId) return;
+    const ticket = start();
     const [evRes, asRes, shRes] = await Promise.all([
       supabase
         .from("conf_events")
@@ -387,9 +457,11 @@ export function useEvents(conferenceId: string | null, userId?: string | null) {
         assignments: byEventA.get(e.id) || [],
         shifts: byEventS.get(e.id) || [],
       }));
+    if (!isCurrent(ticket)) return; // a newer refresh (e.g. realtime) already landed
     setEvents(rows);
     setLoading(false);
-  }, [conferenceId, userId]);
+    if (conferenceId) setCached(`conf-events:${conferenceId}`, rows);
+  }, [conferenceId, userId, start, isCurrent]);
 
   useEffect(() => {
     void refresh();
@@ -581,8 +653,9 @@ export function useEvents(conferenceId: string | null, userId?: string | null) {
 }
 
 export function useEvent(eventId: string) {
-  const [event, setEvent] = useState<EventWithPeople | null>(null);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = `conf-event:${eventId}`;
+  const [event, setEvent] = useState<EventWithPeople | null>(() => getCached(cacheKey));
+  const [loading, setLoading] = useState(() => !getCached(cacheKey));
 
   const refresh = useCallback(async () => {
     const [evRes, asRes, shRes] = await Promise.all([
@@ -591,11 +664,13 @@ export function useEvent(eventId: string) {
       supabase.from("conf_event_shifts").select("*").eq("event_id", eventId).order("sort_order"),
     ]);
     if (evRes.data) {
-      setEvent({
+      const row: EventWithPeople = {
         ...(evRes.data as ConfEvent),
         assignments: (asRes.data as EventAssignment[]) || [],
         shifts: (shRes.data as EventShift[]) || [],
-      });
+      };
+      setEvent(row);
+      setCached(`conf-event:${eventId}`, row);
     } else setEvent(null);
     setLoading(false);
   }, [eventId]);
@@ -604,9 +679,14 @@ export function useEvent(eventId: string) {
     void refresh();
   }, [refresh]);
 
+  // No realtime on this hook, so keep the cache in sync on optimistic edits too.
   const update = useCallback(
     async (partial: Partial<ConfEvent>) => {
-      setEvent((prev) => (prev ? { ...prev, ...partial } : prev));
+      setEvent((prev) => {
+        const next = prev ? { ...prev, ...partial } : prev;
+        if (next) setCached(`conf-event:${eventId}`, next);
+        return next;
+      });
       await supabase.from("conf_events").update(partial).eq("id", eventId);
     },
     [eventId],
@@ -619,17 +699,23 @@ export function useEvent(eventId: string) {
 // Session notes (per person per event)
 // ------------------------------------------------------------------
 export function useSessionNotes(conferenceId: string | null, eventId: string) {
-  const [notes, setNotes] = useState<SessionNote[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = `conf-session-notes:${eventId}`;
+  const [notes, setNotes] = useState<SessionNote[]>(() => getCached<SessionNote[]>(cacheKey) || []);
+  const [loading, setLoading] = useState(() => !getCached<SessionNote[]>(cacheKey));
+  const { start, isCurrent } = useFetchGuard();
 
   const refresh = useCallback(async () => {
+    const ticket = start();
     const { data } = await supabase
       .from("conf_session_notes")
       .select("*")
       .eq("event_id", eventId);
-    setNotes((data as SessionNote[]) || []);
+    if (!isCurrent(ticket)) return; // a newer refresh (e.g. realtime) already landed
+    const rows = (data as SessionNote[]) || [];
+    setNotes(rows);
     setLoading(false);
-  }, [eventId]);
+    setCached(`conf-session-notes:${eventId}`, rows);
+  }, [eventId, start, isCurrent]);
 
   useEffect(() => {
     void refresh();
@@ -660,19 +746,30 @@ export function useSessionNotes(conferenceId: string | null, eventId: string) {
 // Contacts
 // ------------------------------------------------------------------
 export function useContacts(conferenceId: string | null) {
-  const [contacts, setContacts] = useState<Contact[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = conferenceId ? `conf-contacts:${conferenceId}` : null;
+  const [contacts, setContacts] = useState<Contact[]>(
+    () => (cacheKey && getCached<Contact[]>(cacheKey)) || [],
+  );
+  const [loading, setLoading] = useState(() => !(cacheKey && getCached<Contact[]>(cacheKey)));
+  const { start, isCurrent } = useFetchGuard();
 
   const refresh = useCallback(async () => {
     if (!conferenceId) return;
+    const ticket = start();
     const { data } = await supabase
       .from("conf_contacts")
       .select("*")
       .eq("conference_id", conferenceId)
       .order("name");
-    setContacts((data as Contact[]) || []);
+    if (!isCurrent(ticket)) return; // a newer refresh (e.g. realtime) already landed
+    const rows = (data as Contact[]) || [];
+    setContacts(rows);
     setLoading(false);
-  }, [conferenceId]);
+    setCached(`conf-contacts:${conferenceId}`, rows);
+    // The list query selects every column, so each row IS the full record
+    // the detail page needs too — warm each contact's detail cache for free.
+    for (const row of rows) setCached(`conf-contact:${row.id}`, { _t: Date.now(), row });
+  }, [conferenceId, start, isCurrent]);
 
   useEffect(() => {
     void refresh();
@@ -702,22 +799,34 @@ export function useContacts(conferenceId: string | null) {
 }
 
 export function useContact(id: string) {
-  const [contact, setContact] = useState<Contact | null>(null);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = `conf-contact:${id}`;
+  const [contact, setContact] = useState<Contact | null>(
+    () => getCached<{ row: Contact }>(cacheKey)?.row ?? null,
+  );
+  const [loading, setLoading] = useState(() => !getCached<{ row: Contact }>(cacheKey));
 
   const refresh = useCallback(async () => {
     const { data } = await supabase.from("conf_contacts").select("*").eq("id", id).single();
-    setContact((data as Contact) || null);
+    const row = (data as Contact) || null;
+    setContact(row);
     setLoading(false);
+    if (row) setCached(`conf-contact:${id}`, { _t: Date.now(), row });
   }, [id]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
+  // No realtime on this hook directly (contacts list realtime warms this
+  // cache too, but a contact opened straight from a link needs its own
+  // write), so keep the cache in sync on optimistic edits here as well.
   const update = useCallback(
     async (partial: Partial<Contact>) => {
-      setContact((prev) => (prev ? { ...prev, ...partial } : prev));
+      setContact((prev) => {
+        const next = prev ? { ...prev, ...partial } : prev;
+        if (next) setCached(`conf-contact:${id}`, { _t: Date.now(), row: next });
+        return next;
+      });
       await supabase.from("conf_contacts").update(partial).eq("id", id);
     },
     [id],
@@ -727,18 +836,26 @@ export function useContact(id: string) {
 }
 
 export function useContactMeetings(conferenceId: string | null, contactId: string) {
-  const [meetings, setMeetings] = useState<ContactMeeting[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = `conf-contact-meetings:${contactId}`;
+  const [meetings, setMeetings] = useState<ContactMeeting[]>(
+    () => getCached<ContactMeeting[]>(cacheKey) || [],
+  );
+  const [loading, setLoading] = useState(() => !getCached<ContactMeeting[]>(cacheKey));
+  const { start, isCurrent } = useFetchGuard();
 
   const refresh = useCallback(async () => {
+    const ticket = start();
     const { data } = await supabase
       .from("conf_contact_meetings")
       .select("*")
       .eq("contact_id", contactId)
       .order("meeting_date", { ascending: false });
-    setMeetings((data as ContactMeeting[]) || []);
+    if (!isCurrent(ticket)) return; // a newer refresh (e.g. realtime) already landed
+    const rows = (data as ContactMeeting[]) || [];
+    setMeetings(rows);
     setLoading(false);
-  }, [contactId]);
+    setCached(`conf-contact-meetings:${contactId}`, rows);
+  }, [contactId, start, isCurrent]);
 
   useEffect(() => {
     void refresh();
@@ -780,11 +897,16 @@ export interface PosterWithReps extends Poster {
 }
 
 export function usePosters(conferenceId: string | null) {
-  const [posters, setPosters] = useState<PosterWithReps[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = conferenceId ? `conf-posters:${conferenceId}` : null;
+  const [posters, setPosters] = useState<PosterWithReps[]>(
+    () => (cacheKey && getCached<PosterWithReps[]>(cacheKey)) || [],
+  );
+  const [loading, setLoading] = useState(() => !(cacheKey && getCached<PosterWithReps[]>(cacheKey)));
+  const { start, isCurrent } = useFetchGuard();
 
   const refresh = useCallback(async () => {
     if (!conferenceId) return;
+    const ticket = start();
     const [pRes, rRes] = await Promise.all([
       supabase.from("conf_posters").select("*").eq("conference_id", conferenceId).order("created_at"),
       supabase.from("conf_poster_reps").select("*").eq("conference_id", conferenceId),
@@ -792,14 +914,15 @@ export function usePosters(conferenceId: string | null) {
     const reps = (rRes.data as PosterRep[]) || [];
     const byPoster = new Map<string, PosterRep[]>();
     for (const r of reps) byPoster.set(r.poster_id, [...(byPoster.get(r.poster_id) || []), r]);
-    setPosters(
-      (((pRes.data as Poster[]) || []).map((p) => ({
-        ...p,
-        reps: byPoster.get(p.id) || [],
-      })) as PosterWithReps[]),
-    );
+    const rows = ((pRes.data as Poster[]) || []).map((p) => ({
+      ...p,
+      reps: byPoster.get(p.id) || [],
+    })) as PosterWithReps[];
+    if (!isCurrent(ticket)) return; // a newer refresh (e.g. realtime) already landed
+    setPosters(rows);
     setLoading(false);
-  }, [conferenceId]);
+    setCached(`conf-posters:${conferenceId}`, rows);
+  }, [conferenceId, start, isCurrent]);
 
   useEffect(() => {
     void refresh();
@@ -854,17 +977,23 @@ export function usePosters(conferenceId: string | null) {
 }
 
 export function usePosterNotes(conferenceId: string | null, posterId: string) {
-  const [notes, setNotes] = useState<PosterNote[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = `conf-poster-notes:${posterId}`;
+  const [notes, setNotes] = useState<PosterNote[]>(() => getCached<PosterNote[]>(cacheKey) || []);
+  const [loading, setLoading] = useState(() => !getCached<PosterNote[]>(cacheKey));
+  const { start, isCurrent } = useFetchGuard();
 
   const refresh = useCallback(async () => {
+    const ticket = start();
     const { data } = await supabase
       .from("conf_poster_notes")
       .select("*")
       .eq("poster_id", posterId);
-    setNotes((data as PosterNote[]) || []);
+    if (!isCurrent(ticket)) return; // a newer refresh (e.g. realtime) already landed
+    const rows = (data as PosterNote[]) || [];
+    setNotes(rows);
     setLoading(false);
-  }, [posterId]);
+    setCached(`conf-poster-notes:${posterId}`, rows);
+  }, [posterId, start, isCurrent]);
 
   useEffect(() => {
     void refresh();
@@ -890,19 +1019,27 @@ export function usePosterNotes(conferenceId: string | null, posterId: string) {
 // Insights
 // ------------------------------------------------------------------
 export function useInsights(conferenceId: string | null) {
-  const [insights, setInsights] = useState<Insight[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = conferenceId ? `conf-insights:${conferenceId}` : null;
+  const [insights, setInsights] = useState<Insight[]>(
+    () => (cacheKey && getCached<Insight[]>(cacheKey)) || [],
+  );
+  const [loading, setLoading] = useState(() => !(cacheKey && getCached<Insight[]>(cacheKey)));
+  const { start, isCurrent } = useFetchGuard();
 
   const refresh = useCallback(async () => {
     if (!conferenceId) return;
+    const ticket = start();
     const { data } = await supabase
       .from("conf_insights")
       .select("*")
       .eq("conference_id", conferenceId)
       .order("created_at", { ascending: false });
-    setInsights((data as Insight[]) || []);
+    if (!isCurrent(ticket)) return; // a newer refresh (e.g. realtime) already landed
+    const rows = (data as Insight[]) || [];
+    setInsights(rows);
     setLoading(false);
-  }, [conferenceId]);
+    setCached(`conf-insights:${conferenceId}`, rows);
+  }, [conferenceId, start, isCurrent]);
 
   useEffect(() => {
     void refresh();
@@ -1065,24 +1202,43 @@ export type { DailySummary, BoothLog };
 // ------------------------------------------------------------------
 // Food
 // ------------------------------------------------------------------
+interface FoodCache {
+  orders: FoodOrder[];
+  items: FoodItem[];
+  assignments: FoodAssignment[];
+}
+
 export function useFood(conferenceId: string | null) {
-  const [orders, setOrders] = useState<FoodOrder[]>([]);
-  const [items, setItems] = useState<FoodItem[]>([]);
-  const [assignments, setAssignments] = useState<FoodAssignment[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = conferenceId ? `conf-food:${conferenceId}` : null;
+  const cached = cacheKey ? getCached<FoodCache>(cacheKey) : null;
+  const [orders, setOrders] = useState<FoodOrder[]>(() => cached?.orders || []);
+  const [items, setItems] = useState<FoodItem[]>(() => cached?.items || []);
+  const [assignments, setAssignments] = useState<FoodAssignment[]>(() => cached?.assignments || []);
+  const [loading, setLoading] = useState(() => !cached);
+  const { start, isCurrent } = useFetchGuard();
 
   const refresh = useCallback(async () => {
     if (!conferenceId) return;
+    const ticket = start();
     const [oRes, iRes, aRes] = await Promise.all([
       supabase.from("conf_food_orders").select("*").eq("conference_id", conferenceId).order("created_at"),
       supabase.from("conf_food_items").select("*").eq("conference_id", conferenceId),
       supabase.from("conf_food_assignments").select("*").eq("conference_id", conferenceId),
     ]);
-    setOrders((oRes.data as FoodOrder[]) || []);
-    setItems((iRes.data as FoodItem[]) || []);
-    setAssignments((aRes.data as FoodAssignment[]) || []);
+    if (!isCurrent(ticket)) return; // a newer refresh (e.g. realtime) already landed
+    const nextOrders = (oRes.data as FoodOrder[]) || [];
+    const nextItems = (iRes.data as FoodItem[]) || [];
+    const nextAssignments = (aRes.data as FoodAssignment[]) || [];
+    setOrders(nextOrders);
+    setItems(nextItems);
+    setAssignments(nextAssignments);
     setLoading(false);
-  }, [conferenceId]);
+    setCached(`conf-food:${conferenceId}`, {
+      orders: nextOrders,
+      items: nextItems,
+      assignments: nextAssignments,
+    });
+  }, [conferenceId, start, isCurrent]);
 
   useEffect(() => {
     void refresh();
@@ -1155,23 +1311,38 @@ export function useFood(conferenceId: string | null) {
   };
 }
 
+interface FoodOrderCache {
+  order: FoodOrder | null;
+  items: FoodItem[];
+  messages: FoodMessage[];
+}
+
 export function useFoodOrder(conferenceId: string | null, orderId: string) {
-  const [order, setOrder] = useState<FoodOrder | null>(null);
-  const [items, setItems] = useState<FoodItem[]>([]);
-  const [messages, setMessages] = useState<FoodMessage[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = `conf-food-order:${orderId}`;
+  const cached = getCached<FoodOrderCache>(cacheKey);
+  const [order, setOrder] = useState<FoodOrder | null>(() => cached?.order ?? null);
+  const [items, setItems] = useState<FoodItem[]>(() => cached?.items || []);
+  const [messages, setMessages] = useState<FoodMessage[]>(() => cached?.messages || []);
+  const [loading, setLoading] = useState(() => !cached);
+  const { start, isCurrent } = useFetchGuard();
 
   const refresh = useCallback(async () => {
+    const ticket = start();
     const [oRes, iRes, mRes] = await Promise.all([
       supabase.from("conf_food_orders").select("*").eq("id", orderId).single(),
       supabase.from("conf_food_items").select("*").eq("order_id", orderId).order("created_at"),
       supabase.from("conf_food_messages").select("*").eq("order_id", orderId).order("created_at"),
     ]);
-    setOrder((oRes.data as FoodOrder) || null);
-    setItems((iRes.data as FoodItem[]) || []);
-    setMessages((mRes.data as FoodMessage[]) || []);
+    if (!isCurrent(ticket)) return; // a newer refresh (e.g. realtime) already landed
+    const nextOrder = (oRes.data as FoodOrder) || null;
+    const nextItems = (iRes.data as FoodItem[]) || [];
+    const nextMessages = (mRes.data as FoodMessage[]) || [];
+    setOrder(nextOrder);
+    setItems(nextItems);
+    setMessages(nextMessages);
     setLoading(false);
-  }, [orderId]);
+    setCached(`conf-food-order:${orderId}`, { order: nextOrder, items: nextItems, messages: nextMessages });
+  }, [orderId, start, isCurrent]);
 
   useEffect(() => {
     void refresh();
@@ -1255,11 +1426,18 @@ export function useRecordings(
   conferenceId: string | null,
   filter: { eventId?: string; contactId?: string },
 ) {
-  const [recordings, setRecordings] = useState<ConfRecording[]>([]);
   const { eventId, contactId } = filter;
+  const cacheKey = conferenceId
+    ? `conf-recordings:${conferenceId}:${eventId || ""}:${contactId || ""}`
+    : null;
+  const [recordings, setRecordings] = useState<ConfRecording[]>(
+    () => (cacheKey && getCached<ConfRecording[]>(cacheKey)) || [],
+  );
+  const { start, isCurrent } = useFetchGuard();
 
   const refresh = useCallback(async () => {
     if (!conferenceId) return;
+    const ticket = start();
     let q = supabase
       .from("conf_recordings")
       .select("*")
@@ -1268,8 +1446,11 @@ export function useRecordings(
     if (eventId) q = q.eq("event_id", eventId);
     if (contactId) q = q.eq("contact_id", contactId);
     const { data } = await q;
-    setRecordings((data as ConfRecording[]) || []);
-  }, [conferenceId, eventId, contactId]);
+    if (!isCurrent(ticket)) return; // a newer refresh (e.g. realtime) already landed
+    const rows = (data as ConfRecording[]) || [];
+    setRecordings(rows);
+    setCached(`conf-recordings:${conferenceId}:${eventId || ""}:${contactId || ""}`, rows);
+  }, [conferenceId, eventId, contactId, start, isCurrent]);
 
   useEffect(() => {
     void refresh();
@@ -1355,17 +1536,23 @@ export function usePresence(
 // Venue pins
 // ------------------------------------------------------------------
 export function usePins(conferenceId: string | null) {
-  const [pins, setPins] = useState<VenuePin[]>([]);
+  const cacheKey = conferenceId ? `conf-pins:${conferenceId}` : null;
+  const [pins, setPins] = useState<VenuePin[]>(() => (cacheKey && getCached<VenuePin[]>(cacheKey)) || []);
+  const { start, isCurrent } = useFetchGuard();
 
   const refresh = useCallback(async () => {
     if (!conferenceId) return;
+    const ticket = start();
     const { data } = await supabase
       .from("conf_venue_pins")
       .select("*")
       .eq("conference_id", conferenceId)
       .eq("active", true);
-    setPins((data as VenuePin[]) || []);
-  }, [conferenceId]);
+    if (!isCurrent(ticket)) return; // a newer refresh (e.g. realtime) already landed
+    const rows = (data as VenuePin[]) || [];
+    setPins(rows);
+    setCached(`conf-pins:${conferenceId}`, rows);
+  }, [conferenceId, start, isCurrent]);
 
   useEffect(() => {
     void refresh();
@@ -1402,18 +1589,26 @@ export function usePins(conferenceId: string | null) {
 // Announcements
 // ------------------------------------------------------------------
 export function useAnnouncements(conferenceId: string | null) {
-  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const cacheKey = conferenceId ? `conf-announcements:${conferenceId}` : null;
+  const [announcements, setAnnouncements] = useState<Announcement[]>(
+    () => (cacheKey && getCached<Announcement[]>(cacheKey)) || [],
+  );
+  const { start, isCurrent } = useFetchGuard();
 
   const refresh = useCallback(async () => {
     if (!conferenceId) return;
+    const ticket = start();
     const { data } = await supabase
       .from("conf_announcements")
       .select("*")
       .eq("conference_id", conferenceId)
       .order("created_at", { ascending: false })
       .limit(10);
-    setAnnouncements((data as Announcement[]) || []);
-  }, [conferenceId]);
+    if (!isCurrent(ticket)) return; // a newer refresh (e.g. realtime) already landed
+    const rows = (data as Announcement[]) || [];
+    setAnnouncements(rows);
+    setCached(`conf-announcements:${conferenceId}`, rows);
+  }, [conferenceId, start, isCurrent]);
 
   useEffect(() => {
     void refresh();
