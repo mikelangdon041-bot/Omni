@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { requireRecordingOwner } from "@/lib/routeAuth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { purgeRecordingAudio } from "@/lib/recordingAudio";
 import { summarizeTranscript } from "@/lib/openai";
 import { parseOutline } from "@/lib/summaryTree";
 
@@ -57,10 +58,10 @@ export async function POST(
     const { error: insErr } = await admin.from("summary_nodes").insert(rows);
     if (insErr) throw new Error(insErr.message);
 
-    // Transcript is all we needed — drop the original audio to save storage.
-    if (recording.storage_path) {
-      await admin.storage.from("recordings").remove([recording.storage_path]);
-    }
+    // Transcript is all we ever needed. The original was already dropped
+    // once chunking succeeded; this sweeps anything left (a chunk whose
+    // per-chunk cleanup failed, a re-run of an older recording).
+    await purgeRecordingAudio(admin, auth.userId, recording.id);
 
     await admin
       .from("recordings")

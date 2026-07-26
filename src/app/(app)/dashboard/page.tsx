@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import { Building2, Users, User, Upload, Settings2, Plus } from "lucide-react";
 import { ModuleHero } from "@/components/ui/ModuleHero";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -13,9 +14,14 @@ import {
 } from "@/lib/dashboard/hooks";
 import { DashboardChat } from "@/components/dashboard/DashboardChat";
 import { TileCard } from "@/components/dashboard/TileCard";
-import { ImportModal } from "@/components/dashboard/ImportModal";
 import { TeamManager } from "@/components/dashboard/TeamManager";
 import { CreateKpiModal } from "@/components/dashboard/CreateKpiModal";
+
+// Spreadsheet importer — defers the `xlsx` parser out of the route bundle.
+const ImportModal = dynamic(
+  () => import("@/components/dashboard/ImportModal").then((m) => m.ImportModal),
+  { ssr: false },
+);
 
 const SCOPE_COPY: Record<string, { icon: typeof User; text: string }> = {
   self: { icon: User, text: "You see only your own data here." },
@@ -98,11 +104,13 @@ export default function DashboardPage() {
         )}
       </div>
 
-      <ImportModal
-        open={importOpen}
-        onClose={() => setImportOpen(false)}
-        onImported={refreshImports}
-      />
+      {importOpen && (
+        <ImportModal
+          open
+          onClose={() => setImportOpen(false)}
+          onImported={refreshImports}
+        />
+      )}
       <TeamManager open={teamOpen} onClose={() => setTeamOpen(false)} />
       <CreateKpiModal
         open={kpiOpen}

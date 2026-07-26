@@ -14,19 +14,20 @@ import {
   X,
 } from "lucide-react";
 import { MODULES, moduleForPath } from "@/lib/modules";
+import { clearAllCached } from "@/lib/cache";
+import { resetSession, useSessionProfile } from "@/lib/session";
 import { NotificationBell } from "@/components/NotificationBell";
 import { TasksPanel, useTaskSummary } from "@/components/TaskBar";
 import { useConfHeader } from "@/lib/conference/headerStore";
 
-export function AppHeader({
-  username,
-  isAdmin,
-}: {
-  username: string;
-  isAdmin?: boolean;
-}) {
+export function AppHeader() {
   const pathname = usePathname();
   const router = useRouter();
+  // Resolved client-side (cache-first, so it paints on the first frame) —
+  // the layout no longer blocks the whole page on a profiles query just to
+  // put a letter in the avatar.
+  const { profile, isAdmin } = useSessionProfile();
+  const username = profile?.displayName || "…";
   const [launcher, setLauncher] = useState(false);
   const [menu, setMenu] = useState(false);
   const [tasksOpen, setTasksOpen] = useState(false);
@@ -55,6 +56,10 @@ export function AppHeader({
       method: "POST",
       credentials: "same-origin",
     });
+    // Same wipe the Settings sign-out does — a shared device must never
+    // instant-paint the previous person's cached data for the next signee.
+    clearAllCached();
+    resetSession();
     router.push("/login");
     router.refresh();
   }

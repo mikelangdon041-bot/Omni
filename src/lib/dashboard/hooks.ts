@@ -1,42 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { useSessionProfile } from "@/lib/session";
 import { datasetFromImport } from "./catalog";
 import type { DashboardImport, DashboardTeam, DatasetDef, DashboardTile, Scope, TeamMember } from "./types";
 
-const supabase = createClient();
-
 // Resolve the signed-in user's role, for the manager-vs-IC scope split.
 export function useSessionRole() {
-  const [userId, setUserId] = useState<string | null>(null);
-  const [isManager, setIsManager] = useState(false);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let active = true;
-    supabase.auth.getUser().then(async ({ data }) => {
-      const uid = data.user?.id;
-      if (!uid) {
-        if (active) setLoading(false);
-        return;
-      }
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("role")
-        .eq("id", uid)
-        .single();
-      if (!active) return;
-      setUserId(uid);
-      setIsManager(profile?.role === "admin" || profile?.role === "owner");
-      setLoading(false);
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  return { userId, isManager, loading };
+  const { profile, isAdmin, loading } = useSessionProfile();
+  return { userId: profile?.id ?? null, isManager: isAdmin, loading };
 }
 
 // The highest scope this user is allowed to pick — drives which scope

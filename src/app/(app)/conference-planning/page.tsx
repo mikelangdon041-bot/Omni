@@ -3,16 +3,26 @@
 // Conference Planning home — pick (or create) the conference to work in.
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import { Loading } from "@/components/conference/Bits";
 import Link from "next/link";
 import { Plus, MapPin, CalendarDays, Pencil, Presentation } from "lucide-react";
 import { ModuleHero } from "@/components/ui/ModuleHero";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { ConferenceModal } from "@/components/conference/ConferenceModal";
 import { useConferences } from "@/lib/conference/hooks";
 import { conferenceStatus, daysAway, fmtDateRange } from "@/lib/conference/utils";
 import type { Conference } from "@/lib/conference/types";
+
+// Reads spreadsheets on the "import attendees" path, so it drags in `xlsx`.
+// Deferred until the create/edit dialog is opened.
+const ConferenceModal = dynamic(
+  () =>
+    import("@/components/conference/ConferenceModal").then(
+      (m) => m.ConferenceModal,
+    ),
+  { ssr: false },
+);
 
 export default function ConferencePlanningHome() {
   const { conferences, loading, add, update } = useConferences();
@@ -104,21 +114,25 @@ export default function ConferencePlanningHome() {
         </div>
       )}
 
-      <ConferenceModal
-        open={showNew}
-        onClose={() => setShowNew(false)}
-        onSave={async (partial) => {
-          await add(partial);
-        }}
-      />
-      <ConferenceModal
-        open={!!editing}
-        onClose={() => setEditing(null)}
-        conference={editing}
-        onSave={async (partial) => {
-          if (editing) await update(editing.id, partial);
-        }}
-      />
+      {showNew && (
+        <ConferenceModal
+          open
+          onClose={() => setShowNew(false)}
+          onSave={async (partial) => {
+            await add(partial);
+          }}
+        />
+      )}
+      {editing && (
+        <ConferenceModal
+          open
+          onClose={() => setEditing(null)}
+          conference={editing}
+          onSave={async (partial) => {
+            if (editing) await update(editing.id, partial);
+          }}
+        />
+      )}
     </>
   );
 }

@@ -3,10 +3,13 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Eye } from "lucide-react";
+import { useSessionProfile } from "@/lib/session";
 
-export function ImpersonationBanner({ username }: { username: string }) {
+export function ImpersonationBanner() {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const { profile } = useSessionProfile();
+  const username = profile?.username || profile?.displayName || "…";
 
   async function exit() {
     setBusy(true);

@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { getCached, setCached } from "@/lib/cache";
+import { useSessionProfile } from "@/lib/session";
 import {
   DEFAULT_CATEGORIES,
   type Announcement,
@@ -45,36 +46,15 @@ export interface Me {
 }
 
 export function useMe() {
-  const [me, setMe] = useState<Me | null>(null);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    let active = true;
-    (async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) {
-        if (active) setLoading(false);
-        return;
+  const { profile, isAdmin, loading } = useSessionProfile();
+  const me: Me | null = profile
+    ? {
+        id: profile.id,
+        displayName: profile.displayName,
+        email: profile.email,
+        isOrgAdmin: isAdmin,
       }
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("display_name, username, role")
-        .eq("id", user.id)
-        .single();
-      if (!active) return;
-      setMe({
-        id: user.id,
-        displayName: profile?.display_name || profile?.username || "Me",
-        email: user.email || "",
-        isOrgAdmin: profile?.role === "admin" || profile?.role === "owner",
-      });
-      setLoading(false);
-    })();
-    return () => {
-      active = false;
-    };
-  }, []);
+    : null;
   return { me, loading };
 }
 

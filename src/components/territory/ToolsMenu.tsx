@@ -4,13 +4,24 @@
 // only when fuzzy matching actually finds candidates — Combine duplicates.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { MoreVertical, Upload, Download, Wand2 } from "lucide-react";
 import type { KOL } from "@/lib/territory/types";
 import { groupSimilar } from "@/lib/territory/dedupe";
 import { kolFullName } from "@/lib/territory/utils";
-import { ImportModal } from "@/components/territory/ImportModal";
-import { ExportModal } from "@/components/territory/ExportModal";
 import { MergeKolsModal } from "@/components/territory/MergeKolsModal";
+
+// Both of these pull in the `xlsx` parser (~1 MB of JS) which nobody needs
+// until they actually open an import/export dialog. Loading them on demand
+// keeps it out of the Territory Planning route bundle.
+const ImportModal = dynamic(
+  () => import("@/components/territory/ImportModal").then((m) => m.ImportModal),
+  { ssr: false },
+);
+const ExportModal = dynamic(
+  () => import("@/components/territory/ExportModal").then((m) => m.ExportModal),
+  { ssr: false },
+);
 
 export function ToolsMenu({
   kols,
@@ -84,12 +95,17 @@ export function ToolsMenu({
         </div>
       )}
 
-      <ImportModal
-        open={importOpen}
-        onClose={() => setImportOpen(false)}
-        onImport={onImport}
-      />
-      <ExportModal open={exportOpen} onClose={() => setExportOpen(false)} kols={kols} />
+      {/* Mounted only once opened — that's what defers the `xlsx` chunk. */}
+      {importOpen && (
+        <ImportModal
+          open
+          onClose={() => setImportOpen(false)}
+          onImport={onImport}
+        />
+      )}
+      {exportOpen && (
+        <ExportModal open onClose={() => setExportOpen(false)} kols={kols} />
+      )}
       <MergeKolsModal
         open={mergeOpen}
         onClose={() => setMergeOpen(false)}

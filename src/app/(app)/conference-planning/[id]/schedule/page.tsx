@@ -5,6 +5,7 @@
 // per-person calendar export, and event create/edit via the form sheet.
 
 import { useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import { Loading } from "@/components/conference/Bits";
 import {
   CalendarDays,
@@ -31,7 +32,6 @@ import {
 } from "@/components/conference/ScheduleCalendar";
 import { EventFormModal } from "@/components/conference/EventFormModal";
 import { EventPeek } from "@/components/conference/EventPeek";
-import { ImportScheduleModal } from "@/components/conference/ImportScheduleModal";
 import { PriorityPill } from "@/components/conference/Priority";
 import {
   EVENT_TYPES,
@@ -50,6 +50,16 @@ import {
 } from "@/lib/conference/utils";
 import { usePersistedFilter } from "@/lib/conference/usePersistedFilter";
 import { useRouter } from "next/navigation";
+
+// The schedule importer pulls in the `xlsx` parser (~1 MB of JS). Load it
+// only when someone actually opens the import dialog.
+const ImportScheduleModal = dynamic(
+  () =>
+    import("@/components/conference/ImportScheduleModal").then(
+      (m) => m.ImportScheduleModal,
+    ),
+  { ssr: false },
+);
 
 export default function SchedulePage() {
   const router = useRouter();
@@ -526,7 +536,9 @@ export default function SchedulePage() {
         onSave={save}
       />
 
-      <ImportScheduleModal open={importOpen} onClose={() => setImportOpen(false)} />
+      {importOpen && (
+        <ImportScheduleModal open onClose={() => setImportOpen(false)} />
+      )}
     </div>
   );
 }

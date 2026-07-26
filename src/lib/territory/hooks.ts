@@ -12,7 +12,6 @@ import type {
 } from "./types";
 
 const supabase = createClient();
-const UID_CACHE_KEY = "uid";
 
 // Unlike Conference Planning, Territory data is per-rep (every query below
 // filters by user_id or kol_id) with no realtime subscription anywhere in
@@ -21,32 +20,10 @@ const UID_CACHE_KEY = "uid";
 // pattern (read cache on mount, paint it, refetch in the background, write
 // the cache back on every change) with no ordering guard needed.
 
-// Resolve the current rep's auth user id (client-side, from the session
-// cookie). `supabase.auth.getUser()` is itself a network round trip, which
-// otherwise serializes in front of every per-user data fetch that depends on
-// it (meetings, docs, decks, KOLs…). We remember the last-resolved id in
-// localStorage and hand it back synchronously on mount so those downstream
-// hooks can start their own cached-instant-paint immediately, while this
-// still reconfirms with Supabase in the background and corrects itself
-// (including clearing to null) if the session has changed.
-export function useUserId() {
-  const [userId, setUserId] = useState<string | null>(() => getCached<string>(UID_CACHE_KEY));
-  const [loading, setLoading] = useState(() => !getCached<string>(UID_CACHE_KEY));
-  useEffect(() => {
-    let active = true;
-    supabase.auth.getUser().then(({ data }) => {
-      if (!active) return;
-      const uid = data.user?.id ?? null;
-      setUserId(uid);
-      setLoading(false);
-      if (uid) setCached(UID_CACHE_KEY, uid);
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
-  return { userId, loading };
-}
+// Who's signed in now lives in one shared, deduped, cache-first place — see
+// @/lib/session. Re-exported here so the many call sites in this module (and
+// the modules that import it from here) keep working unchanged.
+export { useUserId } from "@/lib/session";
 
 // ------------------------------------------------------------------
 // KOLs

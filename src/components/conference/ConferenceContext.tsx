@@ -13,6 +13,7 @@ import {
   useState,
 } from "react";
 import { createClient } from "@/lib/supabase/client";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -29,7 +30,6 @@ import {
   Users,
   UtensilsCrossed,
 } from "lucide-react";
-import { ConferenceModal } from "@/components/conference/ConferenceModal";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Textarea } from "@/components/ui/Input";
@@ -45,6 +45,16 @@ import {
 import { enabledTabs, type Attendee, type Conference } from "@/lib/conference/types";
 import { conferenceStatus, daysAway, fmtDateRange } from "@/lib/conference/utils";
 import { setConfHeader } from "@/lib/conference/headerStore";
+
+// Deferred for the same reason as on the conference list page: it drags in
+// the `xlsx` parser, which nothing needs until the dialog opens.
+const ConferenceModal = dynamic(
+  () =>
+    import("@/components/conference/ConferenceModal").then(
+      (m) => m.ConferenceModal,
+    ),
+  { ssr: false },
+);
 
 interface ConferenceCtx {
   conference: Conference;
@@ -294,14 +304,16 @@ export function ConferenceProvider({
         conferenceId={conference.id}
       />
 
-      <ConferenceModal
-        open={showSettings}
-        onClose={() => setShowSettings(false)}
-        conference={conference}
-        onSave={async (partial) => {
-          await update(partial);
-        }}
-      />
+      {showSettings && (
+        <ConferenceModal
+          open
+          onClose={() => setShowSettings(false)}
+          conference={conference}
+          onSave={async (partial) => {
+            await update(partial);
+          }}
+        />
+      )}
 
       {/* Roster has placeholder people (e.g. from a schedule import) and this
           user isn't linked yet — let them claim their spot. */}

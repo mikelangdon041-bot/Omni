@@ -5,7 +5,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CalendarClock, Plus, Settings2, Sparkles, Trash2 } from "lucide-react";
+import { CalendarClock, Mic, Plus, Settings2, Sparkles, Trash2 } from "lucide-react";
 import { ModuleHero } from "@/components/ui/ModuleHero";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/Button";
@@ -77,13 +77,20 @@ export default function MeetingPrepPage() {
           { label: "Briefed", value: briefed },
         ]}
         action={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button
               variant="secondary"
               className="!border-white/40 !bg-white/15 !text-white hover:!bg-white/25"
               onClick={() => setShowSettings(true)}
             >
               <Settings2 size={16} /> My brief
+            </Button>
+            <Button
+              variant="secondary"
+              className="!border-white/40 !bg-white/15 !text-white hover:!bg-white/25"
+              onClick={() => router.push("/meeting-prep/record")}
+            >
+              <Mic size={16} /> Record a meeting
             </Button>
             <Button
               className="!bg-white !text-[var(--accent)] hover:!bg-white/90"
@@ -100,11 +107,19 @@ export default function MeetingPrepPage() {
       ) : meetings.length === 0 ? (
         <EmptyState
           title="No meetings yet"
-          hint="Create one, tell me who's in the room and what you want out of it, and I'll build your brief."
+          hint="Create one, tell me who's in the room and what you want out of it, and I'll build your brief. Already in a meeting? Record it instead and I'll write the notes."
           action={
-            <Button onClick={() => setShowNew(true)}>
-              <Plus size={16} /> New meeting
-            </Button>
+            <div className="flex flex-wrap justify-center gap-2">
+              <Button onClick={() => setShowNew(true)}>
+                <Plus size={16} /> New meeting
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => router.push("/meeting-prep/record")}
+              >
+                <Mic size={16} /> Record a meeting
+              </Button>
+            </div>
           }
         />
       ) : (

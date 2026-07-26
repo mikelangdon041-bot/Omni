@@ -1,47 +1,37 @@
 import { redirect } from "next/navigation";
-import { cookies } from "next/headers";
-import { createClient } from "@/lib/supabase/server";
+import { cookies, headers } from "next/headers";
+import { UID_HEADER } from "@/lib/supabase/middleware";
 import { AppHeader } from "@/components/AppHeader";
 import { ImpersonationBanner } from "@/components/ImpersonationBanner";
 import { FeedbackProvider } from "@/components/ui/Feedback";
 import { PageContainer } from "@/components/PageContainer";
 import { ScrollMemory } from "@/components/ScrollMemory";
 
+// This layout deliberately does NO network work. It used to await
+// `getUser()` and then a `profiles` row on every single navigation — two
+// sequential Supabase round trips that had to finish before a byte of HTML
+// could stream, on top of the `getUser()` the proxy already paid for.
+//
+// Now the proxy forwards the verified id on a request header (free to read),
+// and the header resolves the display name / admin flag client-side through
+// the shared, cache-first session hook, which paints instantly from
+// localStorage. Server render is pure and immediate.
 export default async function AppLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const [headerList, cookieStore] = await Promise.all([headers(), cookies()]);
+  if (!headerList.get(UID_HEADER)) redirect("/login");
 
-  if (!user) redirect("/login");
-
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("username, display_name, role")
-    .eq("id", user.id)
-    .single();
-
-  const username =
-    profile?.display_name ||
-    profile?.username ||
-    (user.user_metadata?.username as string) ||
-    "User";
-
-  const isAdmin = profile?.role === "admin" || profile?.role === "owner";
-  const impersonating = (await cookies()).has("omni-admin-return");
+  const impersonating = cookieStore.has("omni-admin-return");
 
   return (
     <FeedbackProvider>
       <ScrollMemory />
       <div className="flex min-h-full flex-1 flex-col">
-        {impersonating && (
-          <ImpersonationBanner username={profile?.username || username} />
-        )}
-        <AppHeader username={username} isAdmin={isAdmin} />
+        {impersonating && <ImpersonationBanner />}
+        <AppHeader />
         <main className="flex-1">
           <PageContainer>{children}</PageContainer>
         </main>

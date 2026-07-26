@@ -74,6 +74,19 @@ export async function POST(req: Request) {
       return NextResponse.json({ path, token: signed.token, signedUrl: signed.signedUrl });
     }
 
+    // The client got as far as uploading but never transcribed (cancelled,
+    // navigated away, or the transcription request itself failed). Without
+    // this the raw meeting audio would sit in storage with nothing left
+    // pointing at it — audio only ever exists to become a transcript.
+    if (body.action === "discard") {
+      const path = String(body.path || "");
+      if (!path.startsWith(`${conferenceId}/audio-uploads/`)) {
+        return NextResponse.json({ error: "Bad path" }, { status: 400 });
+      }
+      await createAdminClient().storage.from("conference").remove([path]);
+      return NextResponse.json({ ok: true });
+    }
+
     if (body.action === "from-storage") {
       const path = String(body.path || "");
       if (!path.startsWith(`${conferenceId}/audio-uploads/`)) {

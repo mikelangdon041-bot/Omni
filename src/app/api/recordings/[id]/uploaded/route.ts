@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireRecordingOwner } from "@/lib/routeAuth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { purgeRecordingAudio } from "@/lib/recordingAudio";
 import { chunkAudio } from "@/lib/ffmpeg";
 
 export const runtime = "nodejs";
@@ -49,6 +50,12 @@ export async function POST(
       if (upErr) throw new Error(`chunk upload failed: ${upErr.message}`);
     }
 
+    // The chunks are now the source of truth for transcription, so the
+    // uploaded original has no further use. Delete it here rather than after
+    // summarizing: a run that errors out later used to leave the full
+    // meeting audio sitting in storage indefinitely.
+    await admin.storage.from("recordings").remove([recording.storage_path]);
+
     await admin
       .from("recordings")
       .update({
@@ -62,6 +69,9 @@ export async function POST(
     return NextResponse.json({ totalChunks: chunks.length });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Chunking failed";
+    // Failed the same way: don't strand the audio. Everything under this
+    // recording's prefix goes.
+    await purgeRecordingAudio(admin, userId, recording.id);
     await admin
       .from("recordings")
       .update({ status: "error", error: message })

@@ -5,6 +5,7 @@
 // with poster sessions shown once (sub-posters live on the session's page).
 
 import { useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import { Loading } from "@/components/conference/Bits";
 import Link from "next/link";
 import { FileSpreadsheet, Layers, Plus, Search } from "lucide-react";
@@ -13,10 +14,19 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
 import { usePosters, type PosterWithReps } from "@/lib/conference/hooks";
 import { PosterModal } from "@/components/conference/PosterModal";
-import { ImportScheduleModal } from "@/components/conference/ImportScheduleModal";
 import { PriorityPill } from "@/components/conference/Priority";
 import { normalizeFreeDate } from "@/lib/conference/utils";
 import { usePersistedFilter } from "@/lib/conference/usePersistedFilter";
+
+// The schedule importer pulls in the `xlsx` parser (~1 MB of JS). Load it
+// only when someone actually opens the import dialog.
+const ImportScheduleModal = dynamic(
+  () =>
+    import("@/components/conference/ImportScheduleModal").then(
+      (m) => m.ImportScheduleModal,
+    ),
+  { ssr: false },
+);
 
 const DATE_COLORS = ["#0d9488", "#7c3aed", "#d97706", "#0284c7", "#be123c", "#4f46e5", "#ca8a04"];
 
@@ -169,7 +179,9 @@ export default function PostersPage() {
         onSave={save}
       />
 
-      <ImportScheduleModal open={showImport} onClose={() => setShowImport(false)} />
+      {showImport && (
+        <ImportScheduleModal open onClose={() => setShowImport(false)} />
+      )}
     </div>
   );
 }

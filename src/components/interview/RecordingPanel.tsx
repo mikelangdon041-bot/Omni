@@ -226,7 +226,12 @@ export function RecordingPanel({
       danger: true,
     });
     if (!ok) return;
-    await supabase.from("recordings").delete().eq("id", id);
+    // Via the API, not a direct row delete — the route also purges any audio
+    // still sitting in storage for this recording.
+    await fetch(`/api/recordings/${id}`, {
+      method: "DELETE",
+      credentials: "same-origin",
+    });
     onDeleted?.();
   }
 

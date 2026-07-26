@@ -15,6 +15,7 @@ export const maxDuration = 120;
 //   grill    { context, briefText?, count? }   → { questions:[{question,modelAnswer}] }
 //   coach    { question, modelAnswer, userAnswer, context } → { coaching }
 //   debrief  { transcript, context }           → { summary, actions:[] }
+//   capture  { transcript, hint? }             → { title, summary, actions:[] }
 
 function firstText(res: { content: { type: string; text?: string }[] }): string {
   const block = res.content.find((b) => b.type === "text");
@@ -216,6 +217,22 @@ const DEBRIEF_SCHEMA = {
   required: ["summary", "actions"],
   additionalProperties: false,
 };
+
+// Same shape as a debrief plus a title, because a captured recording has no
+// meeting row to take its name from yet.
+const CAPTURE_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    title: { type: "string" as const },
+    summary: { type: "string" as const },
+    actions: { type: "array" as const, items: { type: "string" as const } },
+  },
+  required: ["title", "summary", "actions"],
+  additionalProperties: false,
+};
+
+const OUTLINE_RULE = `- summary: a nested bullet outline as plain text. Every line starts with "- ", and each level of nesting is indented exactly 2 more spaces than its parent. Go 2-3 levels deep: top-level bullets are the topics that came up, children are the specifics said about them (positions taken, decisions, numbers, objections, names). Complete sentences. Preserve names, figures, drug/product names and dates exactly as spoken. Never invent anything that wasn't said. No bold, no markdown, no headers.
+- actions: every concrete follow-up the recording implies or someone promised, each as one imperative sentence, with the owner and any deadline when stated (e.g. "Send Dr. Chen the phase 3 subgroup data by Friday"). Only real commitments and next steps — not topics, not general observations. Empty array if there genuinely are none.`;
 
 export async function POST(req: Request) {
   const supabase = await createClient();
@@ -433,8 +450,7 @@ Be direct and specific to THEIR answer, never generic. No markdown headings, no 
         output_config: { format: { type: "json_schema", schema: DEBRIEF_SCHEMA } },
         system: `You distill a meeting transcript/notes into a debrief.
 
-- summary: a nested bullet outline as plain text ("- " bullets, 2-space indents): what was discussed, decisions, positions taken, open items. Complete sentences, preserve names/figures, never invent. No bold, no markdown.
-- actions: every concrete follow-up action implied or promised, each a single imperative sentence with owner if stated (e.g. "Send Dr. Chen the phase 3 subgroup data by Friday").`,
+${OUTLINE_RULE}`,
         messages: [
           {
             role: "user",
@@ -444,6 +460,42 @@ Be direct and specific to THEIR answer, never generic. No markdown headings, no 
       });
       const parsed = JSON.parse(firstText(res) || "{}");
       return NextResponse.json({
+        summary: String(parsed.summary || ""),
+        actions: (Array.isArray(parsed.actions) ? parsed.actions : []).map(String),
+      });
+    }
+
+    // A recording captured with no meeting set up beforehand: the transcript
+    // is all we have, so the model also names the thing.
+    if (action === "capture") {
+      const transcript = String(body?.transcript || "").slice(0, 120000);
+      if (!transcript.trim())
+        return NextResponse.json({ error: "No transcript provided" }, { status: 400 });
+      const hint = String(body?.hint || "").slice(0, 2000);
+      const res = await anthropic().messages.create({
+        model: WRITER_MODEL,
+        temperature: 0.2,
+        max_tokens: 8000,
+        output_config: { format: { type: "json_schema", schema: CAPTURE_SCHEMA } },
+        system: `You turn the raw transcript of a meeting that was just recorded into usable notes. The transcript comes from automatic speech recognition, so expect missing punctuation, no speaker labels, and mis-heard words — infer sensibly from context but never invent content.
+
+- title: a short, specific name for this meeting as a person would write it in a calendar (5-8 words, no quotes). Use real names/topics from the transcript when they're clear, e.g. "Dr. Patel — dosing concerns and advisory board". If the transcript is too thin to tell, use a plain descriptive title.
+${OUTLINE_RULE}`,
+        messages: [
+          {
+            role: "user",
+            content: `${hint ? `What the recording is (from the person who recorded it): ${hint}\n\n` : ""}Transcript:\n${transcript}`,
+          },
+        ],
+      });
+      if (res.stop_reason === "refusal")
+        return NextResponse.json(
+          { error: "The model declined this recording." },
+          { status: 502 },
+        );
+      const parsed = JSON.parse(firstText(res) || "{}");
+      return NextResponse.json({
+        title: String(parsed.title || "").slice(0, 200),
         summary: String(parsed.summary || ""),
         actions: (Array.isArray(parsed.actions) ? parsed.actions : []).map(String),
       });

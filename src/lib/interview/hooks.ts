@@ -15,22 +15,10 @@ import type {
 
 const supabase = createClient();
 
-export function useUserId() {
-  const [userId, setUserId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    let active = true;
-    supabase.auth.getUser().then(({ data }) => {
-      if (!active) return;
-      setUserId(data.user?.id ?? null);
-      setLoading(false);
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
-  return { userId, loading };
-}
+// Shared, deduped, cache-first — see @/lib/session. This one matters most:
+// the global header (task badge, notification bell) calls it on every single
+// page, so an uncached round trip here delayed every page in the app.
+export { useUserId } from "@/lib/session";
 
 // Candidates accessible to the caller (owned + shared, via RLS).
 export function useCandidates() {

@@ -20,6 +20,7 @@ import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 import { RichText } from "@/components/ui/RichText";
+import { OutlineBullets } from "@/components/ui/OutlineBullets";
 import { useToast } from "@/components/ui/Feedback";
 import { TranscriptCapture } from "@/components/studio/TranscriptCapture";
 import { useKolLite } from "./KolLink";
@@ -104,12 +105,15 @@ export function DebriefTab({
     }
   }
 
-  async function pushActionsToTasks() {
+  // Adds the follow-ups at `indexes` to the global to-do list, skipping any
+  // already there. Used by both the per-item button and "add all".
+  async function pushActionsToTasks(indexes?: number[]) {
     if (!userId) return;
+    const targets = indexes ?? actions.map((_, i) => i);
     let n = 0;
     const next = [...actions];
-    for (let i = 0; i < next.length; i++) {
-      if (next[i].taskId) continue;
+    for (const i of targets) {
+      if (!next[i] || next[i].taskId) continue;
       const { data } = await supabase
         .from("tasks")
         .insert({
@@ -213,9 +217,9 @@ export function DebriefTab({
             <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-muted">
               Summary
             </h2>
-            <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed">
-              {debrief.summary}
-            </pre>
+            {/* The model writes this as an indented "- " outline, so render
+                it as the nested bullet tree it already is. */}
+            <OutlineBullets text={debrief.summary} />
           </section>
 
           <section className="rounded-xl border border-border bg-surface p-4 shadow-sm">
@@ -223,7 +227,7 @@ export function DebriefTab({
               <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
                 Follow-ups ({actions.length})
               </h2>
-              <Button size="sm" variant="secondary" onClick={pushActionsToTasks}>
+              <Button size="sm" variant="secondary" onClick={() => void pushActionsToTasks()}>
                 <ListTodo size={14} /> Add all to to-do list
               </Button>
             </div>
@@ -249,17 +253,26 @@ export function DebriefTab({
                       className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
                     />
                     <span
-                      className={`text-sm ${a.done ? "text-muted line-through" : ""}`}
+                      className={`flex-1 text-sm ${a.done ? "text-muted line-through" : ""}`}
                     >
                       {a.text}
-                      {a.taskId && (
-                        <CheckCircle2
-                          size={12}
-                          className="ml-1 inline text-emerald-600"
-                          aria-label="On your to-do list"
-                        />
-                      )}
                     </span>
+                    {/* Adding a follow-up to the to-do list is per-item, not
+                        all-or-nothing — most debriefs turn up one or two
+                        things worth actually tracking. */}
+                    {a.taskId ? (
+                      <span className="mt-0.5 flex shrink-0 items-center gap-1 text-[11px] font-medium text-emerald-700">
+                        <CheckCircle2 size={12} /> On your list
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => void pushActionsToTasks([i])}
+                        className="mt-0.5 flex shrink-0 items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-[11px] font-medium text-muted transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                        title="Add this follow-up to your to-do list"
+                      >
+                        <ListTodo size={11} /> Add
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>

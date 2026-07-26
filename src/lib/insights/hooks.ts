@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { useUserId } from "@/lib/territory/hooks";
+import { useSessionProfile, useUserId } from "@/lib/session";
 import type { KOL } from "@/lib/territory/types";
 import {
   DEFAULT_PALETTE,
@@ -23,32 +23,8 @@ export { useUserId };
 
 // Resolve the signed-in user's org id + role (for admin gating + template creation).
 export function useOrgProfile() {
-  const [orgId, setOrgId] = useState<string | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    let active = true;
-    supabase.auth.getUser().then(async ({ data }) => {
-      const uid = data.user?.id;
-      if (!uid) {
-        if (active) setLoading(false);
-        return;
-      }
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("org_id, role")
-        .eq("id", uid)
-        .single();
-      if (!active) return;
-      setOrgId((profile?.org_id as string) ?? null);
-      setIsAdmin(profile?.role === "admin" || profile?.role === "owner");
-      setLoading(false);
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
-  return { orgId, isAdmin, loading };
+  const { profile, isAdmin, loading } = useSessionProfile();
+  return { orgId: profile?.orgId ?? null, isAdmin, loading };
 }
 
 // ------------------------------------------------------------------

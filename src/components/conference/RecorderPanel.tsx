@@ -291,6 +291,9 @@ export function RecorderPanel({
     setError("");
     cancelledRef.current = false;
     abortRef.current = new AbortController();
+    // Tracked so every exit path can delete the raw audio if it never made
+    // it as far as being transcribed.
+    let uploadedPath = "";
     try {
       if (file.size <= DIRECT_UPLOAD_LIMIT) {
         // Small enough for one multipart request.
@@ -327,6 +330,7 @@ export function RecorderPanel({
       });
       const signed = await signRes.json().catch(() => ({}));
       if (!signRes.ok) throw new Error(signed.error || "Could not start the upload.");
+      uploadedPath = String(signed.path || "");
 
       await new Promise<void>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
@@ -345,7 +349,10 @@ export function RecorderPanel({
         xhr.send(file);
       });
       xhrRef.current = null;
-      if (cancelledRef.current) return;
+      if (cancelledRef.current) {
+        await discardUpload(uploadedPath);
+        return;
+      }
 
       setPhase("transcribing");
       setSegmentsDone(0);
@@ -391,15 +398,37 @@ export function RecorderPanel({
           if (msg.type === "done") text = msg.text || "";
         }
       }
-      if (cancelledRef.current) return;
+      if (cancelledRef.current) {
+        await discardUpload(uploadedPath);
+        return;
+      }
       if (!text.trim()) throw new Error("No speech detected in that file.");
+      uploadedPath = ""; // the server removed it after reading it
       setTranscript(text);
       await summarize(text);
     } catch (e) {
+      // The server deletes the upload once it has read it; if we never got
+      // that far, clean it up from here so no audio is left behind.
+      if (uploadedPath) await discardUpload(uploadedPath);
       if (cancelledRef.current) return;
       setError((e as Error).message);
       setPhase("error");
     }
+  }
+
+  // Best-effort removal of an upload that never became a transcript.
+  async function discardUpload(path: string) {
+    if (!path) return;
+    await fetch("/api/conference/transcribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({
+        action: "discard",
+        conferenceId: conference.id,
+        path,
+      }),
+    }).catch(() => {});
   }
 
   async function usePastedTranscript() {
