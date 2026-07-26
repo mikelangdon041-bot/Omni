@@ -5,7 +5,15 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CalendarClock, Mic, Plus, Settings2, Sparkles, Trash2 } from "lucide-react";
+import {
+  ArrowRight,
+  CalendarClock,
+  FileAudio,
+  Plus,
+  Settings2,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
 import { ModuleHero } from "@/components/ui/ModuleHero";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/Button";
@@ -86,13 +94,6 @@ export default function MeetingPrepPage() {
               <Settings2 size={16} /> My brief
             </Button>
             <Button
-              variant="secondary"
-              className="!border-white/40 !bg-white/15 !text-white hover:!bg-white/25"
-              onClick={() => router.push("/meeting-prep/record")}
-            >
-              <Mic size={16} /> Record a meeting
-            </Button>
-            <Button
               className="!bg-white !text-[var(--accent)] hover:!bg-white/90"
               onClick={() => setShowNew(true)}
             >
@@ -102,24 +103,42 @@ export default function MeetingPrepPage() {
         }
       />
 
+      {/* Front door for "I have a recording of a meeting". It creates the
+          meeting itself, so it sits above the list rather than hiding as a
+          third button in the hero — people looked for it and didn't find it. */}
+      <button
+        onClick={() => router.push("/meeting-prep/record")}
+        className="group mb-6 flex w-full items-center gap-4 rounded-xl border border-[var(--accent)]/30 bg-[var(--accent-soft)]/40 p-4 text-left transition hover:border-[var(--accent)] hover:shadow-md sm:mb-8 sm:p-5"
+      >
+        <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-[var(--grad-from)] to-[var(--grad-via)] text-white shadow-sm sm:h-12 sm:w-12">
+          <FileAudio size={20} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-semibold sm:text-base">
+            Upload or record a meeting
+          </span>
+          <span className="mt-0.5 block text-xs text-muted sm:text-sm">
+            Drop in a recording and I&apos;ll transcribe it, write nested-bullet
+            notes, pull out the action items, and create the meeting for you —
+            no setup first.
+          </span>
+        </span>
+        <ArrowRight
+          size={18}
+          className="shrink-0 text-[var(--accent)] transition-transform group-hover:translate-x-0.5"
+        />
+      </button>
+
       {loading ? (
         <p className="py-16 text-center text-sm text-muted">Loading…</p>
       ) : meetings.length === 0 ? (
         <EmptyState
           title="No meetings yet"
-          hint="Create one, tell me who's in the room and what you want out of it, and I'll build your brief. Already in a meeting? Record it instead and I'll write the notes."
+          hint="Prepping for one that hasn't happened yet? Create it and I'll build your brief. Already have a recording of one? Use the panel above and I'll do the rest."
           action={
-            <div className="flex flex-wrap justify-center gap-2">
-              <Button onClick={() => setShowNew(true)}>
-                <Plus size={16} /> New meeting
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={() => router.push("/meeting-prep/record")}
-              >
-                <Mic size={16} /> Record a meeting
-              </Button>
-            </div>
+            <Button onClick={() => setShowNew(true)}>
+              <Plus size={16} /> New meeting
+            </Button>
           }
         />
       ) : (

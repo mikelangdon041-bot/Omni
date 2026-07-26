@@ -1,23 +1,27 @@
 "use client";
 
-// "Record this meeting" — the one-tap capture flow.
+// Turn a meeting into notes, from either end of it:
 //
-// Arm → record (mic, plus the meeting's own audio if the user shares it) →
-// the recording ends (they stop it, or the share ends because the meeting
-// window closed) → we ask what to do with it:
+//   Upload — drop in a recording you already have (Teams, a phone, a
+//            dictaphone). Any length; big files stream through storage.
+//   Record — capture a meeting happening right now: your mic, plus the
+//            meeting's own audio if you share the Teams tab/screen. It ends
+//            itself when the share ends, so nobody has to remember to stop it.
 //
-//   Discard   — audio and transcript are dropped, nothing is ever saved.
-//   Make notes — nested bullet summary + extracted action items.
+// Both land in the same place: transcript → nested-bullet notes → action
+// items → a meeting created for you, with nothing to set up first.
 //
-// Audio is never persisted server-side at all: segments go to Whisper and
-// are discarded, and the local crash vault is wiped the moment recording
-// stops. The transcript is the only intermediate artifact, and step 3 lets
-// the user delete that too once the notes are in hand.
+// Audio is never kept. Recorded segments go to Whisper and are dropped, the
+// local crash vault is wiped the moment recording stops, and an uploaded file
+// is deleted server-side as soon as it has been read — on the failure paths
+// too. The transcript is the only intermediate artifact, and the last step
+// lets you delete that as well once the notes are in hand.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
+  FileAudio,
   ListTodo,
   Loader2,
   Mic,
@@ -32,6 +36,7 @@ import { Modal } from "@/components/ui/Modal";
 import { OutlineBullets } from "@/components/ui/OutlineBullets";
 import { useToast } from "@/components/ui/Feedback";
 import { startLiveCapture, type LiveCapture } from "@/lib/meetingprep/liveCapture";
+import { transcribeUpload, type UploadProgress } from "@/lib/meetingprep/uploadCapture";
 
 export interface CaptureResult {
   title: string;
@@ -44,6 +49,7 @@ type Phase =
   | "idle"
   | "starting"
   | "recording"
+  | "uploading"
   | "deciding"
   | "summarizing"
   | "review"
@@ -76,8 +82,11 @@ export function MeetingRecorder({
   const [transcript, setTranscript] = useState("");
   const [result, setResult] = useState<CaptureResult | null>(null);
   const [keepTranscript, setKeepTranscript] = useState(true);
+  const [upload, setUpload] = useState<UploadProgress | null>(null);
+  const [fileName, setFileName] = useState("");
 
   const captureRef = useRef<LiveCapture | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const elapsedRef = useRef(0);
 
@@ -169,12 +178,42 @@ export function MeetingRecorder({
     }
   }
 
+  // Upload path: an existing recording of any length. Same destination as a
+  // live capture — straight to the decision prompt with a transcript in hand.
+  async function handleFile(file: File | null) {
+    if (!file) return;
+    setError("");
+    setFileName(file.name);
+    setUpload({ stage: "uploading", percent: 0 });
+    setPhase("uploading");
+    try {
+      const text = await transcribeUpload(file, setUpload);
+      setUpload(null);
+      if (!text.trim()) {
+        setError("No speech was picked up in that file.");
+        setPhase("error");
+        return;
+      }
+      setTranscript(text);
+      // Reuse the file's name as the starting hint — it's often the only
+      // clue about what the meeting was.
+      setHint((h) => h || file.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " "));
+      setPhase("deciding");
+    } catch (e) {
+      setUpload(null);
+      setError((e as Error).message || "Could not process that file.");
+      setPhase("error");
+    }
+  }
+
   async function discardEverything() {
     await captureRef.current?.discard();
     captureRef.current = null;
     setTranscript("");
     setResult(null);
     setProgress({ done: 0, total: 0 });
+    setUpload(null);
+    setFileName("");
     setElapsed(0);
     setPhase("idle");
     toast("success", "Recording discarded — nothing was saved.");
@@ -242,6 +281,47 @@ export function MeetingRecorder({
         )}
         <p className="mt-3 text-xs text-red-900/60">
           You can switch tabs and use Teams normally. Keep this tab open.
+        </p>
+      </div>
+    );
+  }
+
+  // ------------------------------------------------------------------
+  // Uploading an existing recording
+  // ------------------------------------------------------------------
+  if (phase === "uploading") {
+    const pct = upload?.stage === "uploading" ? (upload.percent ?? 0) : null;
+    return (
+      <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
+        <p className="flex items-center gap-2 text-sm font-medium">
+          <Loader2 size={15} className="animate-spin text-[var(--accent)]" />
+          {upload?.stage === "uploading"
+            ? `Uploading ${fileName}…`
+            : upload?.label
+              ? upload.label
+              : upload?.total
+                ? `Transcribing — segment ${upload.done ?? 0} of ${upload.total}.`
+                : "Transcribing…"}
+        </p>
+        {pct !== null && (
+          <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-canvas">
+            <div
+              className="h-full rounded-full bg-[var(--accent)] transition-all"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+        )}
+        {upload?.stage === "transcribing" && !!upload.total && (
+          <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-canvas">
+            <div
+              className="h-full rounded-full bg-[var(--accent)] transition-all"
+              style={{ width: `${((upload.done ?? 0) / upload.total) * 100}%` }}
+            />
+          </div>
+        )}
+        <p className="mt-3 text-xs text-muted">
+          Long recordings are split into segments and transcribed one by one —
+          a full-length meeting can take a few minutes. Keep this tab open.
         </p>
       </div>
     );
@@ -375,64 +455,110 @@ export function MeetingRecorder({
   }
 
   // ------------------------------------------------------------------
-  // Idle / error — the arm screen
+  // Idle / error — pick how the recording gets here
   // ------------------------------------------------------------------
   return (
-    <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
+    <div className="space-y-4">
       {phase === "error" && (
-        <p className="mb-4 flex items-start gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+        <p className="flex items-start gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
           <AlertTriangle size={15} className="mt-0.5 shrink-0" />
           {error}
         </p>
       )}
 
-      <h2 className="font-semibold tracking-tight">Record this meeting</h2>
-      <p className="mt-1 text-sm text-muted">
-        Start it before you join. When the meeting ends I&apos;ll ask whether to
-        turn it into notes — nested bullets plus every follow-up action — or
-        throw it away.
-      </p>
-
-      <label className="mt-4 flex cursor-pointer items-start gap-2.5 rounded-lg border border-border p-3 text-sm">
-        <input
-          type="checkbox"
-          checked={includeMeetingAudio}
-          onChange={(e) => setIncludeMeetingAudio(e.target.checked)}
-          className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
-        />
-        <span>
-          Include the meeting&apos;s audio, not just my microphone
-          <span className="mt-0.5 block text-xs text-muted">
-            Your browser will ask what to share. For Teams in a browser tab,
-            pick that tab and tick &ldquo;Also share tab audio&rdquo;. For the
-            Teams desktop app, pick <b>Entire Screen</b> and tick &ldquo;Also
-            share system audio&rdquo; — window shares carry no sound.
-          </span>
-        </span>
-      </label>
-
-      <label className="mt-3 flex cursor-pointer items-start gap-2.5 rounded-lg bg-canvas p-3 text-sm">
+      {/* One consent gate for both paths — it's the same promise either way,
+          and asking twice for the same thing just trains people to click
+          past it. */}
+      <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-border bg-surface p-4 text-sm shadow-sm">
         <input
           type="checkbox"
           checked={consent}
           onChange={(e) => setConsent(e.target.checked)}
           className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
         />
-        <span className="text-muted">
-          Everyone in this meeting has agreed to be recorded, and recording it
-          is allowed under my organization&apos;s policy and applicable law.
+        <span>
+          <span className="font-medium">Everyone in the meeting knew it was being recorded and agreed to it.</span>
+          <span className="mt-0.5 block text-xs text-muted">
+            Recording it is allowed under my organization&apos;s policy and
+            applicable law. Tick this to continue — it applies to uploading an
+            existing recording as well as making a new one.
+          </span>
         </span>
       </label>
 
-      <div className="mt-4 flex justify-end">
-        <Button
-          onClick={() => void start()}
-          disabled={!consent || phase === "starting"}
-        >
-          <Mic size={16} />
-          {phase === "starting" ? "Starting…" : "Start recording"}
-        </Button>
+      <div className={`grid gap-4 sm:grid-cols-2 ${consent ? "" : "pointer-events-none opacity-50"}`}>
+        {/* Upload — the common case: the meeting already happened. */}
+        <div className="flex flex-col rounded-xl border border-border bg-surface p-5 shadow-sm">
+          <span className="mb-3 grid h-10 w-10 place-items-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
+            <FileAudio size={20} />
+          </span>
+          <h2 className="font-semibold tracking-tight">Upload a recording</h2>
+          <p className="mt-1 flex-1 text-sm text-muted">
+            You already have the audio — a Teams recording, a voice memo,
+            anything. Any length. I&apos;ll transcribe it, write nested-bullet
+            notes, pull out the action items, and create the meeting for you.
+          </p>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="audio/*,video/mp4,video/webm,.m4a,.mp3,.wav,.webm"
+            className="hidden"
+            onChange={(e) => {
+              void handleFile(e.target.files?.[0] || null);
+              e.target.value = "";
+            }}
+          />
+          <Button className="mt-4" onClick={() => fileRef.current?.click()}>
+            <FileAudio size={16} /> Choose a file
+          </Button>
+        </div>
+
+        {/* Record — the meeting is happening now. */}
+        <div className="flex flex-col rounded-xl border border-border bg-surface p-5 shadow-sm">
+          <span className="mb-3 grid h-10 w-10 place-items-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
+            <Mic size={20} />
+          </span>
+          <h2 className="font-semibold tracking-tight">Record it live</h2>
+          <p className="mt-1 flex-1 text-sm text-muted">
+            The meeting is starting now. Capture it as it happens — it stops
+            itself when the meeting does, then asks whether to keep it.
+          </p>
+
+          <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-border p-2.5 text-xs">
+            <input
+              type="checkbox"
+              checked={includeMeetingAudio}
+              onChange={(e) => setIncludeMeetingAudio(e.target.checked)}
+              className="mt-0.5 h-3.5 w-3.5 accent-[var(--accent)]"
+            />
+            <span>
+              Capture the meeting&apos;s audio too, not just my microphone
+              <span className="mt-0.5 block text-muted">
+                Your browser asks what to share. Teams in a browser tab: pick
+                that tab, tick &ldquo;Also share tab audio&rdquo;. Teams desktop
+                app: pick <b>Entire Screen</b> and tick &ldquo;Also share system
+                audio&rdquo; — a window share carries no sound.
+              </span>
+            </span>
+          </label>
+
+          <Button
+            className="mt-4"
+            variant="secondary"
+            onClick={() => void start()}
+            disabled={phase === "starting"}
+          >
+            <Mic size={16} />
+            {phase === "starting" ? "Starting…" : "Start recording"}
+          </Button>
+        </div>
       </div>
+
+      <p className="flex items-start gap-2 px-1 text-xs text-muted">
+        <ShieldCheck size={14} className="mt-0.5 shrink-0 text-[var(--accent)]" />
+        The audio is deleted as soon as it has been transcribed — it is never
+        stored. You choose afterwards whether to keep even the transcript.
+      </p>
     </div>
   );
 }

@@ -10,6 +10,7 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/api/recordings/[id]/uploaded": ["./node_modules/ffmpeg-static/**"],
     "/api/conference/transcribe": ["./node_modules/ffmpeg-static/**"],
+    "/api/meeting/transcribe-upload": ["./node_modules/ffmpeg-static/**"],
   },
 };
 

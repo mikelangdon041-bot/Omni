@@ -59,8 +59,12 @@ export default function RecordMeetingPage() {
           Meeting Prep
         </p>
         <h1 className="mt-0.5 text-2xl font-semibold tracking-tight">
-          Record &amp; summarize
+          Upload or record a meeting
         </h1>
+        <p className="mt-1 text-sm text-muted">
+          Either way you get the same thing: a transcript, nested-bullet notes,
+          the action items pulled out, and a meeting created to hold it all.
+        </p>
       </div>
       <MeetingRecorder onSave={handleSave} saving={saving} />
     </>
