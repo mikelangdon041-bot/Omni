@@ -154,6 +154,10 @@ export function MeetingRecorder({
   const [pasted, setPasted] = useState("");
   const [trimSmallTalk, setTrimSmallTalk] = useState(true);
   const [ownNotes, setOwnNotes] = useState("");
+  // Voices the diarizer separated, and what the user says each one is. Left
+  // blank they stay "Speaker A" — the model is barred from guessing.
+  const [speakers, setSpeakers] = useState<string[]>([]);
+  const [speakerNames, setSpeakerNames] = useState<Record<string, string>>({});
   const [emphasizeNotes, setEmphasizeNotes] = useState(true);
 
   const captureRef = useRef<LiveCapture | null>(null);
@@ -258,8 +262,10 @@ export function MeetingRecorder({
     setUpload({ percent: 0, label: "Uploading" });
     setPhase("uploading");
     try {
-      const text = await transcribeUpload(file, setUpload);
+      const { text, speakers: found } = await transcribeUpload(file, setUpload);
       setUpload(null);
+      setSpeakers(found);
+      setSpeakerNames({});
       if (!text.trim()) {
         setError("No speech was picked up in that file.");
         setPhase("error");
@@ -301,6 +307,8 @@ export function MeetingRecorder({
     setFileName("");
     setElapsed(0);
     setOwnNotes("");
+    setSpeakers([]);
+    setSpeakerNames({});
     setPhase("idle");
   }
 
@@ -329,7 +337,35 @@ export function MeetingRecorder({
   const removeAction = (index: number) =>
     setResult((r) => (r ? { ...r, actions: r.actions.filter((_, i) => i !== index) } : r));
 
-  const summarize = () => summarizeText(transcript);
+  // Rewrite "Speaker A:" to the name the user gave, at line starts only. This
+  // is the one safe way to attach names: it comes from the person who was in
+  // the room, not from the model inferring identity out of context.
+  function applySpeakerNames(text: string): string {
+    const named = Object.entries(speakerNames).filter(([, v]) => v.trim());
+    if (named.length === 0) return text;
+    return text
+      .split("\n")
+      .map((line) => {
+        for (const [label, name] of named) {
+          const prefix = `Speaker ${label}:`;
+          if (line.startsWith(prefix)) {
+            return `${name.trim()}:${line.slice(prefix.length)}`;
+          }
+        }
+        return line;
+      })
+      .join("\n");
+  }
+
+  const summarize = () => summarizeText(applySpeakerNames(transcript));
+
+  // The first thing each voice says — enough to recognise who it was without
+  // going back to the recording.
+  function speakerSample(label: string): string {
+    const prefix = `Speaker ${label}:`;
+    const line = transcript.split("\n").find((l) => l.startsWith(prefix));
+    return line ? line.slice(prefix.length).trim().slice(0, 90) : "";
+  }
 
   // Takes the text explicitly: the paste path calls this in the same tick it
   // sets `transcript`, so reading the state here would send an empty string.
@@ -510,6 +546,42 @@ export function MeetingRecorder({
                 ? `${mmss(elapsed)} captured. Want me to turn it into notes with follow-up actions?`
                 : "Got it. Want me to turn this into notes with follow-up actions?"}
             </p>
+            {speakers.length > 1 && (
+              <div className="rounded-lg border border-border p-3">
+                <p className="text-sm font-medium">Who is who?</p>
+                <p className="mt-0.5 text-xs text-muted">
+                  {speakers.length} voices were separated in the audio. Naming
+                  them is optional — leave a box empty and it stays
+                  &ldquo;Speaker {speakers[0]}&rdquo;. I won&apos;t guess: names
+                  are only attached when you say so.
+                </p>
+                <div className="mt-3 space-y-2">
+                  {speakers.map((label) => (
+                    <div key={label} className="flex items-start gap-2">
+                      <span className="mt-2 w-20 shrink-0 text-xs font-semibold">
+                        Speaker {label}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <input
+                          value={speakerNames[label] || ""}
+                          onChange={(e) =>
+                            setSpeakerNames((m) => ({ ...m, [label]: e.target.value }))
+                          }
+                          placeholder="Name (optional)"
+                          className="w-full rounded-md border border-border bg-canvas px-2 py-1.5 text-sm outline-none transition focus:border-[var(--accent)]"
+                        />
+                        {speakerSample(label) && (
+                          <p className="mt-1 truncate text-[11px] italic text-muted">
+                            &ldquo;{speakerSample(label)}…&rdquo;
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <Input
               label="Anything I should know about this meeting? (optional)"
               value={hint}

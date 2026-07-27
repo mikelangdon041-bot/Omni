@@ -53,12 +53,12 @@ async function post<T>(payload: Record<string, unknown>, signal?: AbortSignal): 
 async function transcribeChunk(
   payload: Record<string, unknown>,
   signal?: AbortSignal,
-): Promise<string> {
+): Promise<{ text: string; speakers: string[] }> {
   let last: Error | null = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const { text } = await post<{ text?: string }>(payload, signal);
-      return text || "";
+      const res = await post<{ text?: string; speakers?: string[] }>(payload, signal);
+      return { text: res.text || "", speakers: res.speakers || [] };
     } catch (e) {
       if (signal?.aborted) throw e;
       last = e as Error;
@@ -102,11 +102,17 @@ function putSlice(
   });
 }
 
+export interface TranscriptResult {
+  text: string;
+  /** Distinct voices the diarizer separated, e.g. ["A", "B"]. */
+  speakers: string[];
+}
+
 export async function transcribeUpload(
   file: File,
   onProgress: (p: UploadProgress) => void,
   signal?: AbortSignal,
-): Promise<string> {
+): Promise<TranscriptResult> {
   const ext = (file.name.split(".").pop() || "webm").toLowerCase();
   const uploadId = crypto.randomUUID();
   const contentType = file.type || "application/octet-stream";
@@ -153,6 +159,7 @@ export async function transcribeUpload(
     onProgress({ percent: base, label: "Transcribing" });
 
     const texts: string[] = new Array(totalChunks).fill("");
+    const speakers = new Set<string>();
     let done = 0;
 
     const report = () =>
@@ -165,10 +172,12 @@ export async function transcribeUpload(
     // and stores a voice sample per person; every later chunk is handed those
     // samples so one person keeps one label. Running them all at once would
     // race that, and speakers would drift between labels mid-meeting.
-    texts[0] = await transcribeChunk(
+    const first = await transcribeChunk(
       { action: "chunk", uploadId, index: 0, chunkExt },
       signal,
     );
+    texts[0] = first.text;
+    first.speakers.forEach((sp) => speakers.add(sp));
     done += 1;
     report();
 
@@ -177,10 +186,12 @@ export async function transcribeUpload(
       for (;;) {
         const i = next++;
         if (i >= totalChunks) return;
-        texts[i] = await transcribeChunk(
+        const res = await transcribeChunk(
           { action: "chunk", uploadId, index: i, chunkExt },
           signal,
         );
+        texts[i] = res.text;
+        res.speakers.forEach((sp) => speakers.add(sp));
         done += 1;
         report();
       }
@@ -192,7 +203,10 @@ export async function transcribeUpload(
     onProgress({ percent: 100, label: "Transcribing" });
     // Each chunk was removed as it was read; this clears anything left over.
     await discard();
-    return texts.filter(Boolean).join("\n\n");
+    return {
+      text: texts.filter(Boolean).join("\n\n"),
+      speakers: [...speakers].sort(),
+    };
   } catch (e) {
     await discard();
     throw e;
