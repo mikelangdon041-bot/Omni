@@ -40,7 +40,7 @@ export default function RecordMeetingPage() {
         })),
         debrief: {
           transcript: result.transcript,
-          sections: result.sections,
+          notesHtml: result.notesHtml,
           // Only the ones still ticked on the review screen arrive here.
           actions: result.actions.map((a) => ({
             text: a.text,

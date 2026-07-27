@@ -15,7 +15,8 @@ export const maxDuration = 120;
 //   grill    { context, briefText?, count? }   → { questions:[{question,modelAnswer}] }
 //   coach    { question, modelAnswer, userAnswer, context } → { coaching }
 //   debrief  { transcript, context }           → { summary, actions:[] }
-//   capture  { transcript, hint? }             → { title, summary, actions:[] }
+//   capture  { transcript, hint?, ownNotes?, emphasizeNotes? }
+//                                              → { title, notes, actions:[], smallTalk }
 
 function firstText(res: { content: { type: string; text?: string }[] }): string {
   const block = res.content.find((b) => b.type === "text");
@@ -225,18 +226,10 @@ const CAPTURE_SCHEMA = {
   type: "object" as const,
   properties: {
     title: { type: "string" as const },
-    sections: {
-      type: "array" as const,
-      items: {
-        type: "object" as const,
-        properties: {
-          title: { type: "string" as const },
-          content: { type: "string" as const },
-        },
-        required: ["title", "content"],
-        additionalProperties: false,
-      },
-    },
+    // One document, not a set of cards. The notes get pasted wholesale into
+    // OneNote and the like, so they have to be a single nested list rather
+    // than separate blocks the user has to copy one at a time.
+    notes: { type: "string" as const },
     actions: { type: "array" as const, items: { type: "string" as const } },
     // Meetings routinely open with several minutes of greetings and travel
     // chat before anyone says anything worth keeping. The notes never include
@@ -252,7 +245,7 @@ const CAPTURE_SCHEMA = {
       additionalProperties: false,
     },
   },
-  required: ["title", "sections", "actions", "smallTalk"],
+  required: ["title", "notes", "actions", "smallTalk"],
   additionalProperties: false,
 };
 
@@ -510,9 +503,17 @@ Attribution, which matters and is easy to get wrong:
 - Line breaks often mark a change of speaker even when nobody is named — Apple Voice Memos and several other tools put each turn on its own line. Treat a line-broken transcript as a multi-party conversation with turns, and let that shape the notes ("this was pushed back on", "the two sides landed on…"). Use the turn structure; still don't invent who owns which turn.
 
 - title: a short, specific name for this meeting as a person would write it in a calendar (5-8 words, no quotes). Use real names/topics from the transcript when they're clear, e.g. "Dr. Patel — dosing concerns and advisory board". If the transcript is too thin to tell, use a plain descriptive title.
-- sections: the meeting broken into 3-7 topic sections, in the order they came up. Each section is a distinct subject someone would want to find later — not "Introduction" / "Discussion" / "Conclusion" filler.
-  - section title: 2-5 words naming the topic ("Dosing concerns", "Advisory board timing").
-  - section content: HTML using ONLY <ul>, <li>, <b>, <i>, and <p>. Use a nested <ul> inside an <li> for detail under a point, 2-3 levels deep. Complete sentences. Preserve names, figures, product names and dates exactly as spoken. Never invent anything that wasn't said. No headings, no styling attributes, no markdown.
+- notes: ONE nested bullet list covering the whole meeting, as HTML using ONLY <ul>, <li>, <b> and <i>. No headings, no <p>, no styling attributes, no markdown. Structure:
+  - Top level: one <li> per topic, in the order topics came up. The topic name is the first few words of that bullet ("Territory review expectations — …"), not a separate heading. 3-7 topics; no "Introduction" / "Discussion" / "Conclusion" filler.
+  - Nested <ul> inside each topic for the substance, 2-3 levels deep. Complete sentences. Preserve names, figures, product names and dates exactly as spoken. Never invent anything that wasn't said.
+  - It must read as one document someone can paste straight into OneNote or Word and have it keep its shape.
+
+WRITE NOTES, NOT A RETELLING. This is the difference between useful and useless, so weigh it heavily:
+- Organise by topic and by what came out of it, never by the order people spoke. Do NOT narrate the exchange turn by turn. If two consecutive bullets each begin with a person's name, you are transcribing a conversation instead of taking notes — restructure them.
+- State the substance directly, as settled fact. Write "Territory review was framed as level-setting after the territory switch and paternity leave, not a performance concern" — NOT "The manager explained that the intent was simply to learn about the territory…". Strip "X said", "Y responded", "X explained", "Y noted", "they mentioned" wherever the sentence works without it, which is nearly always.
+- Name someone only when it changes the meaning: a commitment they own, a decision they made, a position the reader has to respond to. Ordinary content carries no attribution at all.
+- Where people disagreed, give the resolved position and then the open point, rather than replaying both sides in sequence. Where something was left unresolved, say so plainly and say what would settle it.
+- A reader who was not in the meeting should be able to skim this and know where things stand — not reconstruct who talked when.
 - actions: every concrete follow-up the recording implies or someone promised, each as one imperative sentence, with the owner and any deadline when stated (e.g. "Send Dr. Chen the phase 3 subgroup data by Friday"). Only real commitments and next steps — not topics, not general observations. Empty array if there genuinely are none.
 - smallTalk: meetings usually open with pleasantries — greetings, travel, weather, weekend plans, waiting for people to join, tech checks — before anyone says anything substantive. Never make a section for it.
   - found: true only when there is a genuine run of opening pleasantries. A one-line "hi, how are you" before real content does not count.
@@ -550,13 +551,7 @@ THE WRITER'S OWN NOTES are background context. Use them to understand the meetin
       const parsed = JSON.parse(firstText(res) || "{}");
       return NextResponse.json({
         title: String(parsed.title || "").slice(0, 200),
-        sections: (Array.isArray(parsed.sections) ? parsed.sections : []).map(
-          (s: { title?: unknown; content?: unknown }, i: number) => ({
-            key: `capture_${i}`,
-            title: String(s?.title || "Notes"),
-            content: String(s?.content || ""),
-          }),
-        ),
+        notes: String(parsed.notes || ""),
         actions: (Array.isArray(parsed.actions) ? parsed.actions : []).map(String),
         smallTalk: {
           found: Boolean(parsed.smallTalk?.found),

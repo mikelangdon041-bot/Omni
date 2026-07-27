@@ -88,6 +88,10 @@ export interface DebriefSection {
 
 export interface Debrief {
   transcript?: string;
+  // The notes as ONE nested-bullet HTML document. Replaced `sections`, which
+  // rendered as separate cards you could only copy one at a time — these get
+  // pasted wholesale into OneNote, so they have to be a single document.
+  notesHtml?: string;
   // Typed answers to the structured debrief questions, keyed by question key.
   notes?: Record<string, string>;
   // Notes split into editable sections. `summary` is the older single-blob

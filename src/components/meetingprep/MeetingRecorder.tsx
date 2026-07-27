@@ -37,7 +37,6 @@ import { Modal } from "@/components/ui/Modal";
 import { RichText } from "@/components/ui/RichText";
 import { useToast } from "@/components/ui/Feedback";
 import { startLiveCapture, type LiveCapture } from "@/lib/meetingprep/liveCapture";
-import type { DebriefSection } from "@/lib/meetingprep/types";
 import { transcribeUpload, type UploadProgress } from "@/lib/meetingprep/uploadCapture";
 
 export interface CaptureAction {
@@ -48,7 +47,8 @@ export interface CaptureAction {
 
 export interface CaptureResult {
   title: string;
-  sections: DebriefSection[];
+  /** One nested-bullet HTML document — pasteable straight into OneNote. */
+  notesHtml: string;
   actions: CaptureAction[];
   transcript: string;
   /** Where the opening pleasantries end, when there were any we could locate. */
@@ -323,16 +323,6 @@ export function MeetingRecorder({
   const patchResult = (patch: Partial<CaptureResult>) =>
     setResult((r) => (r ? { ...r, ...patch } : r));
 
-  const patchSection = (key: string, patch: Partial<DebriefSection>) =>
-    setResult((r) =>
-      r
-        ? { ...r, sections: r.sections.map((s) => (s.key === key ? { ...s, ...patch } : s)) }
-        : r,
-    );
-
-  const removeSection = (key: string) =>
-    setResult((r) => (r ? { ...r, sections: r.sections.filter((s) => s.key !== key) } : r));
-
   const patchAction = (index: number, patch: Partial<CaptureAction>) =>
     setResult((r) =>
       r
@@ -414,7 +404,7 @@ export function MeetingRecorder({
 
       setResult({
         title: json.title || hint.trim() || "Recorded meeting",
-        sections: json.sections || [],
+        notesHtml: json.notes || "",
         actions: (json.actions || []).map((text: string) => ({ text, selected: true })),
         transcript: source,
         smallTalk:
@@ -692,39 +682,11 @@ export function MeetingRecorder({
             Edit anything below before saving — nothing is written until you do.
           </p>
 
-          <div className="space-y-4">
-            {result.sections.map((sec) => (
-              <div key={sec.key} className="rounded-lg border border-border">
-                <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-                  <input
-                    value={sec.title}
-                    onChange={(e) => patchSection(sec.key, { title: e.target.value })}
-                    className="min-w-0 flex-1 bg-transparent text-sm font-semibold outline-none"
-                    aria-label="Section title"
-                  />
-                  <button
-                    onClick={() => removeSection(sec.key)}
-                    className="shrink-0 rounded p-1 text-muted transition hover:text-red-600"
-                    aria-label={`Delete ${sec.title}`}
-                    title="Delete this section"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-                <div className="p-3">
-                  <RichText
-                    value={sec.content}
-                    onChange={(html) => patchSection(sec.key, { content: html })}
-                  />
-                </div>
-              </div>
-            ))}
-            {result.sections.length === 0 && (
-              <p className="text-sm text-muted">
-                No notes left — everything was deleted.
-              </p>
-            )}
-          </div>
+          <RichText
+            value={result.notesHtml}
+            onChange={(html) => patchResult({ notesHtml: html })}
+            minHeight="min-h-64"
+          />
         </section>
 
         <section className="rounded-xl border border-border bg-surface p-5 shadow-sm">

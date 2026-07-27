@@ -6,13 +6,15 @@
 // can be pushed to the to-do list and — when a KOL is linked — logged into
 // Territory Planning.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   CheckCircle2,
+  Copy,
   FileAudio,
   ListTodo,
   MapPin,
   MessageSquareText,
+  Replace,
   Sparkles,
   Trash2,
 } from "lucide-react";
@@ -21,7 +23,7 @@ import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { RichText } from "@/components/ui/RichText";
-import { OutlineBullets } from "@/components/ui/OutlineBullets";
+import { debriefNotesHtml } from "@/lib/meetingprep/notes";
 import { useConfirm, useToast } from "@/components/ui/Feedback";
 import { TranscriptCapture } from "@/components/studio/TranscriptCapture";
 import { useKolLite } from "./KolLink";
@@ -30,7 +32,6 @@ import {
   DEBRIEF_QUESTIONS,
   meetingContextText,
   type DebriefAction,
-  type DebriefSection,
   type MpMeeting,
 } from "@/lib/meetingprep/types";
 import type { DueDatePreset } from "@/lib/territory/types";
@@ -46,6 +47,9 @@ function toLocalInput(iso: string | null): string {
 // Pull the speaker labels out of a stored transcript ("Speaker A:", "Dr. Chen:").
 // A label is a short prefix before a colon that opens several lines — one line
 // starting "Note:" is not a speaker.
+// Escape a user-typed string so it can be used as a literal in a RegExp.
+const escapeRx = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 function detectSpeakers(transcript: string): string[] {
   const counts = new Map<string, number>();
   for (const line of (transcript || "").split("\n")) {
@@ -76,11 +80,37 @@ export function DebriefTab({
   const [busy, setBusy] = useState(false);
   const [redoOpen, setRedoOpen] = useState(false);
   const [renames, setRenames] = useState<Record<string, string>>({});
+  const [copied, setCopied] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findWhat, setFindWhat] = useState("");
+  const [findWith, setFindWith] = useState("");
+  const notesRef = useRef<HTMLDivElement>(null);
 
   const debrief = m.debrief || {};
   const notes = debrief.notes || {};
   const actions: DebriefAction[] = debrief.actions || [];
-  const sections: DebriefSection[] = debrief.sections || [];
+  // Folds the two older shapes (sections, outline summary) into the one
+  // document, so meetings saved before this still open with their notes.
+  const notesHtml = debriefNotesHtml(debrief);
+
+  // Copy as rich text so the bullet nesting survives the paste into OneNote
+  // or Word; the plain-text flavour keeps indentation for anywhere else.
+  async function copyNotes() {
+    const el = notesRef.current;
+    if (!el) return;
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "text/html": new Blob([el.innerHTML], { type: "text/html" }),
+          "text/plain": new Blob([el.innerText], { type: "text/plain" }),
+        }),
+      ]);
+    } catch {
+      await navigator.clipboard.writeText(el.innerText).catch(() => {});
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1800);
+  }
   // Ticked and not already pushed — what "Add to to-do list" will act on.
   const selectedPending = actions
     .map((a, i) => (a.selected !== false && !a.taskId ? i : -1))
@@ -88,14 +118,6 @@ export function DebriefTab({
 
   // Everything here rides the meeting's existing debounced autosave, so
   // typing in a section behaves like every other field in the module.
-  const setSection = (key: string, patch: Partial<DebriefSection>) =>
-    save({
-      debrief: {
-        ...debrief,
-        sections: sections.map((s) => (s.key === key ? { ...s, ...patch } : s)),
-      },
-    });
-
   const setAction = (index: number, patch: Partial<DebriefAction>) =>
     save({
       debrief: {
@@ -103,21 +125,6 @@ export function DebriefTab({
         actions: actions.map((a, i) => (i === index ? { ...a, ...patch } : a)),
       },
     });
-
-  async function removeSection(sec: DebriefSection) {
-    if (
-      !(await confirm({
-        title: `Delete "${sec.title || "this section"}"?`,
-        message: "The other sections are untouched.",
-        confirmLabel: "Delete",
-        danger: true,
-      }))
-    )
-      return;
-    save({
-      debrief: { ...debrief, sections: sections.filter((s) => s.key !== sec.key) },
-    });
-  }
 
   const notesText = DEBRIEF_QUESTIONS.map((q) =>
     (notes[q.key] || "").trim() ? `${q.label}\n${notes[q.key].trim()}` : "",
@@ -161,9 +168,10 @@ export function DebriefTab({
           ...(transcriptOverride !== undefined
             ? { transcript: transcriptOverride }
             : {}),
-          sections: json.sections || [],
-          // A re-analysis replaces the notes; the old single-blob summary
-          // would otherwise linger underneath them.
+          notesHtml: json.notes || "",
+          // A re-analysis replaces the notes; the two older shapes would
+          // otherwise linger underneath the new document.
+          sections: [],
           summary: "",
           actions: (json.actions || []).map((text: string) => ({
             text,
@@ -226,6 +234,31 @@ export function DebriefTab({
     setRedoOpen(false);
     setRenames({});
     await analyze(pairs.length ? text : undefined);
+  }
+
+  // Replace a name (or any wording) everywhere at once — notes, follow-ups
+  // and the stored transcript. A name that came out wrong is usually wrong in
+  // every place it appears, so fixing them one at a time is the wrong shape.
+  function replaceEverywhere() {
+    const what = findWhat.trim();
+    if (!what) return;
+    const rx = new RegExp(escapeRx(what), "g");
+    const to = findWith.trim();
+
+    save({
+      debrief: {
+        ...debrief,
+        notesHtml: notesHtml.replace(rx, to),
+        actions: actions.map((a) => ({ ...a, text: a.text.replace(rx, to) })),
+        ...(debrief.transcript
+          ? { transcript: debrief.transcript.replace(rx, to) }
+          : {}),
+      },
+    });
+    setFindOpen(false);
+    setFindWhat("");
+    setFindWith("");
+    toast("success", `Replaced "${what}" with "${to}" throughout.`);
   }
 
   // Adds the follow-ups at `indexes` to the global to-do list, skipping any
@@ -334,14 +367,14 @@ export function DebriefTab({
             <Sparkles size={15} />
             {busy
               ? "Analyzing…"
-              : debrief.summary
+              : notesHtml
                 ? "Re-analyze"
                 : "Summarize & extract follow-ups"}
           </Button>
         </div>
       </section>
 
-      {(sections.length > 0 || debrief.summary) && (
+      {notesHtml.trim() !== "" && (
         <>
           <section className="rounded-xl border border-border bg-surface p-4 shadow-sm">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -350,6 +383,12 @@ export function DebriefTab({
               </h2>
               <div className="flex items-center gap-3">
                 <span className="text-[11px] text-muted">Edits save automatically</span>
+                <Button size="sm" variant="secondary" onClick={() => setFindOpen(true)}>
+                  <Replace size={14} /> Rename
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => void copyNotes()}>
+                  <Copy size={14} /> {copied ? "Copied" : "Copy all"}
+                </Button>
                 {/* Regenerating belongs next to what it regenerates — it used
                     to live at the bottom of the capture section above, which
                     is not where anyone looks for it. */}
@@ -366,42 +405,18 @@ export function DebriefTab({
               </div>
             </div>
 
-            {/* Each section is its own rich-text block, editable and
-                deletable, exactly like a brief section. */}
-            {sections.length > 0 ? (
-              <div className="space-y-4">
-                {sections.map((sec) => (
-                  <div key={sec.key} className="rounded-lg border border-border">
-                    <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-                      <input
-                        value={sec.title}
-                        onChange={(e) => setSection(sec.key, { title: e.target.value })}
-                        className="min-w-0 flex-1 bg-transparent text-sm font-semibold outline-none"
-                        aria-label="Section title"
-                      />
-                      <button
-                        onClick={() => void removeSection(sec)}
-                        className="shrink-0 rounded p-1 text-muted transition hover:text-red-600"
-                        aria-label={`Delete ${sec.title}`}
-                        title="Delete this section"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                    <div className="p-3">
-                      <RichText
-                        value={sec.content}
-                        onChange={(html) => setSection(sec.key, { content: html })}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              // Debriefs written before notes were split into sections keep
-              // their original single outline.
-              <OutlineBullets text={debrief.summary || ""} />
-            )}
+            {/* One document, not a stack of cards: these get pasted whole
+                into OneNote, and separate blocks can't be. Top-level bullets
+                are the topics; everything nests beneath them. */}
+            <div ref={notesRef}>
+              <RichText
+                value={notesHtml}
+                onChange={(html) =>
+                  save({ debrief: { ...debrief, notesHtml: html } })
+                }
+                minHeight="min-h-64"
+              />
+            </div>
           </section>
 
           <section className="rounded-xl border border-border bg-surface p-4 shadow-sm">
@@ -468,6 +483,56 @@ export function DebriefTab({
           </section>
         </>
       )}
+
+      <Modal
+        open={findOpen}
+        onClose={() => setFindOpen(false)}
+        title="Rename throughout"
+        size="sm"
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-muted">
+            Changes every occurrence at once — in the notes, the follow-ups and
+            the saved transcript. Useful when a name came out wrong, since it
+            is usually wrong everywhere it appears.
+          </p>
+          <Input
+            label="Replace"
+            value={findWhat}
+            onChange={(e) => setFindWhat(e.target.value)}
+            placeholder="Speaker A"
+            autoFocus
+          />
+          <Input
+            label="With"
+            value={findWith}
+            onChange={(e) => setFindWith(e.target.value)}
+            placeholder="Dr. Chen"
+          />
+          {findWhat.trim() && (
+            <p className="text-xs text-muted">
+              {
+                (notesHtml.match(
+                  new RegExp(escapeRx(findWhat.trim()), "g"),
+                ) || []).length
+              }{" "}
+              in the notes,{" "}
+              {
+                actions.filter((a) => a.text.includes(findWhat.trim())).length
+              }{" "}
+              follow-up(s).
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setFindOpen(false)}>
+              Cancel
+            </Button>
+            <Button disabled={!findWhat.trim()} onClick={replaceEverywhere}>
+              Replace all
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal
         open={redoOpen}
