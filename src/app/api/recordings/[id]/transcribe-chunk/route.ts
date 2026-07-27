@@ -24,7 +24,14 @@ export async function POST(
   }
 
   const admin = createAdminClient();
-  const chunkPath = `${userId}/${recording.id}/chunks/${String(index).padStart(3, "0")}.wav`;
+  // Chunks are named by index but their extension depends on what ffmpeg
+  // managed to produce (mp3 normally, the source format on the raw fallback),
+  // so find the file rather than assuming one.
+  const dir = `${userId}/${recording.id}/chunks`;
+  const prefix = String(index).padStart(3, "0");
+  const { data: listed } = await admin.storage.from("recordings").list(dir);
+  const match = (listed || []).find((e) => e.id && e.name.startsWith(`${prefix}.`));
+  const chunkPath = `${dir}/${match?.name ?? `${prefix}.wav`}`;
 
   try {
     const { data: blob, error: dlErr } = await admin.storage
@@ -32,7 +39,10 @@ export async function POST(
       .download(chunkPath);
     if (dlErr || !blob) throw new Error(dlErr?.message || "chunk download failed");
 
-    const text = await transcribeChunk(await blob.arrayBuffer(), `chunk-${index}.wav`);
+    const text = await transcribeChunk(
+      await blob.arrayBuffer(),
+      match?.name ?? `chunk-${index}.wav`,
+    );
 
     // Re-read transcript, append this chunk's text, write back. The worker calls
     // chunks sequentially so this read-modify-write stays ordered.

@@ -111,11 +111,11 @@ export async function POST(req: Request) {
               parts = [{ bytes: input, name: `upload.${ext}`, type: blob.type || "audio/webm" }];
             } else {
               send({ type: "progress", label: "Splitting audio into segments…" });
-              const chunks = await chunkAudio(input, ext);
-              parts = chunks.map((c) => ({
+              const split = await chunkAudio(input, ext);
+              parts = split.chunks.map((c) => ({
                 bytes: c.bytes,
-                name: `chunk-${c.index}.wav`,
-                type: "audio/wav",
+                name: `chunk-${c.index}.${split.ext}`,
+                type: split.ext === "mp3" ? "audio/mpeg" : "audio/wav",
               }));
             }
             send({ type: "progress", done: 0, total: parts.length });

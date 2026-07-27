@@ -33,15 +33,22 @@ import {
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
+import { RichText } from "@/components/ui/RichText";
 import { useToast } from "@/components/ui/Feedback";
 import { startLiveCapture, type LiveCapture } from "@/lib/meetingprep/liveCapture";
 import type { DebriefSection } from "@/lib/meetingprep/types";
 import { transcribeUpload, type UploadProgress } from "@/lib/meetingprep/uploadCapture";
 
+export interface CaptureAction {
+  text: string;
+  /** Ticked items are the ones that get saved as follow-ups. */
+  selected: boolean;
+}
+
 export interface CaptureResult {
   title: string;
   sections: DebriefSection[];
-  actions: string[];
+  actions: CaptureAction[];
   transcript: string;
 }
 
@@ -84,6 +91,7 @@ export function MeetingRecorder({
   const [keepTranscript, setKeepTranscript] = useState(true);
   const [upload, setUpload] = useState<UploadProgress | null>(null);
   const [fileName, setFileName] = useState("");
+  const [notesPct, setNotesPct] = useState(0);
 
   const captureRef = useRef<LiveCapture | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -218,8 +226,43 @@ export function MeetingRecorder({
     setPhase("idle");
   }
 
+  // Review-screen edits live in local state — nothing is written until Save,
+  // which is the point: you shouldn't have to save notes to fix them.
+  const patchResult = (patch: Partial<CaptureResult>) =>
+    setResult((r) => (r ? { ...r, ...patch } : r));
+
+  const patchSection = (key: string, patch: Partial<DebriefSection>) =>
+    setResult((r) =>
+      r
+        ? { ...r, sections: r.sections.map((s) => (s.key === key ? { ...s, ...patch } : s)) }
+        : r,
+    );
+
+  const removeSection = (key: string) =>
+    setResult((r) => (r ? { ...r, sections: r.sections.filter((s) => s.key !== key) } : r));
+
+  const patchAction = (index: number, patch: Partial<CaptureAction>) =>
+    setResult((r) =>
+      r
+        ? { ...r, actions: r.actions.map((a, i) => (i === index ? { ...a, ...patch } : a)) }
+        : r,
+    );
+
+  const removeAction = (index: number) =>
+    setResult((r) => (r ? { ...r, actions: r.actions.filter((_, i) => i !== index) } : r));
+
   async function summarize() {
     setPhase("summarizing");
+    setNotesPct(0);
+    // The model gives no progress signal, so this is an estimate paced off
+    // transcript length. It eases toward 95% and only reaches 100 when the
+    // notes actually land — it never claims to be finished before it is.
+    const expectedMs = Math.min(120_000, 15_000 + transcript.length * 3);
+    const startedAt = Date.now();
+    const ticker = setInterval(() => {
+      const elapsedMs = Date.now() - startedAt;
+      setNotesPct(Math.min(95, Math.round((1 - Math.exp(-elapsedMs / (expectedMs / 2.5))) * 95)));
+    }, 250);
     try {
       const res = await fetch("/api/meeting/ai", {
         method: "POST",
@@ -232,14 +275,17 @@ export function MeetingRecorder({
       setResult({
         title: json.title || hint.trim() || "Recorded meeting",
         sections: json.sections || [],
-        actions: json.actions || [],
+        actions: (json.actions || []).map((text: string) => ({ text, selected: true })),
         transcript,
       });
+      setNotesPct(100);
       setKeepTranscript(true);
       setPhase("review");
     } catch (e) {
       setError((e as Error).message);
       setPhase("error");
+    } finally {
+      clearInterval(ticker);
     }
   }
 
@@ -247,6 +293,7 @@ export function MeetingRecorder({
     if (!result) return;
     await onSave({
       ...result,
+      actions: result.actions.filter((a) => a.selected),
       transcript: keepTranscript ? result.transcript : "",
     });
   }
@@ -288,15 +335,22 @@ export function MeetingRecorder({
   // ------------------------------------------------------------------
   // Uploading an existing recording
   // ------------------------------------------------------------------
-  if (phase === "uploading") {
-    // One bar, one number, counting once from 0 to 100 across the whole job.
-    const pct = upload?.percent ?? 0;
+  if (phase === "uploading" || phase === "summarizing") {
+    // One bar, one number, counting once from 0 to 100 per stage. Inline on
+    // the page, not in a dialog — a dialog that closed on the way here left
+    // the user staring at a screen that looked idle.
+    const writing = phase === "summarizing";
+    const pct = writing ? notesPct : (upload?.percent ?? 0);
+    const label = writing ? "Writing your notes" : upload?.label || "Working";
     return (
       <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
         <div className="flex items-center gap-3">
           <p className="flex flex-1 items-center gap-2 text-sm font-medium">
             <Loader2 size={15} className="animate-spin text-[var(--accent)]" />
-            {upload?.label || "Working"} {fileName && <span className="truncate text-muted">· {fileName}</span>}
+            {label}
+            {!writing && fileName && (
+              <span className="truncate text-muted">· {fileName}</span>
+            )}
           </p>
           <span className="shrink-0 font-mono text-sm font-semibold tabular-nums text-[var(--accent)]">
             {pct}%
@@ -309,7 +363,9 @@ export function MeetingRecorder({
           />
         </div>
         <p className="mt-3 text-xs text-muted">
-          A full-length meeting can take a few minutes. Keep this tab open.
+          {writing
+            ? "Reading the transcript and pulling out the follow-ups."
+            : "A full-length meeting can take a few minutes. Keep this tab open."}
         </p>
       </div>
     );
@@ -318,43 +374,21 @@ export function MeetingRecorder({
   // ------------------------------------------------------------------
   // Wrapping up / the "what do you want to do with this?" prompt
   // ------------------------------------------------------------------
-  if (phase === "deciding" || phase === "summarizing") {
-    const wrapping = phase === "deciding" && !transcript;
+  if (phase === "deciding") {
+    const wrapping = !transcript;
     return (
       <>
         <div className="rounded-xl border border-border bg-surface p-5 text-sm text-muted">
           <p className="flex items-center gap-2">
             <Loader2 size={15} className="animate-spin text-[var(--accent)]" />
-            {phase === "summarizing"
-              ? "Writing your notes and pulling out the follow-ups…"
-              : progress.total > 0 && progress.done < progress.total
-                ? `Finishing the transcript — ${progress.done}/${progress.total} segments.`
-                : "Finishing the transcript…"}
+            {progress.total > 0 && progress.done < progress.total
+              ? `Finishing the transcript — ${progress.done}/${progress.total} left to go.`
+              : "Finishing the transcript…"}
           </p>
         </div>
 
-        {/* The modal stays up while the notes are being written. Closing it
-            first dropped the user onto a small card behind where the dialog
-            had been, which read as nothing happening at all. */}
         <Modal
-          open={phase === "summarizing"}
-          onClose={() => {}}
-          title="Writing your notes"
-          size="sm"
-        >
-          <div className="flex flex-col items-center gap-3 py-6 text-center">
-            <Loader2 size={28} className="animate-spin text-[var(--accent)]" />
-            <p className="text-sm font-medium">
-              Reading the transcript and pulling out the follow-ups…
-            </p>
-            <p className="text-xs text-muted">
-              This takes about a minute for a full meeting.
-            </p>
-          </div>
-        </Modal>
-
-        <Modal
-          open={!wrapping && phase === "deciding"}
+          open={!wrapping}
           onClose={() => {}}
           title={autoEnded ? "That meeting just ended" : "Recording finished"}
           size="sm"
@@ -390,32 +424,61 @@ export function MeetingRecorder({
   // Review the notes, decide the transcript's fate, save
   // ------------------------------------------------------------------
   if (phase === "review" && result) {
+    const selectedCount = result.actions.filter((a) => a.selected).length;
     return (
       <div className="space-y-4">
         <section className="rounded-xl border border-border bg-surface p-5 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-wide text-[var(--accent)]">
             Notes from your recording
           </p>
-          <h2 className="mt-1 text-lg font-semibold tracking-tight">{result.title}</h2>
-          <div className="mt-4 space-y-4">
-            {result.sections.map((s) => (
-              <div key={s.key}>
-                <h3 className="text-sm font-semibold">{s.title}</h3>
-                <div
-                  className="mt-1 text-sm leading-relaxed [&_li]:ml-4 [&_li]:list-disc [&_ul]:mt-1"
-                  dangerouslySetInnerHTML={{ __html: s.content }}
-                />
+          <input
+            value={result.title}
+            onChange={(e) => patchResult({ title: e.target.value })}
+            className="mt-1 w-full bg-transparent text-lg font-semibold tracking-tight outline-none"
+            aria-label="Meeting title"
+          />
+          <p className="mb-3 mt-1 text-xs text-muted">
+            Edit anything below before saving — nothing is written until you do.
+          </p>
+
+          <div className="space-y-4">
+            {result.sections.map((sec) => (
+              <div key={sec.key} className="rounded-lg border border-border">
+                <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+                  <input
+                    value={sec.title}
+                    onChange={(e) => patchSection(sec.key, { title: e.target.value })}
+                    className="min-w-0 flex-1 bg-transparent text-sm font-semibold outline-none"
+                    aria-label="Section title"
+                  />
+                  <button
+                    onClick={() => removeSection(sec.key)}
+                    className="shrink-0 rounded p-1 text-muted transition hover:text-red-600"
+                    aria-label={`Delete ${sec.title}`}
+                    title="Delete this section"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+                <div className="p-3">
+                  <RichText
+                    value={sec.content}
+                    onChange={(html) => patchSection(sec.key, { content: html })}
+                  />
+                </div>
               </div>
             ))}
+            {result.sections.length === 0 && (
+              <p className="text-sm text-muted">
+                No notes left — everything was deleted.
+              </p>
+            )}
           </div>
-          <p className="mt-4 text-xs text-muted">
-            You can edit or delete any of this once it&apos;s saved.
-          </p>
         </section>
 
         <section className="rounded-xl border border-border bg-surface p-5 shadow-sm">
-          <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted">
-            <ListTodo size={15} /> Action items ({result.actions.length})
+          <h3 className="mb-1 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted">
+            <ListTodo size={15} /> Action items ({selectedCount}/{result.actions.length})
           </h3>
           {result.actions.length === 0 ? (
             <p className="text-sm text-muted">
@@ -423,18 +486,39 @@ export function MeetingRecorder({
             </p>
           ) : (
             <>
-              <ul className="space-y-1.5">
+              <p className="mb-3 text-xs text-muted">
+                Untick anything you don&apos;t want kept, and edit the wording
+                before it lands on your to-do list.
+              </p>
+              <ul className="space-y-2">
                 {result.actions.map((a, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm">
-                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent)]" />
-                    {a}
+                  <li key={i} className="flex items-start gap-2">
+                    <input
+                      type="checkbox"
+                      checked={a.selected}
+                      onChange={(e) => patchAction(i, { selected: e.target.checked })}
+                      className="mt-2 h-4 w-4 shrink-0 accent-[var(--accent)]"
+                      aria-label={`Keep: ${a.text}`}
+                    />
+                    <input
+                      value={a.text}
+                      onChange={(e) => patchAction(i, { text: e.target.value })}
+                      className={`min-w-0 flex-1 rounded-md border border-transparent bg-canvas px-2 py-1.5 text-sm outline-none transition focus:border-[var(--accent)] ${
+                        a.selected ? "" : "text-muted line-through"
+                      }`}
+                      aria-label="Follow-up wording"
+                    />
+                    <button
+                      onClick={() => removeAction(i)}
+                      className="mt-1.5 shrink-0 rounded p-1 text-muted transition hover:text-red-600"
+                      aria-label={`Delete ${a.text}`}
+                      title="Remove this follow-up"
+                    >
+                      <Trash2 size={14} />
+                    </button>
                   </li>
                 ))}
               </ul>
-              <p className="mt-3 text-xs text-muted">
-                Once saved you can pick which of these go on your to-do list —
-                nothing is added automatically.
-              </p>
             </>
           )}
         </section>

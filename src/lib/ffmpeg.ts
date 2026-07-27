@@ -4,8 +4,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import ffmpegStatic from "ffmpeg-static";
 
-// 3 minutes per chunk, normalized to mono 16 kHz wav (small + STT-friendly).
+// 3 minutes per chunk, normalized to mono 16 kHz mp3.
+//
+// mp3 rather than wav: at 16 kHz mono, wav is ~32 KB/s and this mp3 setting is
+// ~11 KB/s, so every chunk sent to Whisper is roughly a third the size. On a
+// long meeting that is the difference between comfortably inside the
+// transcription budget and not — and speech recognition is unaffected.
 const CHUNK_SECONDS = 180;
+const MP3_ARGS = ["-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-q:a", "6"];
 
 const ffmpegPath = (ffmpegStatic as unknown as string) || "ffmpeg";
 
@@ -27,41 +33,86 @@ export interface AudioChunk {
   bytes: Buffer;
 }
 
-// Split an audio buffer into ordered mono/16kHz wav chunks.
+export interface ChunkedAudio {
+  chunks: AudioChunk[];
+  /** Extension of the produced chunks — "mp3" normally, the source ext on the raw fallback. */
+  ext: string;
+}
+
+// mp4 and m4a are the same MPEG-4 container, but Whisper handles files
+// labelled m4a far more reliably — so if we ever hand it the original bytes,
+// hand them over under the extension it copes with.
+function whisperExt(ext: string) {
+  return ext === "mp4" ? "m4a" : ext;
+}
+
+// Split an audio buffer into ordered mono/16 kHz mp3 chunks.
+//
+// Three levels, because a failed conversion should degrade rather than lose
+// the recording outright:
+//   1. segment-split to mp3 — the normal path, and the only one that yields
+//      real progress reporting;
+//   2. convert the whole file to one mp3 — recovers when segmenting trips over
+//      a container ffmpeg can read but not cleanly cut;
+//   3. send the original bytes untouched — recovers when ffmpeg can't handle
+//      the file at all, which Whisper often still can.
 export async function chunkAudio(
   input: Buffer,
   inputExt = "bin",
-): Promise<AudioChunk[]> {
+): Promise<ChunkedAudio> {
   const dir = await mkdtemp(path.join(tmpdir(), "omni-ffmpeg-"));
   try {
     const inputPath = path.join(dir, `input.${inputExt}`);
     await writeFile(inputPath, input);
 
-    // %03d => chunk_000.wav, chunk_001.wav, ...
-    const pattern = path.join(dir, "chunk_%03d.wav");
-    await run([
-      "-hide_banner",
-      "-loglevel", "error",
-      "-i", inputPath,
-      "-vn",
-      "-ac", "1",
-      "-ar", "16000",
-      "-f", "segment",
-      "-segment_time", String(CHUNK_SECONDS),
-      "-reset_timestamps", "1",
-      pattern,
-    ]);
+    // 1. Segment split.
+    try {
+      const pattern = path.join(dir, "chunk_%03d.mp3");
+      await run([
+        "-hide_banner",
+        "-loglevel", "error",
+        "-i", inputPath,
+        "-vn",
+        ...MP3_ARGS,
+        "-f", "segment",
+        "-segment_time", String(CHUNK_SECONDS),
+        "-reset_timestamps", "1",
+        pattern,
+      ]);
 
-    const files = (await readdir(dir))
-      .filter((f) => /^chunk_\d+\.wav$/.test(f))
-      .sort();
+      const files = (await readdir(dir))
+        .filter((f) => /^chunk_\d+\.mp3$/.test(f))
+        .sort();
 
-    const chunks: AudioChunk[] = [];
-    for (let i = 0; i < files.length; i++) {
-      const bytes = await readFile(path.join(dir, files[i]));
-      chunks.push({ index: i, bytes });
+      if (files.length > 0) {
+        const chunks: AudioChunk[] = [];
+        for (let i = 0; i < files.length; i++) {
+          chunks.push({ index: i, bytes: await readFile(path.join(dir, files[i])) });
+        }
+        return { chunks, ext: "mp3" };
+      }
+    } catch {
+      // fall through to the whole-file conversion
     }
-    return chunks;
+
+    // 2. One mp3 for the whole recording.
+    try {
+      const outPath = path.join(dir, "whole.mp3");
+      await run([
+        "-hide_banner",
+        "-loglevel", "error",
+        "-i", inputPath,
+        "-vn",
+        ...MP3_ARGS,
+        outPath,
+      ]);
+      return { chunks: [{ index: 0, bytes: await readFile(outPath) }], ext: "mp3" };
+    } catch {
+      // fall through to sending the original bytes
+    }
+
+    // 3. Untouched.
+    return { chunks: [{ index: 0, bytes: input }], ext: whisperExt(inputExt) };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

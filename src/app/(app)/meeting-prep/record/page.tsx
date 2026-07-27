@@ -33,10 +33,9 @@ export default function RecordMeetingPage() {
         debrief: {
           transcript: result.transcript,
           sections: result.sections,
-          // Ticked by default — the point of extracting them is that most are
-          // worth tracking; unticking is the exception.
-          actions: result.actions.map((text) => ({
-            text,
+          // Only the ones still ticked on the review screen arrive here.
+          actions: result.actions.map((a) => ({
+            text: a.text,
             done: false,
             selected: true,
           })),

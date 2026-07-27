@@ -37,16 +37,17 @@ export async function POST(
 
     const inputBuf = Buffer.from(await blob.arrayBuffer());
     const ext = recording.storage_path.split(".").pop() || "bin";
-    const chunks = await chunkAudio(inputBuf, ext);
+    const { chunks, ext: chunkExt } = await chunkAudio(inputBuf, ext);
 
     if (chunks.length === 0) throw new Error("No audio chunks produced");
 
+    const chunkType = chunkExt === "mp3" ? "audio/mpeg" : "audio/wav";
     const base = `${userId}/${recording.id}/chunks`;
     for (const chunk of chunks) {
-      const name = `${base}/${String(chunk.index).padStart(3, "0")}.wav`;
+      const name = `${base}/${String(chunk.index).padStart(3, "0")}.${chunkExt}`;
       const { error: upErr } = await admin.storage
         .from("recordings")
-        .upload(name, chunk.bytes, { contentType: "audio/wav", upsert: true });
+        .upload(name, chunk.bytes, { contentType: chunkType, upsert: true });
       if (upErr) throw new Error(`chunk upload failed: ${upErr.message}`);
     }
 

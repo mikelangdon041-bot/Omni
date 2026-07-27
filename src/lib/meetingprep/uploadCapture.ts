@@ -8,17 +8,25 @@
 // can't be POSTed to our own API), and Supabase storage rejects any single
 // object over 50 MB — reported as a 400 whose body says 413, which is how a
 // perfectly ordinary 90-minute meeting used to fail with "Upload failed
-// (400)". Each slice is well under that cap; the server stitches them back
-// together and deletes them once it has read the audio.
+// (400)".
 //
-// The bar covers upload and transcription on a single 0-100 scale: the bytes
-// are the first quarter, transcribing the rest. Two bars that each reset to
-// zero read as "it started over".
+// Transcription then runs one chunk per request, driven from here. Doing every
+// chunk inside a single server call put a hard ceiling on recording length: a
+// long meeting ran past the function's time limit and lost the entire job.
+// Spreading it across requests means length costs more requests, not failure.
+//
+// The bar covers all three stages on a single 0-100 scale. Separate bars that
+// each reset to zero read as "it started over".
 
 const ENDPOINT = "/api/meeting/transcribe-upload";
-const UPLOAD_SHARE = 25;
 // Comfortably under Supabase's 50 MB per-object limit.
 const PART_BYTES = 40 * 1024 * 1024;
+// Stage weights, summing to 100.
+const UPLOAD_SHARE = 20;
+const PREPARE_SHARE = 15;
+// Chunk requests in flight at once. Enough to keep things moving without
+// tripping rate limits on a long recording.
+const CONCURRENCY = 3;
 
 export interface UploadProgress {
   /** 0-100 across the whole operation. */
@@ -27,14 +35,37 @@ export interface UploadProgress {
   label: string;
 }
 
-function post(payload: Record<string, unknown>, signal?: AbortSignal) {
-  return fetch(ENDPOINT, {
+async function post<T>(payload: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+  const res = await fetch(ENDPOINT, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",
     body: JSON.stringify(payload),
     signal,
   });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || `Request failed (${res.status})`);
+  return json as T;
+}
+
+// One chunk, with a couple of retries — a single dropped connection shouldn't
+// cost the whole recording when we're 40 chunks in.
+async function transcribeChunk(
+  payload: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<string> {
+  let last: Error | null = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const { text } = await post<{ text?: string }>(payload, signal);
+      return text || "";
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      last = e as Error;
+      if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 1500));
+    }
+  }
+  throw last ?? new Error("Transcription failed");
 }
 
 // PUT one slice to its signed URL, surfacing the server's own error text —
@@ -81,23 +112,22 @@ export async function transcribeUpload(
   const contentType = file.type || "application/octet-stream";
   const parts = Math.max(1, Math.ceil(file.size / PART_BYTES));
 
-  // Cleans up parts that made it to storage but never became a transcript.
-  const discard = () =>
-    post({ action: "discard", uploadId, ext }).catch(() => {});
+  // Cleans up anything that made it to storage but never became a transcript.
+  const discard = () => post({ action: "discard", uploadId }).catch(() => {});
 
   try {
+    // --- 1. Upload the file in parts -------------------------------------
     onProgress({ percent: 0, label: "Uploading" });
-
     let uploadedBefore = 0;
     for (let i = 0; i < parts; i++) {
-      const signRes = await post({ action: "sign", uploadId, part: i, ext }, signal);
-      const signed = await signRes.json().catch(() => ({}));
-      if (!signRes.ok) throw new Error(signed.error || "Could not start the upload");
-
+      const { signedUrl } = await post<{ signedUrl: string }>(
+        { action: "sign", uploadId, part: i, ext },
+        signal,
+      );
       const slice = file.slice(i * PART_BYTES, (i + 1) * PART_BYTES);
       const base = uploadedBefore;
       await putSlice(
-        signed.signedUrl,
+        signedUrl,
         slice,
         contentType,
         (loaded) =>
@@ -110,56 +140,44 @@ export async function transcribeUpload(
       uploadedBefore += slice.size;
     }
 
-    onProgress({ percent: UPLOAD_SHARE, label: "Reading the recording" });
-    const res = await post({ action: "from-storage", uploadId, parts, ext }, signal);
-    if (!res.ok || !res.body) {
-      const json = await res.json().catch(() => ({}));
-      throw new Error(json.error || `Transcription failed (${res.status})`);
-    }
+    // --- 2. Reassemble and split ------------------------------------------
+    onProgress({ percent: UPLOAD_SHARE, label: "Preparing the audio" });
+    const { totalChunks, chunkExt } = await post<{
+      totalChunks: number;
+      chunkExt: string;
+    }>({ action: "prepare", uploadId, parts, ext }, signal);
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let text = "";
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        let msg: {
-          type?: string;
-          done?: number;
-          total?: number;
-          text?: string;
-          error?: string;
-          label?: string;
-        };
-        try {
-          msg = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        if (msg.type === "progress") {
-          if (msg.total) {
-            const share = (msg.done ?? 0) / msg.total;
-            onProgress({
-              percent: Math.round(UPLOAD_SHARE + share * (100 - UPLOAD_SHARE)),
-              label: "Transcribing",
-            });
-          } else if (msg.label) {
-            onProgress({ percent: UPLOAD_SHARE, label: msg.label });
-          }
-        }
-        if (msg.type === "error") throw new Error(msg.error || "Transcription failed");
-        if (msg.type === "done") text = msg.text || "";
+    // --- 3. Transcribe, one chunk per request ------------------------------
+    const base = UPLOAD_SHARE + PREPARE_SHARE;
+    const span = 100 - base;
+    onProgress({ percent: base, label: "Transcribing" });
+
+    const texts: string[] = new Array(totalChunks).fill("");
+    let done = 0;
+    let next = 0;
+    const worker = async () => {
+      for (;;) {
+        const i = next++;
+        if (i >= totalChunks) return;
+        texts[i] = await transcribeChunk(
+          { action: "chunk", uploadId, index: i, chunkExt },
+          signal,
+        );
+        done += 1;
+        onProgress({
+          percent: Math.round(base + (done / totalChunks) * span),
+          label: "Transcribing",
+        });
       }
-    }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, totalChunks) }, worker),
+    );
+
     onProgress({ percent: 100, label: "Transcribing" });
-    // The server removed the parts once it read them; nothing left to discard.
-    return text;
+    // Each chunk was removed as it was read; this clears anything left over.
+    await discard();
+    return texts.filter(Boolean).join("\n\n");
   } catch (e) {
     await discard();
     throw e;
