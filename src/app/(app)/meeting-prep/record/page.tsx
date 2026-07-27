@@ -32,8 +32,14 @@ export default function RecordMeetingPage() {
         meeting_type: "other",
         debrief: {
           transcript: result.transcript,
-          summary: result.summary,
-          actions: result.actions.map((text) => ({ text, done: false })),
+          sections: result.sections,
+          // Ticked by default — the point of extracting them is that most are
+          // worth tracking; unticking is the exception.
+          actions: result.actions.map((text) => ({
+            text,
+            done: false,
+            selected: true,
+          })),
         },
       });
       if (!meeting) throw new Error("Could not save the meeting");

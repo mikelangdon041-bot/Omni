@@ -33,14 +33,14 @@ import {
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
-import { OutlineBullets } from "@/components/ui/OutlineBullets";
 import { useToast } from "@/components/ui/Feedback";
 import { startLiveCapture, type LiveCapture } from "@/lib/meetingprep/liveCapture";
+import type { DebriefSection } from "@/lib/meetingprep/types";
 import { transcribeUpload, type UploadProgress } from "@/lib/meetingprep/uploadCapture";
 
 export interface CaptureResult {
   title: string;
-  summary: string;
+  sections: DebriefSection[];
   actions: string[];
   transcript: string;
 }
@@ -231,7 +231,7 @@ export function MeetingRecorder({
       if (!res.ok) throw new Error(json.error || "Could not summarize the recording");
       setResult({
         title: json.title || hint.trim() || "Recorded meeting",
-        summary: json.summary || "",
+        sections: json.sections || [],
         actions: json.actions || [],
         transcript,
       });
@@ -333,6 +333,26 @@ export function MeetingRecorder({
           </p>
         </div>
 
+        {/* The modal stays up while the notes are being written. Closing it
+            first dropped the user onto a small card behind where the dialog
+            had been, which read as nothing happening at all. */}
+        <Modal
+          open={phase === "summarizing"}
+          onClose={() => {}}
+          title="Writing your notes"
+          size="sm"
+        >
+          <div className="flex flex-col items-center gap-3 py-6 text-center">
+            <Loader2 size={28} className="animate-spin text-[var(--accent)]" />
+            <p className="text-sm font-medium">
+              Reading the transcript and pulling out the follow-ups…
+            </p>
+            <p className="text-xs text-muted">
+              This takes about a minute for a full meeting.
+            </p>
+          </div>
+        </Modal>
+
         <Modal
           open={!wrapping && phase === "deciding"}
           onClose={() => {}}
@@ -377,9 +397,20 @@ export function MeetingRecorder({
             Notes from your recording
           </p>
           <h2 className="mt-1 text-lg font-semibold tracking-tight">{result.title}</h2>
-          <div className="mt-4">
-            <OutlineBullets text={result.summary} />
+          <div className="mt-4 space-y-4">
+            {result.sections.map((s) => (
+              <div key={s.key}>
+                <h3 className="text-sm font-semibold">{s.title}</h3>
+                <div
+                  className="mt-1 text-sm leading-relaxed [&_li]:ml-4 [&_li]:list-disc [&_ul]:mt-1"
+                  dangerouslySetInnerHTML={{ __html: s.content }}
+                />
+              </div>
+            ))}
           </div>
+          <p className="mt-4 text-xs text-muted">
+            You can edit or delete any of this once it&apos;s saved.
+          </p>
         </section>
 
         <section className="rounded-xl border border-border bg-surface p-5 shadow-sm">
@@ -401,8 +432,8 @@ export function MeetingRecorder({
                 ))}
               </ul>
               <p className="mt-3 text-xs text-muted">
-                You&apos;ll be able to push these to your to-do list on the next
-                screen — nothing is added automatically.
+                Once saved you can pick which of these go on your to-do list —
+                nothing is added automatically.
               </p>
             </>
           )}

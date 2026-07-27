@@ -73,12 +73,27 @@ export interface DebriefAction {
   text: string;
   done: boolean;
   taskId?: string;
+  // Ticked follow-ups are the ones "Add to to-do list" will push. Defaults to
+  // true when the AI extracts them — untick the ones you don't want tracked.
+  selected?: boolean;
+}
+
+// One editable block of meeting notes. Same {key,title,content} shape as a
+// brief section, so it gets the same rich-text editor and autosave.
+export interface DebriefSection {
+  key: string;
+  title: string;
+  content: string; // HTML
 }
 
 export interface Debrief {
   transcript?: string;
   // Typed answers to the structured debrief questions, keyed by question key.
   notes?: Record<string, string>;
+  // Notes split into editable sections. `summary` is the older single-blob
+  // form (an indented "- " outline) — still rendered when a debrief predates
+  // sections, so existing meetings don't lose their notes.
+  sections?: DebriefSection[];
   summary?: string;
   actions?: DebriefAction[];
 }

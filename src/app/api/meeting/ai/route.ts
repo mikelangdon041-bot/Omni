@@ -218,16 +218,28 @@ const DEBRIEF_SCHEMA = {
   additionalProperties: false,
 };
 
-// Same shape as a debrief plus a title, because a captured recording has no
-// meeting row to take its name from yet.
+// A captured recording has no meeting row to take its name from, and its
+// notes are split into sections rather than one blob — each section becomes
+// an independently editable, deletable rich-text block in the UI.
 const CAPTURE_SCHEMA = {
   type: "object" as const,
   properties: {
     title: { type: "string" as const },
-    summary: { type: "string" as const },
+    sections: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: {
+          title: { type: "string" as const },
+          content: { type: "string" as const },
+        },
+        required: ["title", "content"],
+        additionalProperties: false,
+      },
+    },
     actions: { type: "array" as const, items: { type: "string" as const } },
   },
-  required: ["title", "summary", "actions"],
+  required: ["title", "sections", "actions"],
   additionalProperties: false,
 };
 
@@ -473,7 +485,10 @@ ${OUTLINE_RULE}`,
         system: `You turn the raw transcript of a meeting that was just recorded into usable notes. The transcript comes from automatic speech recognition, so expect missing punctuation, no speaker labels, and mis-heard words — infer sensibly from context but never invent content.
 
 - title: a short, specific name for this meeting as a person would write it in a calendar (5-8 words, no quotes). Use real names/topics from the transcript when they're clear, e.g. "Dr. Patel — dosing concerns and advisory board". If the transcript is too thin to tell, use a plain descriptive title.
-${OUTLINE_RULE}`,
+- sections: the meeting broken into 3-7 topic sections, in the order they came up. Each section is a distinct subject someone would want to find later — not "Introduction" / "Discussion" / "Conclusion" filler.
+  - section title: 2-5 words naming the topic ("Dosing concerns", "Advisory board timing").
+  - section content: HTML using ONLY <ul>, <li>, <b>, <i>, and <p>. Use a nested <ul> inside an <li> for detail under a point, 2-3 levels deep. Complete sentences. Preserve names, figures, product names and dates exactly as spoken. Never invent anything that wasn't said. No headings, no styling attributes, no markdown.
+- actions: every concrete follow-up the recording implies or someone promised, each as one imperative sentence, with the owner and any deadline when stated (e.g. "Send Dr. Chen the phase 3 subgroup data by Friday"). Only real commitments and next steps — not topics, not general observations. Empty array if there genuinely are none.`,
         messages: [
           {
             role: "user",
@@ -489,7 +504,13 @@ ${OUTLINE_RULE}`,
       const parsed = JSON.parse(firstText(res) || "{}");
       return NextResponse.json({
         title: String(parsed.title || "").slice(0, 200),
-        summary: String(parsed.summary || ""),
+        sections: (Array.isArray(parsed.sections) ? parsed.sections : []).map(
+          (s: { title?: unknown; content?: unknown }, i: number) => ({
+            key: `capture_${i}`,
+            title: String(s?.title || "Notes"),
+            content: String(s?.content || ""),
+          }),
+        ),
         actions: (Array.isArray(parsed.actions) ? parsed.actions : []).map(String),
       });
     }

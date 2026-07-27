@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 import { RichText } from "@/components/ui/RichText";
 import { OutlineBullets } from "@/components/ui/OutlineBullets";
-import { useToast } from "@/components/ui/Feedback";
+import { useConfirm, useToast } from "@/components/ui/Feedback";
 import { TranscriptCapture } from "@/components/studio/TranscriptCapture";
 import { useKolLite } from "./KolLink";
 import { logMeetingToTerritory } from "@/lib/meetingprep/territoryLog";
@@ -29,6 +29,7 @@ import {
   DEBRIEF_QUESTIONS,
   meetingContextText,
   type DebriefAction,
+  type DebriefSection,
   type MpMeeting,
 } from "@/lib/meetingprep/types";
 import type { DueDatePreset } from "@/lib/territory/types";
@@ -51,12 +52,51 @@ export function DebriefTab({
   userId: string | null;
 }) {
   const toast = useToast();
+  const confirm = useConfirm();
   const kol = useKolLite(m.kol_id);
   const [busy, setBusy] = useState(false);
 
   const debrief = m.debrief || {};
   const notes = debrief.notes || {};
   const actions: DebriefAction[] = debrief.actions || [];
+  const sections: DebriefSection[] = debrief.sections || [];
+  // Ticked and not already pushed — what "Add to to-do list" will act on.
+  const selectedPending = actions
+    .map((a, i) => (a.selected !== false && !a.taskId ? i : -1))
+    .filter((i) => i >= 0);
+
+  // Everything here rides the meeting's existing debounced autosave, so
+  // typing in a section behaves like every other field in the module.
+  const setSection = (key: string, patch: Partial<DebriefSection>) =>
+    save({
+      debrief: {
+        ...debrief,
+        sections: sections.map((s) => (s.key === key ? { ...s, ...patch } : s)),
+      },
+    });
+
+  const setAction = (index: number, patch: Partial<DebriefAction>) =>
+    save({
+      debrief: {
+        ...debrief,
+        actions: actions.map((a, i) => (i === index ? { ...a, ...patch } : a)),
+      },
+    });
+
+  async function removeSection(sec: DebriefSection) {
+    if (
+      !(await confirm({
+        title: `Delete "${sec.title || "this section"}"?`,
+        message: "The other sections are untouched.",
+        confirmLabel: "Delete",
+        danger: true,
+      }))
+    )
+      return;
+    save({
+      debrief: { ...debrief, sections: sections.filter((s) => s.key !== sec.key) },
+    });
+  }
 
   const notesText = DEBRIEF_QUESTIONS.map((q) =>
     (notes[q.key] || "").trim() ? `${q.label}\n${notes[q.key].trim()}` : "",
@@ -83,10 +123,12 @@ export function DebriefTab({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
+        // Same action the recorder uses, so a typed debrief and a recorded
+        // one both come back as editable sections rather than one blob.
         body: JSON.stringify({
-          action: "debrief",
+          action: "capture",
           transcript: combined,
-          context: meetingContextText(m),
+          hint: meetingContextText(m),
         }),
       });
       const json = await res.json();
@@ -94,8 +136,15 @@ export function DebriefTab({
       save({
         debrief: {
           ...debrief,
-          summary: json.summary || "",
-          actions: (json.actions || []).map((text: string) => ({ text, done: false })),
+          sections: json.sections || [],
+          // A re-analysis replaces the notes; the old single-blob summary
+          // would otherwise linger underneath them.
+          summary: "",
+          actions: (json.actions || []).map((text: string) => ({
+            text,
+            done: false,
+            selected: true,
+          })),
         },
       });
     } catch (e) {
@@ -211,70 +260,113 @@ export function DebriefTab({
         </div>
       </section>
 
-      {debrief.summary && (
+      {(sections.length > 0 || debrief.summary) && (
         <>
           <section className="rounded-xl border border-border bg-surface p-4 shadow-sm">
-            <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-muted">
-              Summary
-            </h2>
-            {/* The model writes this as an indented "- " outline, so render
-                it as the nested bullet tree it already is. */}
-            <OutlineBullets text={debrief.summary} />
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
+                Notes
+              </h2>
+              <span className="text-[11px] text-muted">Edits save automatically</span>
+            </div>
+
+            {/* Each section is its own rich-text block, editable and
+                deletable, exactly like a brief section. */}
+            {sections.length > 0 ? (
+              <div className="space-y-4">
+                {sections.map((sec) => (
+                  <div key={sec.key} className="rounded-lg border border-border">
+                    <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+                      <input
+                        value={sec.title}
+                        onChange={(e) => setSection(sec.key, { title: e.target.value })}
+                        className="min-w-0 flex-1 bg-transparent text-sm font-semibold outline-none"
+                        aria-label="Section title"
+                      />
+                      <button
+                        onClick={() => void removeSection(sec)}
+                        className="shrink-0 rounded p-1 text-muted transition hover:text-red-600"
+                        aria-label={`Delete ${sec.title}`}
+                        title="Delete this section"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                    <div className="p-3">
+                      <RichText
+                        value={sec.content}
+                        onChange={(html) => setSection(sec.key, { content: html })}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              // Debriefs written before notes were split into sections keep
+              // their original single outline.
+              <OutlineBullets text={debrief.summary || ""} />
+            )}
           </section>
 
           <section className="rounded-xl border border-border bg-surface p-4 shadow-sm">
-            <div className="mb-2 flex items-center justify-between">
+            <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
                 Follow-ups ({actions.length})
               </h2>
-              <Button size="sm" variant="secondary" onClick={() => void pushActionsToTasks()}>
-                <ListTodo size={14} /> Add all to to-do list
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={selectedPending.length === 0}
+                onClick={() => void pushActionsToTasks(selectedPending)}
+              >
+                <ListTodo size={14} />
+                {selectedPending.length === 0
+                  ? "All ticked ones added"
+                  : `Add ${selectedPending.length} to to-do list`}
               </Button>
             </div>
+            <p className="mb-3 text-xs text-muted">
+              Untick anything you don&apos;t want on your to-do list.
+            </p>
             {actions.length === 0 ? (
               <p className="text-sm text-muted">No follow-ups detected.</p>
             ) : (
               <ul className="space-y-1.5">
-                {actions.map((a, i) => (
-                  <li key={i} className="flex items-start gap-2">
-                    <input
-                      type="checkbox"
-                      checked={a.done}
-                      onChange={(e) =>
-                        save({
-                          debrief: {
-                            ...debrief,
-                            actions: actions.map((x, j) =>
-                              j === i ? { ...x, done: e.target.checked } : x,
-                            ),
-                          },
-                        })
-                      }
-                      className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
-                    />
-                    <span
-                      className={`flex-1 text-sm ${a.done ? "text-muted line-through" : ""}`}
-                    >
-                      {a.text}
-                    </span>
-                    {/* Adding a follow-up to the to-do list is per-item, not
-                        all-or-nothing — most debriefs turn up one or two
-                        things worth actually tracking. */}
-                    {a.taskId ? (
-                      <span className="mt-0.5 flex shrink-0 items-center gap-1 text-[11px] font-medium text-emerald-700">
-                        <CheckCircle2 size={12} /> On your list
-                      </span>
-                    ) : (
-                      <button
-                        onClick={() => void pushActionsToTasks([i])}
-                        className="mt-0.5 flex shrink-0 items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-[11px] font-medium text-muted transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
-                        title="Add this follow-up to your to-do list"
+                {actions.map((a, i) => {
+                  const ticked = a.selected !== false;
+                  return (
+                    <li key={i} className="flex items-start gap-2">
+                      <input
+                        type="checkbox"
+                        checked={ticked}
+                        disabled={!!a.taskId}
+                        onChange={(e) => setAction(i, { selected: e.target.checked })}
+                        className="mt-0.5 h-4 w-4 accent-[var(--accent)] disabled:opacity-40"
+                        aria-label={`Include: ${a.text}`}
+                      />
+                      <span
+                        className={`flex-1 text-sm ${
+                          a.taskId ? "" : ticked ? "" : "text-muted line-through"
+                        }`}
                       >
-                        <ListTodo size={11} /> Add
-                      </button>
-                    )}
-                  </li>
-                ))}
+                        {a.text}
+                      </span>
+                      {a.taskId ? (
+                        <span className="mt-0.5 flex shrink-0 items-center gap-1 text-[11px] font-medium text-emerald-700">
+                          <CheckCircle2 size={12} /> On your list
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => void pushActionsToTasks([i])}
+                          className="mt-0.5 flex shrink-0 items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-[11px] font-medium text-muted transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                          title="Add just this one to your to-do list"
+                        >
+                          <ListTodo size={11} /> Add
+                        </button>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </section>
