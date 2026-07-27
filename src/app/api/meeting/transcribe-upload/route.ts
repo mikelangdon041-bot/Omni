@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { chunkAudio } from "@/lib/ffmpeg";
+import { chunkAudio, extractSample } from "@/lib/ffmpeg";
 import { openai } from "@/lib/openai";
 import { toFile } from "openai";
 
@@ -9,6 +9,14 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 const TRANSCRIBE_MODEL = process.env.OPENAI_TRANSCRIBE_MODEL || "whisper-1";
+// Diarisation: labels each segment with who spoke, so the notes can attribute
+// positions and commitments instead of writing everything impersonally.
+// whisper-1 cannot do this at all — it returns one flat stream.
+const DIARIZE_MODEL = process.env.OPENAI_DIARIZE_MODEL || "gpt-4o-transcribe-diarize";
+const DIARIZE = process.env.OPENAI_DIARIZE !== "0";
+// A voice sample per speaker, taken from the first chunk and replayed to every
+// later one. Must be 2-10s per the API.
+const SAMPLE_SECONDS = 6;
 
 const ALLOWED_EXT = new Set([
   "mp3", "m4a", "wav", "aac", "ogg", "oga", "webm", "mp4", "mpeg", "mpga", "flac",
@@ -51,6 +59,62 @@ const mimeForExt = (e: string) =>
   : "audio/mp4";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+interface SpeakerRefs {
+  names: string[];
+  refs: string[]; // data URLs
+}
+
+interface DiarizedSegment {
+  speaker: string;
+  text: string;
+  start: number;
+  end: number;
+}
+
+// Merge consecutive segments from the same speaker into one line, so the
+// model reads turns rather than a stream of fragments.
+function segmentsToText(segments: DiarizedSegment[]): string {
+  const lines: string[] = [];
+  let current = "";
+  let speaker = "";
+  for (const seg of segments) {
+    const text = (seg.text || "").trim();
+    if (!text) continue;
+    const who = seg.speaker ? `Speaker ${seg.speaker}` : "";
+    if (who === speaker && current) {
+      current = `${current} ${text}`;
+    } else {
+      if (current) lines.push(speaker ? `${speaker}: ${current}` : current);
+      speaker = who;
+      current = text;
+    }
+  }
+  if (current) lines.push(speaker ? `${speaker}: ${current}` : current);
+  return lines.join("\n");
+}
+
+async function diarize(
+  bytes: Buffer,
+  name: string,
+  type: string,
+  known: SpeakerRefs | null,
+): Promise<{ text: string; segments: DiarizedSegment[] }> {
+  const file = await toFile(bytes, name, { type });
+  const res = (await openai().audio.transcriptions.create({
+    file,
+    model: DIARIZE_MODEL,
+    response_format: "diarized_json",
+    ...(known?.names.length
+      ? { known_speaker_names: known.names, known_speaker_references: known.refs }
+      : {}),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any)) as unknown as { segments?: DiarizedSegment[]; text?: string };
+
+  const segments = Array.isArray(res.segments) ? res.segments : [];
+  if (segments.length === 0) return { text: (res.text || "").trim(), segments: [] };
+  return { text: segmentsToText(segments), segments };
+}
 
 async function whisper(bytes: Buffer, name: string, type: string): Promise<string> {
   const file = await toFile(bytes, name, { type });
@@ -211,10 +275,87 @@ export async function POST(req: Request) {
       }
       const path = chunkPath(user.id, uploadId, index, chunkExt);
       const bytes = await downloadWithRetry(admin, path);
-      const text = await whisper(bytes, `chunk-${index}.${chunkExt}`, mimeForExt(chunkExt));
+      const name = `chunk-${index}.${chunkExt}`;
+      const type = mimeForExt(chunkExt);
+      const refsPath = `${prefixFor(user.id, uploadId)}/speakers.json`;
+
+      let text = "";
+      let speakers: string[] = [];
+
+      if (DIARIZE) {
+        try {
+          // Chunk 0 establishes who is who; later chunks are handed its voice
+          // samples so the same person keeps the same label. Without that,
+          // labels are assigned per request and whoever happens to speak first
+          // in a chunk becomes "A" — so one person drifts between labels.
+          let known: SpeakerRefs | null = null;
+          if (index > 0) {
+            try {
+              const raw = await downloadWithRetry(admin, refsPath);
+              known = JSON.parse(raw.toString("utf8")) as SpeakerRefs;
+            } catch {
+              // No samples (chunk 0 found nobody, or it failed) — diarise
+              // this chunk on its own rather than not at all.
+            }
+          }
+
+          // If the reference samples are rejected, diarise this chunk on its
+          // own instead. Labels may drift for it, which is still far better
+          // than dropping to a transcript with no speakers at all.
+          let result;
+          try {
+            result = await diarize(bytes, name, type, known);
+          } catch (e) {
+            if (!known) throw e;
+            result = await diarize(bytes, name, type, null);
+          }
+          text = result.text;
+          speakers = [...new Set(result.segments.map((s) => s.speaker).filter(Boolean))];
+
+          // Cut one sample per speaker out of this chunk for the rest of the run.
+          if (index === 0 && result.segments.length > 0) {
+            const names: string[] = [];
+            const refs: string[] = [];
+            for (const speaker of speakers) {
+              const longest = result.segments
+                .filter((s) => s.speaker === speaker)
+                .sort((a, b) => b.end - b.start - (a.end - a.start))[0];
+              if (!longest) continue;
+              const span = longest.end - longest.start;
+              if (span < 2) continue; // too short to be a usable reference
+              const take = Math.min(SAMPLE_SECONDS, span);
+              const sample = await extractSample(
+                bytes,
+                chunkExt,
+                longest.start + Math.max(0, (span - take) / 2),
+                take,
+              );
+              if (!sample) continue;
+              names.push(speaker);
+              refs.push(`data:audio/mpeg;base64,${sample.toString("base64")}`);
+            }
+            if (names.length) {
+              await uploadWithRetry(
+                admin,
+                refsPath,
+                Buffer.from(JSON.stringify({ names, refs })),
+                "application/json",
+              );
+            }
+          }
+        } catch {
+          // Diarisation is an improvement, not a dependency — if the model is
+          // unavailable or rejects the audio, fall back to a plain transcript
+          // rather than failing the recording.
+          text = "";
+        }
+      }
+
+      if (!text) text = await whisper(bytes, name, type);
+
       // Consumed — drop it now rather than waiting for the final sweep.
       await admin.storage.from("recordings").remove([path]);
-      return NextResponse.json({ text });
+      return NextResponse.json({ text, speakers });
     }
 
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });

@@ -154,7 +154,25 @@ export async function transcribeUpload(
 
     const texts: string[] = new Array(totalChunks).fill("");
     let done = 0;
-    let next = 0;
+
+    const report = () =>
+      onProgress({
+        percent: Math.round(base + (done / totalChunks) * span),
+        label: "Transcribing",
+      });
+
+    // The first chunk runs alone. It's the one that works out who is speaking
+    // and stores a voice sample per person; every later chunk is handed those
+    // samples so one person keeps one label. Running them all at once would
+    // race that, and speakers would drift between labels mid-meeting.
+    texts[0] = await transcribeChunk(
+      { action: "chunk", uploadId, index: 0, chunkExt },
+      signal,
+    );
+    done += 1;
+    report();
+
+    let next = 1;
     const worker = async () => {
       for (;;) {
         const i = next++;
@@ -164,14 +182,11 @@ export async function transcribeUpload(
           signal,
         );
         done += 1;
-        onProgress({
-          percent: Math.round(base + (done / totalChunks) * span),
-          label: "Transcribing",
-        });
+        report();
       }
     };
     await Promise.all(
-      Array.from({ length: Math.min(CONCURRENCY, totalChunks) }, worker),
+      Array.from({ length: Math.min(CONCURRENCY, totalChunks - 1) }, worker),
     );
 
     onProgress({ percent: 100, label: "Transcribing" });

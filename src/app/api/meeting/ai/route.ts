@@ -498,7 +498,8 @@ ${OUTLINE_RULE}`,
         system: `You turn the transcript of a meeting into usable notes. It may come from automatic speech recognition — expect missing punctuation and mis-heard words — or be an exported transcript. Infer sensibly from context but never invent content.
 
 Attribution, which matters and is easy to get wrong:
-- If the transcript has speaker labels ("Dr. Chen:", "Speaker 1:"), USE them. Attribute positions, objections and commitments to the person who actually said them, and carry that through into the follow-ups ("Dr. Chen asked for…", not "someone asked for…").
+- If the transcript has speaker labels ("Dr. Chen:", "Speaker 1:", "Speaker A:"), USE them. Attribute positions, objections and commitments to the person who actually said them, and carry that through into the follow-ups ("Dr. Chen asked for…", not "someone asked for…").
+- Labels like "Speaker A" come from voice separation, which knows there are distinct people but not their names. If the conversation makes a speaker's identity clear — they are greeted or thanked by name, they introduce themselves, someone answers a question put to them by name — use the real name and stop saying "Speaker A". Only do this when the transcript genuinely settles it; if you are unsure, keep the label as-is rather than guessing.
 - If it has NO speaker labels, it is one undifferentiated stream and you cannot tell who spoke. Write the notes impersonally ("the dosing schedule was questioned"). Do NOT guess who said what, do NOT invent speaker names, and do NOT assume it was all one person — a single unlabelled block is usually several people talking in turn.
 
 - title: a short, specific name for this meeting as a person would write it in a calendar (5-8 words, no quotes). Use real names/topics from the transcript when they're clear, e.g. "Dr. Patel — dosing concerns and advisory board". If the transcript is too thin to tell, use a plain descriptive title.

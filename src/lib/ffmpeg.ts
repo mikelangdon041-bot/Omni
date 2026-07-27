@@ -33,6 +33,41 @@ export interface AudioChunk {
   bytes: Buffer;
 }
 
+// Cut a short clip out of an audio buffer, as mp3.
+//
+// Used to grab a voice sample per speaker: diarisation labels speakers per
+// request, so without a reference sample the same person is "A" in one chunk
+// and "B" in the next. Handing the same samples to every chunk is what keeps
+// one person one label across a whole meeting.
+export async function extractSample(
+  input: Buffer,
+  inputExt: string,
+  startSec: number,
+  durationSec: number,
+): Promise<Buffer | null> {
+  const dir = await mkdtemp(path.join(tmpdir(), "omni-sample-"));
+  try {
+    const inputPath = path.join(dir, `input.${inputExt}`);
+    const outPath = path.join(dir, "sample.mp3");
+    await writeFile(inputPath, input);
+    await run([
+      "-hide_banner",
+      "-loglevel", "error",
+      "-ss", startSec.toFixed(2),
+      "-t", durationSec.toFixed(2),
+      "-i", inputPath,
+      "-vn",
+      ...MP3_ARGS,
+      outPath,
+    ]);
+    return await readFile(outPath);
+  } catch {
+    return null;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 export interface ChunkedAudio {
   chunks: AudioChunk[];
   /** Extension of the produced chunks — "mp3" normally, the source ext on the raw fallback. */
