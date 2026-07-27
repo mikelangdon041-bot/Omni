@@ -51,6 +51,8 @@ export interface CaptureResult {
   sections: DebriefSection[];
   actions: CaptureAction[];
   transcript: string;
+  /** Where the opening pleasantries end, when there were any we could locate. */
+  smallTalk?: { description: string; cutAt: number };
 }
 
 type Phase =
@@ -150,6 +152,7 @@ export function MeetingRecorder({
   const [notesPct, setNotesPct] = useState(0);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasted, setPasted] = useState("");
+  const [trimSmallTalk, setTrimSmallTalk] = useState(true);
 
   const captureRef = useRef<LiveCapture | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -346,12 +349,22 @@ export function MeetingRecorder({
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Could not summarize the recording");
+      // Only offer the trim if the quoted line is actually findable — a
+      // paraphrase would otherwise silently cut the wrong place, or nothing.
+      const marker = String(json.smallTalk?.firstSubstantiveLine || "").trim();
+      const cutAt = json.smallTalk?.found && marker ? source.indexOf(marker) : -1;
+
       setResult({
         title: json.title || hint.trim() || "Recorded meeting",
         sections: json.sections || [],
         actions: (json.actions || []).map((text: string) => ({ text, selected: true })),
         transcript: source,
+        smallTalk:
+          cutAt > 0
+            ? { description: String(json.smallTalk.description || "small talk"), cutAt }
+            : undefined,
       });
+      setTrimSmallTalk(true);
       setNotesPct(100);
       setKeepTranscript(true);
       setPhase("review");
@@ -365,10 +378,14 @@ export function MeetingRecorder({
 
   async function save() {
     if (!result) return;
+    const trimmed =
+      result.smallTalk && trimSmallTalk
+        ? result.transcript.slice(result.smallTalk.cutAt)
+        : result.transcript;
     await onSave({
       ...result,
       actions: result.actions.filter((a) => a.selected),
-      transcript: keepTranscript ? result.transcript : "",
+      transcript: keepTranscript ? trimmed : "",
     });
   }
 
@@ -596,6 +613,30 @@ export function MeetingRecorder({
             </>
           )}
         </section>
+
+        {result.smallTalk && (
+          <section className="rounded-xl border border-border bg-surface p-4 shadow-sm">
+            <label className="flex cursor-pointer items-start gap-2.5 text-sm">
+              <input
+                type="checkbox"
+                checked={trimSmallTalk}
+                onChange={(e) => setTrimSmallTalk(e.target.checked)}
+                className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
+                disabled={!keepTranscript}
+              />
+              <span className={keepTranscript ? "" : "opacity-50"}>
+                Cut the opening {result.smallTalk.description} from the transcript
+                <span className="mt-0.5 block text-xs text-muted">
+                  The first{" "}
+                  {result.smallTalk.cutAt.toLocaleString()} characters are
+                  pleasantries before anyone gets to the point. They were already
+                  left out of the notes above — this drops them from the saved
+                  transcript too.
+                </span>
+              </span>
+            </label>
+          </section>
+        )}
 
         <section className="rounded-xl border border-border bg-surface p-4 shadow-sm">
           <label className="flex cursor-pointer items-start gap-2.5 text-sm">

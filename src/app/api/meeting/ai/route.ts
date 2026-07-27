@@ -238,8 +238,21 @@ const CAPTURE_SCHEMA = {
       },
     },
     actions: { type: "array" as const, items: { type: "string" as const } },
+    // Meetings routinely open with several minutes of greetings and travel
+    // chat before anyone says anything worth keeping. The notes never include
+    // it; this lets the UI offer to drop it from the stored transcript too.
+    smallTalk: {
+      type: "object" as const,
+      properties: {
+        found: { type: "boolean" as const },
+        description: { type: "string" as const },
+        firstSubstantiveLine: { type: "string" as const },
+      },
+      required: ["found", "description", "firstSubstantiveLine"],
+      additionalProperties: false,
+    },
   },
-  required: ["title", "sections", "actions"],
+  required: ["title", "sections", "actions", "smallTalk"],
   additionalProperties: false,
 };
 
@@ -482,13 +495,21 @@ ${OUTLINE_RULE}`,
         model: WRITER_MODEL,
         max_tokens: 8000,
         output_config: { format: { type: "json_schema", schema: CAPTURE_SCHEMA } },
-        system: `You turn the raw transcript of a meeting that was just recorded into usable notes. The transcript comes from automatic speech recognition, so expect missing punctuation, no speaker labels, and mis-heard words — infer sensibly from context but never invent content.
+        system: `You turn the transcript of a meeting into usable notes. It may come from automatic speech recognition — expect missing punctuation and mis-heard words — or be an exported transcript. Infer sensibly from context but never invent content.
+
+Attribution, which matters and is easy to get wrong:
+- If the transcript has speaker labels ("Dr. Chen:", "Speaker 1:"), USE them. Attribute positions, objections and commitments to the person who actually said them, and carry that through into the follow-ups ("Dr. Chen asked for…", not "someone asked for…").
+- If it has NO speaker labels, it is one undifferentiated stream and you cannot tell who spoke. Write the notes impersonally ("the dosing schedule was questioned"). Do NOT guess who said what, do NOT invent speaker names, and do NOT assume it was all one person — a single unlabelled block is usually several people talking in turn.
 
 - title: a short, specific name for this meeting as a person would write it in a calendar (5-8 words, no quotes). Use real names/topics from the transcript when they're clear, e.g. "Dr. Patel — dosing concerns and advisory board". If the transcript is too thin to tell, use a plain descriptive title.
 - sections: the meeting broken into 3-7 topic sections, in the order they came up. Each section is a distinct subject someone would want to find later — not "Introduction" / "Discussion" / "Conclusion" filler.
   - section title: 2-5 words naming the topic ("Dosing concerns", "Advisory board timing").
   - section content: HTML using ONLY <ul>, <li>, <b>, <i>, and <p>. Use a nested <ul> inside an <li> for detail under a point, 2-3 levels deep. Complete sentences. Preserve names, figures, product names and dates exactly as spoken. Never invent anything that wasn't said. No headings, no styling attributes, no markdown.
-- actions: every concrete follow-up the recording implies or someone promised, each as one imperative sentence, with the owner and any deadline when stated (e.g. "Send Dr. Chen the phase 3 subgroup data by Friday"). Only real commitments and next steps — not topics, not general observations. Empty array if there genuinely are none.`,
+- actions: every concrete follow-up the recording implies or someone promised, each as one imperative sentence, with the owner and any deadline when stated (e.g. "Send Dr. Chen the phase 3 subgroup data by Friday"). Only real commitments and next steps — not topics, not general observations. Empty array if there genuinely are none.
+- smallTalk: meetings usually open with pleasantries — greetings, travel, weather, weekend plans, waiting for people to join, tech checks — before anyone says anything substantive. Never make a section for it.
+  - found: true only when there is a genuine run of opening pleasantries. A one-line "hi, how are you" before real content does not count.
+  - description: what it was, 3-8 words ("greetings and weekend plans", "waiting for Dr. Ruiz to join").
+  - firstSubstantiveLine: the first 8-15 words of the first sentence that carries real content, copied VERBATIM from the transcript — exact characters, including any speaker label. It is used to locate the cut point, so a paraphrase is useless. Empty string when found is false.`,
         messages: [
           {
             role: "user",
@@ -512,6 +533,11 @@ ${OUTLINE_RULE}`,
           }),
         ),
         actions: (Array.isArray(parsed.actions) ? parsed.actions : []).map(String),
+        smallTalk: {
+          found: Boolean(parsed.smallTalk?.found),
+          description: String(parsed.smallTalk?.description || ""),
+          firstSubstantiveLine: String(parsed.smallTalk?.firstSubstantiveLine || ""),
+        },
       });
     }
 
