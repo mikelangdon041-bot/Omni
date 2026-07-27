@@ -19,6 +19,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea } from "@/components/ui/Input";
+import { Modal } from "@/components/ui/Modal";
 import { RichText } from "@/components/ui/RichText";
 import { OutlineBullets } from "@/components/ui/OutlineBullets";
 import { useConfirm, useToast } from "@/components/ui/Feedback";
@@ -42,6 +43,24 @@ function toLocalInput(iso: string | null): string {
   return d.toISOString().slice(0, 16);
 }
 
+// Pull the speaker labels out of a stored transcript ("Speaker A:", "Dr. Chen:").
+// A label is a short prefix before a colon that opens several lines — one line
+// starting "Note:" is not a speaker.
+function detectSpeakers(transcript: string): string[] {
+  const counts = new Map<string, number>();
+  for (const line of (transcript || "").split("\n")) {
+    const m = line.match(/^([^:]{1,40}):\s/);
+    if (!m) continue;
+    const label = m[1].trim();
+    if (!label || /[.!?]$/.test(label)) continue;
+    counts.set(label, (counts.get(label) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .filter(([label, n]) => n >= 2 || /^Speaker /i.test(label))
+    .map(([label]) => label)
+    .sort();
+}
+
 export function DebriefTab({
   m,
   save,
@@ -55,6 +74,8 @@ export function DebriefTab({
   const confirm = useConfirm();
   const kol = useKolLite(m.kol_id);
   const [busy, setBusy] = useState(false);
+  const [redoOpen, setRedoOpen] = useState(false);
+  const [renames, setRenames] = useState<Record<string, string>>({});
 
   const debrief = m.debrief || {};
   const notes = debrief.notes || {};
@@ -108,11 +129,11 @@ export function DebriefTab({
   const setNote = (key: string, value: string) =>
     save({ debrief: { ...debrief, notes: { ...notes, [key]: value } } });
 
-  async function analyze() {
+  async function analyze(transcriptOverride?: string) {
+    const source = transcriptOverride ?? debrief.transcript ?? "";
     const combined = [
       notesText && `The writer's own debrief notes:\n${notesText}`,
-      (debrief.transcript || "").trim() &&
-        `Meeting transcript/notes:\n${debrief.transcript}`,
+      source.trim() && `Meeting transcript/notes:\n${source}`,
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -136,6 +157,10 @@ export function DebriefTab({
       save({
         debrief: {
           ...debrief,
+          // Persist the relabelled transcript too, so the names stick.
+          ...(transcriptOverride !== undefined
+            ? { transcript: transcriptOverride }
+            : {}),
           sections: json.sections || [],
           // A re-analysis replaces the notes; the old single-blob summary
           // would otherwise linger underneath them.
@@ -152,6 +177,41 @@ export function DebriefTab({
     } finally {
       setBusy(false);
     }
+  }
+
+  const detected = detectSpeakers(debrief.transcript || "");
+
+  // The first thing each voice says, so a label can be recognised without
+  // going back to the audio.
+  function sampleFor(label: string): string {
+    const line = (debrief.transcript || "")
+      .split("\n")
+      .find((l) => l.startsWith(`${label}:`));
+    return line ? line.slice(label.length + 1).trim().slice(0, 90) : "";
+  }
+
+  // Re-run the notes, optionally relabelling speakers first. Renaming happens
+  // here rather than in the model because the person who was in the room is
+  // the only reliable source for who is who.
+  async function redo() {
+    const pairs = Object.entries(renames).filter(([, v]) => v.trim());
+    let text = debrief.transcript || "";
+    if (pairs.length) {
+      text = text
+        .split("\n")
+        .map((line) => {
+          for (const [label, name] of pairs) {
+            if (line.startsWith(`${label}:`)) {
+              return `${name.trim()}:${line.slice(label.length + 1)}`;
+            }
+          }
+          return line;
+        })
+        .join("\n");
+    }
+    setRedoOpen(false);
+    setRenames({});
+    await analyze(pairs.length ? text : undefined);
   }
 
   // Adds the follow-ups at `indexes` to the global to-do list, skipping any
@@ -249,7 +309,14 @@ export function DebriefTab({
               Answer at least one question or attach a recording first.
             </p>
           )}
-          <Button disabled={!hasMaterial || busy} onClick={() => void analyze()}>
+          <Button
+            disabled={!hasMaterial || busy}
+            onClick={() =>
+              (debrief.transcript || "").trim()
+                ? setRedoOpen(true)
+                : void analyze()
+            }
+          >
             <Sparkles size={15} />
             {busy
               ? "Analyzing…"
@@ -372,6 +439,64 @@ export function DebriefTab({
           </section>
         </>
       )}
+
+      <Modal
+        open={redoOpen}
+        onClose={() => setRedoOpen(false)}
+        title="Redo the notes"
+        size="md"
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-muted">
+            Re-runs the notes and follow-ups from the saved transcript. The
+            current sections and follow-ups are replaced.
+          </p>
+
+          {detected.length > 1 && (
+            <div className="rounded-lg border border-border p-3">
+              <p className="text-sm font-medium">Who is who?</p>
+              <p className="mt-0.5 text-xs text-muted">
+                These labels appear in the transcript. Correcting them here
+                fixes attribution for good — the names are written into the
+                transcript, not guessed from context.
+              </p>
+              <div className="mt-3 space-y-2">
+                {detected.map((label) => (
+                  <div key={label} className="flex items-start gap-2">
+                    <span className="mt-2 w-24 shrink-0 truncate text-xs font-semibold" title={label}>
+                      {label}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <input
+                        value={renames[label] ?? ""}
+                        onChange={(e) =>
+                          setRenames((r) => ({ ...r, [label]: e.target.value }))
+                        }
+                        placeholder="Correct name (leave blank to keep)"
+                        className="w-full rounded-md border border-border bg-canvas px-2 py-1.5 text-sm outline-none transition focus:border-[var(--accent)]"
+                      />
+                      {sampleFor(label) && (
+                        <p className="mt-1 truncate text-[11px] italic text-muted">
+                          &ldquo;{sampleFor(label)}…&rdquo;
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setRedoOpen(false)}>
+              Cancel
+            </Button>
+            <Button disabled={busy} onClick={() => void redo()}>
+              <Sparkles size={15} /> {busy ? "Working…" : "Redo notes"}
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Territory logging */}
       {m.kol_id && kol && (
