@@ -153,6 +153,8 @@ export function MeetingRecorder({
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasted, setPasted] = useState("");
   const [trimSmallTalk, setTrimSmallTalk] = useState(true);
+  const [ownNotes, setOwnNotes] = useState("");
+  const [emphasizeNotes, setEmphasizeNotes] = useState(true);
 
   const captureRef = useRef<LiveCapture | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -284,7 +286,9 @@ export function MeetingRecorder({
     setTranscript(text);
     setPasteOpen(false);
     setPasted("");
-    void summarizeText(text);
+    // Into the same confirm step the other two paths reach, so a pasted
+    // transcript can carry your own notes and the hint as well.
+    setPhase("deciding");
   }
 
   async function discardEverything() {
@@ -296,6 +300,7 @@ export function MeetingRecorder({
     setUpload(null);
     setFileName("");
     setElapsed(0);
+    setOwnNotes("");
     setPhase("idle");
   }
 
@@ -345,7 +350,13 @@ export function MeetingRecorder({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
-        body: JSON.stringify({ action: "capture", transcript: source, hint }),
+        body: JSON.stringify({
+          action: "capture",
+          transcript: source,
+          hint,
+          ownNotes,
+          emphasizeNotes,
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Could not summarize the recording");
@@ -481,7 +492,13 @@ export function MeetingRecorder({
         <Modal
           open={!wrapping}
           onClose={() => {}}
-          title={autoEnded ? "That meeting just ended" : "Recording finished"}
+          title={
+            autoEnded
+              ? "That meeting just ended"
+              : elapsed > 0
+                ? "Recording finished"
+                : "Ready to write your notes"
+          }
           size="sm"
         >
           <div className="space-y-4">
@@ -499,6 +516,35 @@ export function MeetingRecorder({
               onChange={(e) => setHint(e.target.value)}
               placeholder="e.g. advisory board with Dr. Chen and Dr. Ruiz"
             />
+
+            {/* Anything the user wrote down themselves is, by definition, what
+                they thought was worth writing down — so it can outrank the
+                transcript rather than just sit alongside it. */}
+            <Textarea
+              label="Your own notes (optional)"
+              value={ownNotes}
+              onChange={(e) => setOwnNotes(e.target.value)}
+              placeholder="Whatever you jotted down during or after the meeting…"
+              className="min-h-24"
+            />
+            {ownNotes.trim() && (
+              <label className="flex cursor-pointer items-start gap-2.5 rounded-lg bg-canvas p-3 text-xs">
+                <input
+                  type="checkbox"
+                  checked={emphasizeNotes}
+                  onChange={(e) => setEmphasizeNotes(e.target.checked)}
+                  className="mt-0.5 h-3.5 w-3.5 accent-[var(--accent)]"
+                />
+                <span>
+                  <span className="font-medium">Treat my notes as the priority</span>
+                  <span className="mt-0.5 block text-muted">
+                    Everything you wrote is carried into the notes and leads its
+                    section — you wrote it down, so it mattered. Untick to weigh
+                    them the same as the transcript.
+                  </span>
+                </span>
+              </label>
+            )}
             <div className="flex justify-end gap-2">
               <Button variant="ghost" onClick={() => void discardEverything()}>
                 <Trash2 size={15} /> Discard it
@@ -801,9 +847,11 @@ export function MeetingRecorder({
         <div className="space-y-3">
           <p className="text-sm text-muted">
             Paste the text, or drop in a <code>.vtt</code>, <code>.srt</code> or{" "}
-            <code>.txt</code> file. Timestamps and cue numbers are stripped
-            automatically; speaker names are kept, because they tell me who
-            committed to what.
+            <code>.txt</code> file — Teams, Zoom, Meet and Apple Voice Memos all
+            export one. Timestamps and cue numbers are stripped automatically.
+            Speaker names are kept, because they tell me who committed to what,
+            and where a tool marks each new speaker with a line break that
+            structure is preserved too.
           </p>
           <Textarea
             value={pasted}
@@ -831,7 +879,7 @@ export function MeetingRecorder({
                 Cancel
               </Button>
               <Button disabled={!pasted.trim()} onClick={useTranscript}>
-                Make my notes
+                Use this transcript
               </Button>
             </div>
           </div>

@@ -491,6 +491,10 @@ ${OUTLINE_RULE}`,
       if (!transcript.trim())
         return NextResponse.json({ error: "No transcript provided" }, { status: 400 });
       const hint = String(body?.hint || "").slice(0, 2000);
+      // The writer's own notes, and whether they want them treated as the
+      // priority signal rather than as one more piece of context.
+      const ownNotes = String(body?.ownNotes || "").slice(0, 20000);
+      const emphasizeNotes = body?.emphasizeNotes !== false;
       const res = await anthropic().messages.create({
         model: WRITER_MODEL,
         max_tokens: 8000,
@@ -500,7 +504,8 @@ ${OUTLINE_RULE}`,
 Attribution, which matters and is easy to get wrong:
 - If the transcript has speaker labels ("Dr. Chen:", "Speaker 1:", "Speaker A:"), USE them. Attribute positions, objections and commitments to the person who actually said them, and carry that through into the follow-ups ("Dr. Chen asked for…", not "someone asked for…").
 - Labels like "Speaker A" come from voice separation, which knows there are distinct people but not their names. If the conversation makes a speaker's identity clear — they are greeted or thanked by name, they introduce themselves, someone answers a question put to them by name — use the real name and stop saying "Speaker A". Only do this when the transcript genuinely settles it; if you are unsure, keep the label as-is rather than guessing.
-- If it has NO speaker labels, it is one undifferentiated stream and you cannot tell who spoke. Write the notes impersonally ("the dosing schedule was questioned"). Do NOT guess who said what, do NOT invent speaker names, and do NOT assume it was all one person — a single unlabelled block is usually several people talking in turn.
+- If it has NO speaker labels, you cannot tell who spoke. Write the notes impersonally ("the dosing schedule was questioned"). Do NOT guess who said what, do NOT invent speaker names, and do NOT assume it was all one person — a single unlabelled block is usually several people talking in turn.
+- Line breaks often mark a change of speaker even when nobody is named — Apple Voice Memos and several other tools put each turn on its own line. Treat a line-broken transcript as a multi-party conversation with turns, and let that shape the notes ("this was pushed back on", "the two sides landed on…"). Use the turn structure; still don't invent who owns which turn.
 
 - title: a short, specific name for this meeting as a person would write it in a calendar (5-8 words, no quotes). Use real names/topics from the transcript when they're clear, e.g. "Dr. Patel — dosing concerns and advisory board". If the transcript is too thin to tell, use a plain descriptive title.
 - sections: the meeting broken into 3-7 topic sections, in the order they came up. Each section is a distinct subject someone would want to find later — not "Introduction" / "Discussion" / "Conclusion" filler.
@@ -510,11 +515,28 @@ Attribution, which matters and is easy to get wrong:
 - smallTalk: meetings usually open with pleasantries — greetings, travel, weather, weekend plans, waiting for people to join, tech checks — before anyone says anything substantive. Never make a section for it.
   - found: true only when there is a genuine run of opening pleasantries. A one-line "hi, how are you" before real content does not count.
   - description: what it was, 3-8 words ("greetings and weekend plans", "waiting for Dr. Ruiz to join").
-  - firstSubstantiveLine: the first 8-15 words of the first sentence that carries real content, copied VERBATIM from the transcript — exact characters, including any speaker label. It is used to locate the cut point, so a paraphrase is useless. Empty string when found is false.`,
+  - firstSubstantiveLine: the first 8-15 words of the first sentence that carries real content, copied VERBATIM from the transcript — exact characters, including any speaker label. It is used to locate the cut point, so a paraphrase is useless. Empty string when found is false.${
+          ownNotes
+            ? emphasizeNotes
+              ? `
+
+THE WRITER'S OWN NOTES — the highest-signal input you have. They took the trouble to write these down, which means they judged it mattered: the transcript is everything that was said, their notes are what was worth saying. Concretely:
+- Every point in their notes must appear in the sections. None may be dropped for being thinly covered in the transcript.
+- Lead the relevant section with their point, and prefer their framing and wording where it is clear.
+- Where their notes and the transcript cover the same ground, their emphasis decides what matters; the transcript supplies the specifics, names and figures around it.
+- If they noted something the transcript barely covers, still include it, worded as their note — but never invent transcript detail to prop it up.
+- A follow-up they wrote down is a real commitment even where the transcript is vague about it.`
+              : `
+
+THE WRITER'S OWN NOTES are background context. Use them to understand the meeting and resolve ambiguity, but weight them no more heavily than the transcript — build the notes from what was actually said.`
+            : ""
+        }`,
         messages: [
           {
             role: "user",
-            content: `${hint ? `What the recording is (from the person who recorded it): ${hint}\n\n` : ""}Transcript:\n${transcript}`,
+            content: `${hint ? `What the recording is (from the person who recorded it): ${hint}\n\n` : ""}${
+              ownNotes ? `The writer's own notes:\n${ownNotes}\n\n` : ""
+            }Transcript:\n${transcript}`,
           },
         ],
       });
