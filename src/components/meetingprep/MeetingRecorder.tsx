@@ -21,6 +21,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
+  ClipboardType,
   FileAudio,
   ListTodo,
   Loader2,
@@ -31,7 +32,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
-import { Input } from "@/components/ui/Input";
+import { Input, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { RichText } from "@/components/ui/RichText";
 import { useToast } from "@/components/ui/Feedback";
@@ -61,6 +62,61 @@ type Phase =
   | "summarizing"
   | "review"
   | "error";
+
+// Teams, Zoom and Meet all export transcripts as WebVTT/SRT, so a pasted one
+// usually arrives wrapped in cue numbers and timestamps. Strip those — they
+// are noise to the model — but keep speaker labels, which materially improve
+// the notes because they tell it who committed to what.
+function cleanTranscript(raw: string): string {
+  const rows: { speaker: string; text: string }[] = [];
+
+  for (const line of raw.replace(/\r/g, "").split("\n")) {
+    let t = line.trim();
+    if (!t) continue;
+    if (/^WEBVTT/i.test(t)) continue;
+    if (/^(NOTE|STYLE|REGION)\b/i.test(t)) continue;
+    if (/^\d+$/.test(t)) continue; // SRT cue number
+    // 00:00:12.480 --> 00:00:15.200
+    if (/^[\d:.,]+\s*-->\s*[\d:.,]+/.test(t)) continue;
+    // Leading "[00:12:03]" or "00:12:03" on a spoken line
+    t = t.replace(/^\[?\d{1,2}:\d{2}(:\d{2})?([.,]\d+)?\]?\s*/, "");
+
+    // Teams wraps each cue in a voice tag: <v Dr. Chen>…</v>
+    let speaker = "";
+    const voice = t.match(/^<v\s+([^>]+)>([\s\S]*?)(?:<\/v>)?$/i);
+    if (voice) {
+      speaker = voice[1].trim();
+      t = voice[2];
+    }
+    t = t.replace(/<[^>]+>/g, "").trim(); // any remaining cue markup
+    if (!t) continue;
+
+    // Zoom/Meet style: "Speaker Name: said this"
+    if (!speaker) {
+      const named = t.match(/^([A-Z][\w.'-]*(?:\s+[A-Z0-9][\w.'-]*){0,3}):\s+(.*)$/);
+      if (named) {
+        speaker = named[1];
+        t = named[2];
+      }
+    }
+
+    // Subtitle formats cut sentences mid-flow across cues. Continue the
+    // previous row when the same person is still talking and the text picks
+    // up where it left off, so the model reads prose not fragments.
+    const prev = rows[rows.length - 1];
+    const continues = /[a-z,;]$/.test(prev?.text ?? "") || /^[a-z,]/.test(t);
+    if (prev && prev.speaker === speaker && continues) {
+      prev.text = `${prev.text} ${t}`.replace(/\s+/g, " ");
+    } else {
+      rows.push({ speaker, text: t });
+    }
+  }
+
+  return rows
+    .map((r) => (r.speaker ? `${r.speaker}: ${r.text}` : r.text))
+    .join("\n")
+    .trim();
+}
 
 function mmss(sec: number) {
   const m = Math.floor(sec / 60);
@@ -92,6 +148,8 @@ export function MeetingRecorder({
   const [upload, setUpload] = useState<UploadProgress | null>(null);
   const [fileName, setFileName] = useState("");
   const [notesPct, setNotesPct] = useState(0);
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasted, setPasted] = useState("");
 
   const captureRef = useRef<LiveCapture | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -214,6 +272,18 @@ export function MeetingRecorder({
     }
   }
 
+  // A transcript you already have needs no upload and no transcription — it
+  // joins the flow at the point the other two paths reach eventually.
+  function useTranscript() {
+    const text = cleanTranscript(pasted);
+    if (!text) return;
+    setError("");
+    setTranscript(text);
+    setPasteOpen(false);
+    setPasted("");
+    void summarizeText(text);
+  }
+
   async function discardEverything() {
     await captureRef.current?.discard();
     captureRef.current = null;
@@ -251,13 +321,17 @@ export function MeetingRecorder({
   const removeAction = (index: number) =>
     setResult((r) => (r ? { ...r, actions: r.actions.filter((_, i) => i !== index) } : r));
 
-  async function summarize() {
+  const summarize = () => summarizeText(transcript);
+
+  // Takes the text explicitly: the paste path calls this in the same tick it
+  // sets `transcript`, so reading the state here would send an empty string.
+  async function summarizeText(source: string) {
     setPhase("summarizing");
     setNotesPct(0);
     // The model gives no progress signal, so this is an estimate paced off
     // transcript length. It eases toward 95% and only reaches 100 when the
     // notes actually land — it never claims to be finished before it is.
-    const expectedMs = Math.min(120_000, 15_000 + transcript.length * 3);
+    const expectedMs = Math.min(120_000, 15_000 + source.length * 3);
     const startedAt = Date.now();
     const ticker = setInterval(() => {
       const elapsedMs = Date.now() - startedAt;
@@ -268,7 +342,7 @@ export function MeetingRecorder({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
-        body: JSON.stringify({ action: "capture", transcript, hint }),
+        body: JSON.stringify({ action: "capture", transcript: source, hint }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Could not summarize the recording");
@@ -276,7 +350,7 @@ export function MeetingRecorder({
         title: json.title || hint.trim() || "Recorded meeting",
         sections: json.sections || [],
         actions: (json.actions || []).map((text: string) => ({ text, selected: true })),
-        transcript,
+        transcript: source,
       });
       setNotesPct(100);
       setKeepTranscript(true);
@@ -653,11 +727,75 @@ export function MeetingRecorder({
         </div>
       </div>
 
+      {/* Already have the text? Then there is no audio to capture, no upload,
+          and nothing to transcribe — this joins the flow at the notes step.
+          Deliberately outside the consent gate above, which is about
+          recording. */}
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-surface p-4 text-sm shadow-sm">
+        <ClipboardType size={16} className="shrink-0 text-[var(--accent)]" />
+        <span className="flex-1">
+          Already have a transcript?
+          <span className="ml-1 text-muted">
+            Teams, Zoom and Meet can export one — paste it and skip straight to
+            the notes.
+          </span>
+        </span>
+        <Button size="sm" variant="secondary" onClick={() => setPasteOpen(true)}>
+          Paste a transcript
+        </Button>
+      </div>
+
       <p className="flex items-start gap-2 px-1 text-xs text-muted">
         <ShieldCheck size={14} className="mt-0.5 shrink-0 text-[var(--accent)]" />
         The audio is deleted as soon as it has been transcribed — it is never
         stored. You choose afterwards whether to keep even the transcript.
       </p>
+
+      <Modal
+        open={pasteOpen}
+        onClose={() => setPasteOpen(false)}
+        title="Paste a transcript"
+        size="lg"
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-muted">
+            Paste the text, or drop in a <code>.vtt</code>, <code>.srt</code> or{" "}
+            <code>.txt</code> file. Timestamps and cue numbers are stripped
+            automatically; speaker names are kept, because they tell me who
+            committed to what.
+          </p>
+          <Textarea
+            value={pasted}
+            onChange={(e) => setPasted(e.target.value)}
+            placeholder={"00:00:04.120 --> 00:00:07.900\nDr. Chen: Let us start with the dosing data..."}
+            className="min-h-64 font-mono text-xs"
+            autoFocus
+          />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted transition hover:text-ink">
+              <FileAudio size={14} /> Load a transcript file
+              <input
+                type="file"
+                accept=".vtt,.srt,.txt,.md,text/plain"
+                className="hidden"
+                onChange={async (e) => {
+                  const f = e.target.files?.[0];
+                  e.target.value = "";
+                  if (f) setPasted(await f.text());
+                }}
+              />
+            </label>
+            <div className="flex gap-2">
+              <Button variant="ghost" onClick={() => setPasteOpen(false)}>
+                Cancel
+              </Button>
+              <Button disabled={!pasted.trim()} onClick={useTranscript}>
+                Make my notes
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
