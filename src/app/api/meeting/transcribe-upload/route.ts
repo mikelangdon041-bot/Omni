@@ -20,18 +20,24 @@ const ALLOWED_EXT = new Set([
 // Transcribe an uploaded meeting recording of any size, for a meeting that
 // doesn't exist yet. Deliberately owns no database row: the audio is a means
 // to a transcript and nothing else, so there is nothing to leave behind and
-// nothing to clean up later. The file is deleted in a `finally`, on the
-// success path and every failure path alike.
+// nothing to clean up later. Everything under the upload's prefix is deleted
+// in a `finally`, on the success path and every failure path alike.
 //
-// Every upload takes the same route regardless of size — Vercel rejects
-// request bodies past ~4.5 MB anyway, and going through storage is what lets
-// the file be split into chunks and reported as a real percentage.
+// Uploads arrive in parts. Two ceilings force it: Vercel rejects request
+// bodies past ~4.5 MB (so the file can't be POSTed here), and Supabase
+// storage rejects any single object over 50 MB — reported, confusingly, as a
+// 400 whose body says 413. A 90-minute meeting clears both easily, so the
+// client slices the file and PUTs each slice separately; this route stitches
+// the bytes back together before handing them to ffmpeg.
 //
-//   { action: "sign", ext }          → signed URL to PUT the file straight to storage
-//   { action: "from-storage", path } → NDJSON progress stream, ends { type:"done", text }
-//   { action: "discard", path }      → drop an upload that never got transcribed
-function pathFor(userId: string, ext: string) {
-  return `${userId}/meeting-uploads/${crypto.randomUUID()}.${ext}`;
+//   { action: "sign", uploadId, part, ext } → signed URL for one part
+//   { action: "from-storage", uploadId, parts, ext }
+//                                           → NDJSON progress, ends { type:"done", text }
+//   { action: "discard", uploadId }         → drop an upload that never got transcribed
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function partPath(userId: string, uploadId: string, part: number, ext: string) {
+  return `${userId}/meeting-uploads/${uploadId}/${String(part).padStart(3, "0")}.${ext}`;
 }
 
 async function whisper(bytes: Buffer, name: string, type: string): Promise<string> {
@@ -46,6 +52,22 @@ async function whisper(bytes: Buffer, name: string, type: string): Promise<strin
   return text.trim();
 }
 
+// Remove every part of an upload. Best-effort: never fail a caller over it.
+async function purge(
+  admin: ReturnType<typeof createAdminClient>,
+  userId: string,
+  uploadId: string,
+) {
+  try {
+    const prefix = `${userId}/meeting-uploads/${uploadId}`;
+    const { data } = await admin.storage.from("recordings").list(prefix);
+    const paths = (data || []).filter((e) => e.id).map((e) => `${prefix}/${e.name}`);
+    if (paths.length) await admin.storage.from("recordings").remove(paths);
+  } catch {
+    // best-effort
+  }
+}
+
 export async function POST(req: Request) {
   const supabase = await createClient();
   const {
@@ -53,124 +75,117 @@ export async function POST(req: Request) {
   } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const contentType = req.headers.get("content-type") || "";
+  const body = await req.json().catch(() => null);
+  if (!body) return NextResponse.json({ error: "Expected JSON" }, { status: 400 });
+
   const admin = createAdminClient();
-  const ownedPrefix = `${user.id}/meeting-uploads/`;
 
-  if (contentType.includes("application/json")) {
-    const body = await req.json().catch(() => ({}));
-
-    if (body.action === "sign") {
-      const ext = String(body.ext || "bin").toLowerCase().replace(/[^a-z0-9]/g, "");
-      if (!ALLOWED_EXT.has(ext)) {
-        return NextResponse.json({ error: "Unsupported file type" }, { status: 400 });
-      }
-      const path = pathFor(user.id, ext);
-      const { data: signed, error } = await admin.storage
-        .from("recordings")
-        .createSignedUploadUrl(path);
-      if (error || !signed) {
-        return NextResponse.json({ error: "Could not start the upload" }, { status: 500 });
-      }
-      return NextResponse.json({ path, token: signed.token, signedUrl: signed.signedUrl });
-    }
-
-    // Every path below is keyed by the caller's own id, so one user can never
-    // reach another's upload.
-    const path = String(body.path || "");
-    if (!path.startsWith(ownedPrefix)) {
-      return NextResponse.json({ error: "Bad path" }, { status: 400 });
-    }
-
-    if (body.action === "discard") {
-      await admin.storage.from("recordings").remove([path]);
-      return NextResponse.json({ ok: true });
-    }
-
-    if (body.action === "from-storage") {
-      const { data: blob, error } = await admin.storage
-        .from("recordings")
-        .download(path);
-      if (error || !blob) {
-        return NextResponse.json(
-          { error: "Could not read the uploaded file" },
-          { status: 500 },
-        );
-      }
-      const input = Buffer.from(await blob.arrayBuffer());
-      const ext = path.split(".").pop() || "bin";
-
-      const encoder = new TextEncoder();
-      const stream = new ReadableStream({
-        async start(controller) {
-          const send = (obj: unknown) =>
-            controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
-          try {
-            // Always split, not just past Whisper's size cap. Chunking is what
-            // makes progress meaningful: a 60-minute meeting becomes ~20 pieces
-            // that complete one by one, instead of a single opaque request the
-            // UI can only spin on.
-            send({ type: "progress", label: "Reading the recording" });
-            const chunks = await chunkAudio(input, ext);
-            const parts = chunks.map((c) => ({
-              bytes: c.bytes,
-              name: `chunk-${c.index}.wav`,
-              type: "audio/wav",
-            }));
-            if (parts.length === 0) throw new Error("No audio found in that file");
-
-            const total = parts.length;
-            send({ type: "progress", done: 0, total });
-
-            // Transcribe a few at a time. Sequential was simpler, but a
-            // full-length meeting then ran past the function's time limit.
-            // Results are stored by index so the transcript stays in order.
-            const texts: string[] = new Array(total).fill("");
-            let done = 0;
-            let next = 0;
-            const worker = async () => {
-              for (;;) {
-                const i = next++;
-                if (i >= total) return;
-                texts[i] = await whisper(parts[i].bytes, parts[i].name, parts[i].type);
-                done += 1;
-                send({ type: "progress", done, total });
-              }
-            };
-            await Promise.all(
-              Array.from({ length: Math.min(CONCURRENCY, total) }, worker),
-            );
-
-            send({ type: "done", text: texts.filter(Boolean).join("\n\n") });
-          } catch (err) {
-            send({ type: "error", error: (err as Error).message || "Transcription failed" });
-          } finally {
-            // The transcript is all that survives, however this ended.
-            await admin.storage
-              .from("recordings")
-              .remove([path])
-              .then(
-                () => {},
-                () => {},
-              );
-            controller.close();
-          }
-        },
-      });
-      return new Response(stream, {
-        headers: {
-          "Content-Type": "application/x-ndjson; charset=utf-8",
-          "Cache-Control": "no-cache, no-transform",
-          "X-Accel-Buffering": "no",
-        },
-      });
-    }
-
-    return NextResponse.json({ error: "Unknown action" }, { status: 400 });
+  const uploadId = String(body.uploadId || "");
+  if (!UUID_RE.test(uploadId)) {
+    return NextResponse.json({ error: "Bad upload id" }, { status: 400 });
+  }
+  const ext = String(body.ext || "bin").toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!ALLOWED_EXT.has(ext)) {
+    return NextResponse.json({ error: "Unsupported file type" }, { status: 400 });
   }
 
-  return NextResponse.json(
-    { error: "Send JSON: sign, then from-storage." },
-    { status: 400 },
-  );
+  if (body.action === "sign") {
+    const part = Number(body.part);
+    if (!Number.isInteger(part) || part < 0 || part > 999) {
+      return NextResponse.json({ error: "Bad part number" }, { status: 400 });
+    }
+    const path = partPath(user.id, uploadId, part, ext);
+    const { data: signed, error } = await admin.storage
+      .from("recordings")
+      .createSignedUploadUrl(path);
+    if (error || !signed) {
+      return NextResponse.json({ error: "Could not start the upload" }, { status: 500 });
+    }
+    return NextResponse.json({ signedUrl: signed.signedUrl });
+  }
+
+  if (body.action === "discard") {
+    await purge(admin, user.id, uploadId);
+    return NextResponse.json({ ok: true });
+  }
+
+  if (body.action === "from-storage") {
+    const parts = Number(body.parts);
+    if (!Number.isInteger(parts) || parts < 1 || parts > 1000) {
+      return NextResponse.json({ error: "Bad part count" }, { status: 400 });
+    }
+
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        const send = (obj: unknown) =>
+          controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+        try {
+          // Stitch the slices back into the original file, in order.
+          send({ type: "progress", label: "Reading the recording" });
+          const buffers: Buffer[] = [];
+          for (let i = 0; i < parts; i++) {
+            const { data: blob, error } = await admin.storage
+              .from("recordings")
+              .download(partPath(user.id, uploadId, i, ext));
+            if (error || !blob) throw new Error("The upload was incomplete.");
+            buffers.push(Buffer.from(await blob.arrayBuffer()));
+          }
+          const input = Buffer.concat(buffers);
+          buffers.length = 0;
+
+          // Always split, not just past Whisper's size cap. Chunking is what
+          // makes progress meaningful: a 60-minute meeting becomes ~20 pieces
+          // that complete one by one, instead of a single opaque request the
+          // UI can only spin on.
+          const audioChunks = await chunkAudio(input, ext);
+          const pieces = audioChunks.map((c) => ({
+            bytes: c.bytes,
+            name: `chunk-${c.index}.wav`,
+            type: "audio/wav",
+          }));
+          if (pieces.length === 0) throw new Error("No audio found in that file");
+
+          const total = pieces.length;
+          send({ type: "progress", done: 0, total });
+
+          // Transcribe a few at a time. Sequential was simpler, but a
+          // full-length meeting then ran past the function's time limit.
+          // Results are stored by index so the transcript stays in order.
+          const texts: string[] = new Array(total).fill("");
+          let done = 0;
+          let next = 0;
+          const worker = async () => {
+            for (;;) {
+              const i = next++;
+              if (i >= total) return;
+              texts[i] = await whisper(pieces[i].bytes, pieces[i].name, pieces[i].type);
+              done += 1;
+              send({ type: "progress", done, total });
+            }
+          };
+          await Promise.all(
+            Array.from({ length: Math.min(CONCURRENCY, total) }, worker),
+          );
+
+          send({ type: "done", text: texts.filter(Boolean).join("\n\n") });
+        } catch (err) {
+          send({ type: "error", error: (err as Error).message || "Transcription failed" });
+        } finally {
+          // The transcript is all that survives, however this ended.
+          await purge(admin, user.id, uploadId);
+          controller.close();
+        }
+      },
+    });
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
+      },
+    });
+  }
+
+  return NextResponse.json({ error: "Unknown action" }, { status: 400 });
 }
