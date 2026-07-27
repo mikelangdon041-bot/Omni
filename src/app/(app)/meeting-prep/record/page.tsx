@@ -30,6 +30,14 @@ export default function RecordMeetingPage() {
         date: new Date().toISOString(),
         // A recording is by definition a meeting that already happened.
         meeting_type: "other",
+        // Names given for the voices carry onto the meeting, so the roster is
+        // captured once instead of retyped in Setup.
+        attendees: (result.attendees || []).map((name) => ({
+          name,
+          role: "",
+          org: "",
+          notes: "",
+        })),
         debrief: {
           transcript: result.transcript,
           sections: result.sections,

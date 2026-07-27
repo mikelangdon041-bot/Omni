@@ -53,6 +53,8 @@ export interface CaptureResult {
   transcript: string;
   /** Where the opening pleasantries end, when there were any we could locate. */
   smallTalk?: { description: string; cutAt: number };
+  /** Names the user gave for the voices, plus anyone else in the room. */
+  attendees?: string[];
 }
 
 type Phase =
@@ -158,6 +160,9 @@ export function MeetingRecorder({
   // blank they stay "Speaker A" — the model is barred from guessing.
   const [speakers, setSpeakers] = useState<string[]>([]);
   const [speakerNames, setSpeakerNames] = useState<Record<string, string>>({});
+  // Type the room once, then pick from it per voice — faster than retyping the
+  // same name and it stops "Dr Chen" / "Dr. Chen" becoming two people.
+  const [roster, setRoster] = useState("");
   const [emphasizeNotes, setEmphasizeNotes] = useState(true);
 
   const captureRef = useRef<LiveCapture | null>(null);
@@ -309,6 +314,7 @@ export function MeetingRecorder({
     setOwnNotes("");
     setSpeakers([]);
     setSpeakerNames({});
+    setRoster("");
     setPhase("idle");
   }
 
@@ -356,6 +362,11 @@ export function MeetingRecorder({
       })
       .join("\n");
   }
+
+  const rosterNames = roster
+    .split(",")
+    .map((n) => n.trim())
+    .filter(Boolean);
 
   const summarize = () => summarizeText(applySpeakerNames(transcript));
 
@@ -429,10 +440,18 @@ export function MeetingRecorder({
       result.smallTalk && trimSmallTalk
         ? result.transcript.slice(result.smallTalk.cutAt)
         : result.transcript;
+    // Whoever was named goes onto the meeting as an attendee, so the roster
+    // is captured once rather than retyped in Setup afterwards.
+    const named = speakers
+      .map((label) => (speakerNames[label] || "").trim())
+      .filter(Boolean);
+    const attendees = [...new Set([...named, ...rosterNames])];
+
     await onSave({
       ...result,
       actions: result.actions.filter((a) => a.selected),
       transcript: keepTranscript ? trimmed : "",
+      attendees,
     });
   }
 
@@ -555,6 +574,24 @@ export function MeetingRecorder({
                   &ldquo;Speaker {speakers[0]}&rdquo;. I won&apos;t guess: names
                   are only attached when you say so.
                 </p>
+
+                <Input
+                  label="Who was in this meeting?"
+                  value={roster}
+                  onChange={(e) => setRoster(e.target.value)}
+                  placeholder="Dr. Chen, Dr. Ruiz, me"
+                  className="mt-3"
+                />
+                <p className="mt-1 text-[11px] text-muted">
+                  Separate with commas — they become options below, and are
+                  saved as the meeting&apos;s attendees.
+                </p>
+                <datalist id="omni-roster">
+                  {rosterNames.map((n) => (
+                    <option key={n} value={n} />
+                  ))}
+                </datalist>
+
                 <div className="mt-3 space-y-2">
                   {speakers.map((label) => (
                     <div key={label} className="flex items-start gap-2">
@@ -567,7 +604,12 @@ export function MeetingRecorder({
                           onChange={(e) =>
                             setSpeakerNames((m) => ({ ...m, [label]: e.target.value }))
                           }
-                          placeholder="Name (optional)"
+                          list="omni-roster"
+                          placeholder={
+                            rosterNames.length
+                              ? "Pick or type a name"
+                              : "Name (optional)"
+                          }
                           className="w-full rounded-md border border-border bg-canvas px-2 py-1.5 text-sm outline-none transition focus:border-[var(--accent)]"
                         />
                         {speakerSample(label) && (

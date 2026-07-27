@@ -180,6 +180,11 @@ export function DebriefTab({
   }
 
   const detected = detectSpeakers(debrief.transcript || "");
+  // The meeting already knows who was in the room — offer those rather than
+  // making the same names get retyped (and mistyped) here.
+  const attendeeNames = (m.attendees || [])
+    .map((a) => (a.name || "").trim())
+    .filter(Boolean);
 
   // The first thing each voice says, so a label can be recognised without
   // going back to the audio.
@@ -208,6 +213,15 @@ export function DebriefTab({
           return line;
         })
         .join("\n");
+    }
+    // Keep the roster in step with what was just applied.
+    if (pairs.length) {
+      const existing = new Set(attendeeNames);
+      const added = pairs
+        .map(([, name]) => name.trim())
+        .filter((name) => name && !existing.has(name))
+        .map((name) => ({ name, role: "", org: "", notes: "" }));
+      if (added.length) save({ attendees: [...(m.attendees || []), ...added] });
     }
     setRedoOpen(false);
     setRenames({});
@@ -330,11 +344,26 @@ export function DebriefTab({
       {(sections.length > 0 || debrief.summary) && (
         <>
           <section className="rounded-xl border border-border bg-surface p-4 shadow-sm">
-            <div className="mb-3 flex items-center justify-between gap-2">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
                 Notes
               </h2>
-              <span className="text-[11px] text-muted">Edits save automatically</span>
+              <div className="flex items-center gap-3">
+                <span className="text-[11px] text-muted">Edits save automatically</span>
+                {/* Regenerating belongs next to what it regenerates — it used
+                    to live at the bottom of the capture section above, which
+                    is not where anyone looks for it. */}
+                {(debrief.transcript || "").trim() && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={() => setRedoOpen(true)}
+                  >
+                    <Sparkles size={14} /> {busy ? "Working…" : "Redo from transcript"}
+                  </Button>
+                )}
+              </div>
             </div>
 
             {/* Each section is its own rich-text block, editable and
@@ -460,6 +489,11 @@ export function DebriefTab({
                 fixes attribution for good — the names are written into the
                 transcript, not guessed from context.
               </p>
+              <datalist id="omni-attendees">
+                {attendeeNames.map((n) => (
+                  <option key={n} value={n} />
+                ))}
+              </datalist>
               <div className="mt-3 space-y-2">
                 {detected.map((label) => (
                   <div key={label} className="flex items-start gap-2">
@@ -472,7 +506,12 @@ export function DebriefTab({
                         onChange={(e) =>
                           setRenames((r) => ({ ...r, [label]: e.target.value }))
                         }
-                        placeholder="Correct name (leave blank to keep)"
+                        list="omni-attendees"
+                        placeholder={
+                          attendeeNames.length
+                            ? "Pick or type a name"
+                            : "Correct name (leave blank to keep)"
+                        }
                         className="w-full rounded-md border border-border bg-canvas px-2 py-1.5 text-sm outline-none transition focus:border-[var(--accent)]"
                       />
                       {sampleFor(label) && (
