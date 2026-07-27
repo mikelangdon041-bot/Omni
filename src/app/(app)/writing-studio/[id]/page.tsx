@@ -1,13 +1,13 @@
 "use client";
 
-// The Writing Studio workspace: a "just tell me what you need" brief up top
-// (it auto-extracts recipient/ask/tone/… as you type), guided options folded
-// into collapsible sections below, and the living output on the right —
-// generate, refine with new guidance, flip through versions, see what
-// changed, copy or send.
+// The Writing Studio workspace: one box you drop anything into — a rough draft,
+// an email to answer, or just what you want — plus an optional "anything else"
+// note. Guided options fold into collapsible sections below, and the living
+// output sits on the right: generate, refine with new guidance, flip through
+// versions, see what changed, copy or send.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import {
   Check,
   Copy,
@@ -18,15 +18,18 @@ import {
   ListChecks,
   Mail,
   Palette,
+  Paperclip,
   Sparkles,
+  Trash2,
   Wand2,
+  X,
 } from "lucide-react";
 import { BackButton } from "@/components/BackButton";
 import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { RichText, RichTextView } from "@/components/ui/RichText";
-import { useToast } from "@/components/ui/Feedback";
+import { useConfirm, useToast } from "@/components/ui/Feedback";
 import { ChipGroup } from "@/components/writer/Chips";
 import { IntakeSection } from "@/components/writer/IntakeSection";
 import { diffHighlightHtml } from "@/lib/writer/diff";
@@ -41,6 +44,9 @@ import {
   AUDIENCE_CHIPS,
   LENGTHS,
   TONE_CHIPS,
+  chipOptions,
+  cleanTag,
+  docTypeEmoji,
   docTypeLabel,
   htmlToPlain,
   type WriterContext,
@@ -50,13 +56,20 @@ import {
 
 export default function WriterDocPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const toast = useToast();
+  const confirm = useConfirm();
   const { userId } = useUserId();
-  const { doc, versions, loading, save, flush, addVersion } = useWriterDoc(id, userId);
+  const { doc, versions, loading, save, flush, addVersion, remove } = useWriterDoc(
+    id,
+    userId,
+  );
   const { settings } = useWriterSettings(userId);
   const { styles } = useWriterStyles(userId);
 
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [tagDraft, setTagDraft] = useState("");
   const [guidance, setGuidance] = useState("");
   const [variantResults, setVariantResults] = useState<
     { subject: string; html: string }[]
@@ -72,39 +85,52 @@ export default function WriterDocPage() {
   docRef.current = doc;
   const lastExtracted = useRef("");
   const extractInit = useRef(false);
+  const fileRef = useRef<HTMLInputElement>(null);
 
-  // Don't re-extract a brief that was already there when the page opened.
+  // What you typed in the one box, plus the optional extra note. Everything —
+  // extraction, generation, the diff — reads from these two.
+  const inputPlain = doc ? htmlToPlain(doc.original) : "";
+  const notesPlain = doc ? htmlToPlain(doc.context.brief) : "";
+  const intakePlain = [inputPlain, notesPlain].filter(Boolean).join("\n\n");
+
+  // Don't re-extract intake that was already there when the page opened.
   useEffect(() => {
     if (doc && !extractInit.current) {
       extractInit.current = true;
-      lastExtracted.current = htmlToPlain(doc.context.brief);
+      lastExtracted.current = [
+        htmlToPlain(doc.original),
+        htmlToPlain(doc.context.brief),
+      ]
+        .filter(Boolean)
+        .join("\n\n");
     }
   }, [doc]);
 
   const isEmail = doc?.doc_type === "email";
   const diffOn =
     (showDiff ?? settings?.show_diff ?? true) && !!doc && !!doc.content.trim();
-  // Diff baseline: the user's own draft in edit mode; otherwise the previous
-  // version (so refines show what the refine changed).
+  // Diff baseline: the previous version once there is one (so refines show what
+  // the refine changed), else what you pasted — but only when that was
+  // substantial enough to have been a draft. Diffing a polished piece against a
+  // one-line description would just highlight the whole thing as new.
   const diffBase = useMemo(() => {
     if (!doc) return "";
-    if (doc.mode === "edit" && doc.original.trim()) return htmlToPlain(doc.original);
     const prev = versions.find((v) => htmlToPlain(v.content) !== htmlToPlain(doc.content));
-    return prev ? htmlToPlain(prev.content) : "";
+    if (prev) return htmlToPlain(prev.content);
+    const pasted = htmlToPlain(doc.original);
+    return pasted.split(/\s+/).filter(Boolean).length >= 25 ? pasted : "";
   }, [doc, versions]);
-
-  const briefPlain = doc ? htmlToPlain(doc.context.brief) : "";
 
   // Auto-extract: once you've typed a real brief and paused, ask the AI to
   // file recipient / ask / key points / tone / … into their fields — only
   // ever filling fields you've left empty.
   useEffect(() => {
     if (!doc || busy) return;
-    if (briefPlain.length < 60 || briefPlain === lastExtracted.current) return;
+    if (intakePlain.length < 60 || intakePlain === lastExtracted.current) return;
     const timer = setTimeout(async () => {
       const d = docRef.current;
       if (!d) return;
-      lastExtracted.current = briefPlain;
+      lastExtracted.current = intakePlain;
       setExtractNote("working");
       try {
         const res = await fetch("/api/writer/ai", {
@@ -114,7 +140,7 @@ export default function WriterDocPage() {
           body: JSON.stringify({
             action: "extract",
             docType: d.doc_type,
-            brief: briefPlain,
+            brief: intakePlain,
           }),
         });
         const json = await res.json();
@@ -171,7 +197,7 @@ export default function WriterDocPage() {
     }, 2200);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [briefPlain, busy]);
+  }, [intakePlain, busy]);
 
   if (loading) return <p className="py-16 text-center text-sm text-muted">Loading…</p>;
   if (!doc)
@@ -202,10 +228,62 @@ export default function WriterDocPage() {
   }
 
   const hasIntake =
-    !!briefPlain.trim() ||
+    !!inputPlain.trim() ||
+    !!notesPlain.trim() ||
     !!ctx.ask.trim() ||
     !!ctx.keyPoints.trim() ||
     !!htmlToPlain(ctx.background).trim();
+
+  // Upload a document, PDF, or screenshot straight into the box — saving an
+  // email as a PDF or screenshotting it is the usual route in.
+  async function ingestFile(file: File) {
+    if (!doc) return;
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch("/api/writer/ingest", {
+        method: "POST",
+        credentials: "same-origin",
+        body: form,
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Could not read that file");
+      const current = docRef.current;
+      if (!current) return;
+      save({
+        original: current.original.trim()
+          ? `${current.original}<p></p>${json.html}`
+          : json.html,
+      });
+      toast("success", `Added ${file.name}`);
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function addTag() {
+    const t = cleanTag(tagDraft);
+    setTagDraft("");
+    if (!t || !doc || doc.tags.includes(t)) return;
+    save({ tags: [...doc.tags, t] });
+  }
+
+  async function discard() {
+    if (
+      !(await confirm({
+        title: "Discard this piece?",
+        message: "It won't be saved — the draft and every version go away.",
+        confirmLabel: "Discard",
+        danger: true,
+      }))
+    )
+      return;
+    await remove();
+    router.replace("/writing-studio");
+  }
 
   async function generate(refineGuidance?: string) {
     if (!doc) return;
@@ -226,13 +304,12 @@ export default function WriterDocPage() {
         body: JSON.stringify({
           action: "generate",
           docType: doc.doc_type,
-          mode: doc.mode,
-          original: doc.original ? htmlToPlain(doc.original) : "",
+          original: inputPlain,
           previous: refining ? doc.content : "",
           guidance: refineGuidance || "",
           context: {
             ...ctx,
-            brief: briefPlain,
+            brief: notesPlain,
             background: htmlToPlain(ctx.background),
           },
           styles: styleTexts,
@@ -329,16 +406,24 @@ export default function WriterDocPage() {
       <div className="mb-4 flex items-center gap-3">
         <BackButton label="Writing Studio" />
         <span className="rounded-full bg-gradient-to-r from-[var(--grad-from)] to-[var(--grad-to)] px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white shadow-sm">
-          {docTypeLabel(doc.doc_type)}
+          {docTypeEmoji(doc.doc_type)} {docTypeLabel(doc.doc_type)}
         </span>
-        <span className="text-xs text-muted">
-          {doc.mode === "edit"
-            ? "Polishing your draft"
-            : "Describe it — I'll figure out the rest"}
+        <span className="hidden text-xs text-muted sm:inline">
+          Saves as you type
         </span>
+        <span className="flex-1" />
+        <button
+          onClick={discard}
+          className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted transition hover:border-red-300 hover:text-red-600"
+        >
+          <Trash2 size={13} /> Discard
+        </button>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-[minmax(360px,460px)_1fr]">
+      {/* Even-ish split: the intake box is where the work happens before there
+          is any output, so it gets close to half the width rather than a
+          narrow rail against a mostly-empty result pane. */}
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
         {/* ---------------- Intake ---------------- */}
         <div className="space-y-3">
           {/* The brief — the one box that does the work */}
@@ -346,60 +431,120 @@ export default function WriterDocPage() {
             <div className="h-1 bg-gradient-to-r from-[var(--grad-from)] via-[var(--grad-via)] to-[var(--grad-to)]" />
             <div className="space-y-3 p-3.5">
               <Input
-                label="Title"
+                label="Title (optional)"
                 value={doc.title}
                 onChange={(e) => save({ title: e.target.value })}
-                placeholder="Names itself once you type or generate"
+                placeholder="Leave it — it names itself when you generate"
               />
 
-              {doc.mode === "edit" && (
-                <div>
-                  <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
-                    Your draft
-                  </p>
-                  <RichText
-                    value={doc.original}
-                    onChange={(html) => save({ original: html })}
-                    placeholder="Paste the version you have…"
-                    minHeight="min-h-32"
+              {/* Tags: how you find this again once the library fills up. */}
+              <div>
+                <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                  Tags{" "}
+                  <span className="font-normal normal-case">
+                    (optional — for finding it later)
+                  </span>
+                </p>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {doc.tags.map((t) => (
+                    <span
+                      key={t}
+                      className="flex items-center gap-1 rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[11px] font-medium text-[var(--accent)]"
+                    >
+                      🏷️ {t}
+                      <button
+                        type="button"
+                        onClick={() => save({ tags: doc.tags.filter((x) => x !== t) })}
+                        className="opacity-60 transition hover:opacity-100"
+                      >
+                        <X size={11} />
+                      </button>
+                    </span>
+                  ))}
+                  <input
+                    value={tagDraft}
+                    onChange={(e) => setTagDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === ",") {
+                        e.preventDefault();
+                        addTag();
+                      }
+                    }}
+                    onBlur={addTag}
+                    placeholder={doc.tags.length ? "Add another…" : "e.g. Q3 launch"}
+                    className="min-w-28 flex-1 rounded-lg border border-border bg-surface px-2 py-1 text-xs outline-none transition focus:border-[var(--accent)]"
                   />
                 </div>
-              )}
+              </div>
 
+              {/* The one box that does the work. */}
               <div>
-                <div className="mb-1.5 flex items-center justify-between">
+                <div className="mb-1 flex items-center justify-between">
                   <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">
-                    <Sparkles size={12} />
-                    {doc.mode === "edit"
-                      ? "Anything else I should know?"
-                      : "Just tell me what you need"}
+                    <Sparkles size={12} /> Draft
                   </span>
                   {extractNote !== "idle" && (
                     <span className="text-[11px] text-muted">
-                      {extractNote === "working" ? "Reading your brief…" : extractNote}
+                      {extractNote === "working" ? "Reading it…" : extractNote}
                     </span>
                   )}
                 </div>
+                <p className="mb-1.5 text-[11px] leading-snug text-muted">
+                  Put whatever you have in here and nothing else is needed. A rough
+                  draft to clean up, an email you need to answer, or a sentence
+                  saying what you want — I&apos;ll work out which it is.
+                </p>
+                <RichText
+                  value={doc.original}
+                  onChange={(html) => save({ original: html })}
+                  placeholder={
+                    'e.g. paste an email and add "reply pushing the meeting to next week" — or write your own rough version and I\'ll tidy it up.'
+                  }
+                  minHeight="min-h-40"
+                />
+                <div className="mt-1.5 flex items-center gap-2">
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    className="hidden"
+                    accept=".pdf,.docx,.doc,.txt,.md,.csv,.png,.jpg,.jpeg,.gif,.webp"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      e.target.value = "";
+                      if (f) void ingestFile(f);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    disabled={uploading}
+                    onClick={() => fileRef.current?.click()}
+                    className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-medium text-muted transition hover:border-[var(--accent)]/50 hover:text-ink disabled:opacity-60"
+                  >
+                    <Paperclip size={12} />
+                    {uploading ? "Reading…" : "Upload a file"}
+                  </button>
+                  <span className="text-[10px] leading-snug text-muted">
+                    PDF, Word, text, or a screenshot — I&apos;ll read it into the box.
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                  Anything else I should know?{" "}
+                  <span className="font-normal normal-case">(optional)</span>
+                </p>
                 <RichText
                   value={ctx.brief}
                   onChange={(html) => setCtx({ brief: html })}
-                  placeholder={
-                    doc.mode === "edit"
-                      ? "Optional context — who it's for, what's at stake…"
-                      : 'Paste an email and say "write a reply that pushes the meeting to next week" — or just describe what you want. I\'ll pull out the names, context, and details automatically.'
-                  }
-                  minHeight="min-h-36"
+                  placeholder="Who it's for, what's at stake, anything to avoid…"
+                  minHeight="min-h-20"
                 />
               </div>
 
               <Button
                 className="w-full !bg-gradient-to-r !from-[var(--grad-from)] !via-[var(--grad-via)] !to-[var(--grad-to)] !text-white shadow-md transition hover:opacity-90"
-                disabled={
-                  busy ||
-                  (doc.mode === "edit"
-                    ? !htmlToPlain(doc.original).trim()
-                    : !hasIntake)
-                }
+                disabled={busy || !hasIntake}
                 onClick={() => generate()}
               >
                 <Sparkles size={16} />
@@ -422,22 +567,22 @@ export default function WriterDocPage() {
             badge={toneStyleCount ? `${toneStyleCount} picked` : undefined}
           >
             <ChipGroup
-              label={doc.mode === "edit" ? "What should I do to it?" : "What matters here?"}
-              options={ACTION_CHIPS}
+              label="What matters here?"
+              options={chipOptions(ACTION_CHIPS)}
               selected={ctx.actions}
               onToggle={toggle("actions")}
               hue="teal"
             />
             <ChipGroup
               label="Tone"
-              options={TONE_CHIPS}
+              options={chipOptions(TONE_CHIPS)}
               selected={ctx.tone}
               onToggle={toggle("tone")}
               hue="sky"
             />
             <ChipGroup
               label="Audience"
-              options={AUDIENCE_CHIPS}
+              options={chipOptions(AUDIENCE_CHIPS)}
               selected={ctx.audience}
               onToggle={toggle("audience")}
               hue="violet"
@@ -547,7 +692,9 @@ export default function WriterDocPage() {
                 <div className="mb-1.5 flex items-center justify-between">
                   <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
                     <FileText size={13} className="text-[var(--accent)]" />
-                    {doc.content.trim() ? "Result — edit freely, it autosaves" : "Result"}
+                    {doc.content.trim()
+                      ? "Suggestion — edit freely, it autosaves"
+                      : "Suggestion"}
                   </span>
                   <div className="flex items-center gap-1">
                     <button
@@ -579,9 +726,9 @@ export default function WriterDocPage() {
                     <div className="max-w-sm space-y-1.5">
                       <Sparkles size={20} className="mx-auto text-[var(--accent)]" />
                       <p className="text-sm text-muted">
-                        Tell me what you need in the box on the left — paste an
-                        email, describe the situation, whatever's fastest — then hit{" "}
-                        <span className="font-medium text-ink">Generate</span>.
+                        Put anything in the box on the left — a rough draft, an
+                        email to answer, a screenshot, or just what you want — then
+                        hit <span className="font-medium text-ink">Generate</span>.
                         Everything is editable afterwards.
                       </p>
                     </div>
@@ -619,7 +766,7 @@ export default function WriterDocPage() {
             <section className="rounded-xl border border-border bg-surface p-4 shadow-sm">
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
                 What changed{" "}
-                {doc.mode === "edit" ? "vs. your draft" : "vs. the previous version"}
+                {diffBase === inputPlain ? "vs. what you wrote" : "vs. the previous version"}
               </p>
               <div
                 className="text-sm leading-relaxed [&_mark.wr-ins]:rounded [&_mark.wr-ins]:bg-[var(--accent-soft)] [&_mark.wr-ins]:px-0.5 [&_mark.wr-ins]:text-[var(--accent)]"

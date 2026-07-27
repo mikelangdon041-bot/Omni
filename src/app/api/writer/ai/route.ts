@@ -112,7 +112,7 @@ Be specific and quote short examples from the samples. Under 250 words. Return o
         model: WRITER_MODEL,
         max_tokens: 2000,
         output_config: { format: { type: "json_schema", schema: EXTRACT_SCHEMA } },
-        system: `The user is drafting a ${docType} in a writing tool. They typed a free-text brief — possibly including a pasted email or message they're responding to. Extract structured intake details from it so the tool can file them into the right fields.
+        system: `The user is drafting a ${docType} in a writing tool. They typed into one box — it may be a rough draft of their own, a pasted email or message they're responding to plus an instruction, or just a description of what they want. Extract structured intake details from it so the tool can file them into the right fields.
 
 Rules:
 - Only extract what is clearly present or safely inferable. Use "" (or [] for arrays) when unsure — never guess or invent.
@@ -132,8 +132,10 @@ Return only the JSON.`,
 
     if (action === "generate") {
       const docType = String(body?.docType || "email");
-      const mode = String(body?.mode || "create");
-      const original = String(body?.original || "").slice(0, 30000);
+      // `input` is the one box the user fills in: a draft to polish, source
+      // material plus an instruction, or just a description. The model works
+      // out which — there is no polish/from-scratch mode any more.
+      const input = String(body?.original || "").slice(0, 30000);
       const previous = String(body?.previous || "").slice(0, 30000);
       const guidance = String(body?.guidance || "").slice(0, 4000);
       const ctx = body?.context || {};
@@ -161,10 +163,10 @@ Return only the JSON.`,
 
       const list = (v: unknown) => (Array.isArray(v) && v.length ? v.join("; ") : "");
 
-      const brief = String(ctx.brief || "").slice(0, 30000);
+      const notes = String(ctx.brief || "").slice(0, 30000);
 
       const intake = [
-        brief && `The user's brief (their own words — this is the primary instruction; it may include source material like an email to respond to):\n${brief}`,
+        notes && `Anything else the user wanted you to know:\n${notes}`,
         list(ctx.actions) && `Requested edits: ${list(ctx.actions)}`,
         list(ctx.tone) && `Tone: ${list(ctx.tone)}`,
         list(ctx.audience) && `Audience: ${list(ctx.audience)}`,
@@ -179,9 +181,7 @@ Return only the JSON.`,
 
       const task = previous
         ? `Here is the current draft you produced earlier. Revise it according to the new guidance while keeping everything that wasn't asked to change.\n\nCurrent draft:\n${previous}\n\nNew guidance: ${guidance || "(none — light general polish)"}`
-        : mode === "edit"
-          ? `Here is the user's own draft. Improve it per the intake. Preserve their meaning, facts, and anything specific; do not invent content.\n\nUser's draft:\n${original}`
-          : `Write it from scratch based on the intake. If key points are given, include every one. Never invent specific facts, numbers, or commitments the user didn't provide.`;
+        : `Here is everything the user put in the box. Work out what it is and deliver what they want.\n\nWhat the user wrote:\n${input || notes}`;
 
       const res = await anthropic().messages.create({
         model: WRITER_MODEL,
@@ -195,7 +195,8 @@ Hard rules:
 - Return JSON: {"variants":[{"subject":"...","html":"..."}]} with exactly ${variants} variant(s).${variants > 1 ? " Make the variants genuinely different in angle/structure, not reworded copies." : ""}
 - "html" is the piece itself as simple HTML: <p> for paragraphs, <br> only inside a paragraph, <ul>/<ol>/<li> for lists, <b>/<i> sparingly. No inline styles, no headings unless the piece truly needs them, no markdown.
 - "subject" is only meaningful for emails; otherwise return "".
-- Work out the situation yourself from the brief. If the brief contains a pasted email or message, understand it and do what the user asked with it (reply, decline, forward, summarize…). Pull the recipient's name, the topic, dates, and any commitments straight from that source material.
+- The user has ONE input box, so work out for yourself what they gave you. It is one of: (a) a rough draft of their own — improve it, preserving their meaning, facts and specifics, and never inventing content; (b) source material such as an email or message plus an instruction about what to do with it — understand it and do exactly what they asked (reply, decline, forward, summarize…), pulling the recipient's name, topic, dates and commitments straight from it; or (c) a plain description of what they want — write it from scratch. Never ask which it is, never explain your reading of it, and never invent specific facts, numbers, or commitments the user didn't provide.
+- If key points are listed, include every one.
 - Names: address the recipient by name whenever it can be inferred from anything provided (the pasted email's sender, the recipient field, the background). NEVER output a placeholder like [Name] or [Recipient]. If no name is inferable, open naturally without one (e.g. "Hi," / "Hi there,") or skip the greeting if the format doesn't need it.
 - Only use [square brackets] for a genuinely missing hard fact (a date, a number) the user must fill in — never for names or things you can infer.
 - No preamble, no explanations.

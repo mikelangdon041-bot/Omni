@@ -98,6 +98,29 @@ body {
   list-style: decimal;
   padding-left: 1.25rem;
 }
+/* Paragraph spacing: Tailwind's preflight zeroes margins, which collapsed
+   generated <p> blocks into one unbroken wall of text — no blank line between
+   paragraphs. Put the carriage return back, in the editor and the view. */
+.omni-rt p,
+.omni-rt-view p {
+  margin: 0 0 0.75rem;
+}
+.omni-rt p:last-child,
+.omni-rt-view p:last-child {
+  margin-bottom: 0;
+}
+.omni-rt ul,
+.omni-rt ol,
+.omni-rt-view ul,
+.omni-rt-view ol {
+  margin: 0 0 0.75rem;
+}
+.omni-rt ul:last-child,
+.omni-rt ol:last-child,
+.omni-rt-view ul:last-child,
+.omni-rt-view ol:last-child {
+  margin-bottom: 0;
+}
 
 /* Document preview (converted DOCX/TXT resumes): restore the paragraph,
    heading and list spacing that Tailwind's preflight strips, so line breaks

@@ -5,7 +5,16 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { PenLine, Plus, Search, Settings2, Trash2 } from "lucide-react";
+import {
+  CheckSquare,
+  PenLine,
+  Plus,
+  Search,
+  Settings2,
+  Square,
+  Trash2,
+  X,
+} from "lucide-react";
 import { ModuleHero } from "@/components/ui/ModuleHero";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/Button";
@@ -21,10 +30,12 @@ import {
 } from "@/lib/writer/hooks";
 import {
   DOC_TYPES,
+  dateGroup,
+  docTypeEmoji,
   docTypeLabel,
   htmlToPlain,
-  type DocMode,
   type DocType,
+  type WriterDoc,
 } from "@/lib/writer/types";
 
 // Per-type color identity so the library reads at a glance.
@@ -41,7 +52,7 @@ export default function WritingStudioPage() {
   const router = useRouter();
   const confirm = useConfirm();
   const { userId } = useUserId();
-  const { docs, loading, add, remove } = useWriterDocs(userId);
+  const { docs, loading, add, remove, removeMany } = useWriterDocs(userId);
   const { settings, save: saveSettings } = useWriterSettings(userId);
   const { styles, add: addStyle, update: updateStyle, remove: removeStyle } =
     useWriterStyles(userId);
@@ -50,22 +61,72 @@ export default function WritingStudioPage() {
   const [showSettings, setShowSettings] = useState(false);
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
+  const [tagFilter, setTagFilter] = useState<string>("all");
+  const [selected, setSelected] = useState<string[]>([]);
+  const [selecting, setSelecting] = useState(false);
+
+  const allTags = useMemo(
+    () => [...new Set(docs.flatMap((d) => d.tags))].sort((a, b) => a.localeCompare(b)),
+    [docs],
+  );
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return docs.filter((d) => {
       if (typeFilter !== "all" && d.doc_type !== typeFilter) return false;
+      if (tagFilter !== "all" && !d.tags.includes(tagFilter)) return false;
       if (!q) return true;
       return (
         d.title.toLowerCase().includes(q) ||
         d.subject.toLowerCase().includes(q) ||
+        d.tags.some((t) => t.toLowerCase().includes(q)) ||
         htmlToPlain(d.content).toLowerCase().includes(q)
       );
     });
-  }, [docs, query, typeFilter]);
+  }, [docs, query, typeFilter, tagFilter]);
 
-  async function createDoc(docType: DocType, mode: DocMode) {
-    const doc = await add({ doc_type: docType, mode });
+  // Docs arrive newest-first, so walking them in order yields date buckets in
+  // order too — no sorting needed, just a header whenever the bucket changes.
+  const groups = useMemo(() => {
+    const out: { label: string; docs: WriterDoc[] }[] = [];
+    for (const d of filtered) {
+      const label = dateGroup(d.updated_at);
+      const last = out[out.length - 1];
+      if (last?.label === label) last.docs.push(d);
+      else out.push({ label, docs: [d] });
+    }
+    return out;
+  }, [filtered]);
+
+  function toggleSelected(id: string) {
+    setSelected((prev) =>
+      prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id],
+    );
+  }
+
+  function exitSelect() {
+    setSelecting(false);
+    setSelected([]);
+  }
+
+  async function deleteSelected() {
+    if (
+      await confirm({
+        title: `Delete ${selected.length} ${selected.length === 1 ? "piece" : "pieces"}?`,
+        message: "All their versions are removed too. This can't be undone.",
+        confirmLabel: "Delete",
+        danger: true,
+      })
+    ) {
+      await removeMany(selected);
+      exitSelect();
+    }
+  }
+
+  // One entry path: pick what it is, then say what you want in the workspace.
+  // (`mode` is legacy — the AI works out polish-vs-write from what you type.)
+  async function createDoc(docType: DocType) {
+    const doc = await add({ doc_type: docType, mode: "create" });
     if (doc) router.push(`/writing-studio/${doc.id}`);
   }
 
@@ -99,8 +160,8 @@ export default function WritingStudioPage() {
         }
       />
 
-      {/* Search + filter */}
-      <div className="mb-4 flex flex-col gap-2 sm:flex-row">
+      {/* Search + filters */}
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row">
         <div className="relative flex-1">
           <Search
             size={15}
@@ -109,23 +170,81 @@ export default function WritingStudioPage() {
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search your writing…"
+            placeholder="Search title, tags, or text…"
             className="pl-9"
           />
         </div>
         <Select
           value={typeFilter}
           onChange={(e) => setTypeFilter(e.target.value)}
-          className="sm:w-48"
+          className="sm:w-44"
         >
           <option value="all">All types</option>
           {DOC_TYPES.map((t) => (
             <option key={t.key} value={t.key}>
-              {t.label}
+              {t.emoji} {t.label}
             </option>
           ))}
         </Select>
+        {allTags.length > 0 && (
+          <Select
+            value={tagFilter}
+            onChange={(e) => setTagFilter(e.target.value)}
+            className="sm:w-44"
+          >
+            <option value="all">All tags</option>
+            {allTags.map((t) => (
+              <option key={t} value={t}>
+                🏷️ {t}
+              </option>
+            ))}
+          </Select>
+        )}
       </div>
+
+      {/* Select mode: pick several, delete them in one go. */}
+      {docs.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          {selecting ? (
+            <>
+              <span className="text-xs font-medium text-muted">
+                {selected.length} selected
+              </span>
+              <button
+                onClick={() =>
+                  setSelected(
+                    selected.length === filtered.length ? [] : filtered.map((d) => d.id),
+                  )
+                }
+                className="rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted transition hover:text-ink"
+              >
+                {selected.length === filtered.length ? "Clear all" : "Select all"}
+              </button>
+              <Button
+                size="sm"
+                variant="danger"
+                disabled={!selected.length}
+                onClick={deleteSelected}
+              >
+                <Trash2 size={14} /> Delete
+              </Button>
+              <button
+                onClick={exitSelect}
+                className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-muted transition hover:text-ink"
+              >
+                <X size={13} /> Cancel
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => setSelecting(true)}
+              className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted transition hover:border-[var(--accent)]/50 hover:text-ink"
+            >
+              <CheckSquare size={13} /> Select
+            </button>
+          )}
+        </div>
+      )}
 
       {loading ? (
         <p className="py-16 text-center text-sm text-muted">Loading…</p>
@@ -135,7 +254,7 @@ export default function WritingStudioPage() {
           hint={
             docs.length === 0
               ? "Start with an email you need to send — paste your rough version or describe what you need."
-              : "Try a different search or filter."
+              : "Try a different search, type, or tag."
           }
           action={
             docs.length === 0 ? (
@@ -146,53 +265,106 @@ export default function WritingStudioPage() {
           }
         />
       ) : (
-        <ul className="grid gap-3 sm:grid-cols-2">
-          {filtered.map((d) => (
-            <li
-              key={d.id}
-              className={`group cursor-pointer rounded-xl border border-border bg-surface p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${TYPE_COLORS[d.doc_type]?.edge || ""}`}
-              onClick={() => router.push(`/writing-studio/${d.id}`)}
-            >
-              <div className="mb-1 flex items-center gap-2">
-                <span
-                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${TYPE_COLORS[d.doc_type]?.badge || "bg-[var(--accent-soft)] text-[var(--accent)]"}`}
-                >
-                  {docTypeLabel(d.doc_type)}
-                </span>
-                <span className="text-xs text-muted">
-                  {new Date(d.updated_at).toLocaleDateString(undefined, {
-                    month: "short",
-                    day: "numeric",
-                  })}
-                </span>
-                <span className="flex-1" />
-                <button
-                  className="rounded p-1 text-muted opacity-0 transition hover:text-red-600 group-hover:opacity-100"
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    if (
-                      await confirm({
-                        title: "Delete this piece?",
-                        message: "All versions are removed too.",
-                        confirmLabel: "Delete",
-                        danger: true,
-                      })
-                    )
-                      await remove(d.id);
-                  }}
-                >
-                  <Trash2 size={13} />
-                </button>
+        <div className="space-y-6">
+          {groups.map((group) => (
+            <section key={group.label}>
+              <div className="mb-2 flex items-center gap-2">
+                <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">
+                  {group.label}
+                </h2>
+                <span className="text-[11px] text-muted">{group.docs.length}</span>
+                <span className="h-px flex-1 bg-border" />
               </div>
-              <p className="truncate text-sm font-medium">
-                {d.title || d.subject || "Untitled"}
-              </p>
-              <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted">
-                {htmlToPlain(d.content) || htmlToPlain(d.original) || "Empty"}
-              </p>
-            </li>
+              <ul className="grid gap-3 sm:grid-cols-2">
+                {group.docs.map((d) => {
+                  const picked = selected.includes(d.id);
+                  return (
+                    <li
+                      key={d.id}
+                      className={`group cursor-pointer rounded-xl border bg-surface p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
+                        picked
+                          ? "border-[var(--accent)] ring-2 ring-[var(--accent)]/20"
+                          : `border-border ${TYPE_COLORS[d.doc_type]?.edge || ""}`
+                      }`}
+                      onClick={() =>
+                        selecting
+                          ? toggleSelected(d.id)
+                          : router.push(`/writing-studio/${d.id}`)
+                      }
+                    >
+                      <div className="mb-1 flex items-center gap-2">
+                        {selecting &&
+                          (picked ? (
+                            <CheckSquare size={15} className="text-[var(--accent)]" />
+                          ) : (
+                            <Square size={15} className="text-muted" />
+                          ))}
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${TYPE_COLORS[d.doc_type]?.badge || "bg-[var(--accent-soft)] text-[var(--accent)]"}`}
+                        >
+                          {docTypeEmoji(d.doc_type)} {docTypeLabel(d.doc_type)}
+                        </span>
+                        <span className="text-xs text-muted">
+                          {new Date(d.updated_at).toLocaleDateString(undefined, {
+                            month: "short",
+                            day: "numeric",
+                          })}
+                        </span>
+                        <span className="flex-1" />
+                        {!selecting && (
+                          <button
+                            className="rounded p-1 text-muted opacity-0 transition hover:text-red-600 group-hover:opacity-100"
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              if (
+                                await confirm({
+                                  title: "Delete this piece?",
+                                  message: "All versions are removed too.",
+                                  confirmLabel: "Delete",
+                                  danger: true,
+                                })
+                              )
+                                await remove(d.id);
+                            }}
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        )}
+                      </div>
+                      <p className="truncate text-sm font-medium">
+                        {d.title || d.subject || "Untitled"}
+                      </p>
+                      <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted">
+                        {htmlToPlain(d.content) || htmlToPlain(d.original) || "Empty"}
+                      </p>
+                      {d.tags.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {d.tags.slice(0, 4).map((t) => (
+                            <button
+                              key={t}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setTagFilter(t);
+                              }}
+                              className="rounded-full bg-canvas px-2 py-0.5 text-[10px] font-medium text-muted transition hover:text-[var(--accent)]"
+                            >
+                              🏷️ {t}
+                            </button>
+                          ))}
+                          {d.tags.length > 4 && (
+                            <span className="px-1 text-[10px] text-muted">
+                              +{d.tags.length - 4}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
           ))}
-        </ul>
+        </div>
       )}
 
       {/* New piece: type + mode */}
@@ -219,10 +391,10 @@ function NewPieceModal({
 }: {
   open: boolean;
   onClose: () => void;
-  onCreate: (t: DocType, m: DocMode) => Promise<void>;
+  onCreate: (t: DocType) => Promise<void>;
 }) {
   const [docType, setDocType] = useState<DocType>("email");
-  const [creating, setCreating] = useState<DocMode | null>(null);
+  const [creating, setCreating] = useState(false);
 
   return (
     <Modal open={open} onClose={onClose} title="What are we writing?">
@@ -240,33 +412,27 @@ function NewPieceModal({
             <span
               className={`mb-1.5 inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${TYPE_COLORS[t.key]?.badge || ""}`}
             >
-              {t.label}
+              {t.emoji} {t.label}
             </span>
             <p className="text-[11px] leading-snug text-muted">{t.blurb}</p>
           </button>
         ))}
       </div>
-      <div className="grid gap-2 sm:grid-cols-2">
-        <Button
-          variant="secondary"
-          disabled={!!creating}
-          onClick={async () => {
-            setCreating("edit");
-            await onCreate(docType, "edit");
-          }}
-        >
-          {creating === "edit" ? "Opening…" : "I have a draft — polish it"}
-        </Button>
-        <Button
-          disabled={!!creating}
-          onClick={async () => {
-            setCreating("create");
-            await onCreate(docType, "create");
-          }}
-        >
-          {creating === "create" ? "Opening…" : "Write it from scratch"}
-        </Button>
-      </div>
+      <p className="mb-3 text-xs leading-relaxed text-muted">
+        Next you&apos;ll get one box. Paste a draft, paste an email you need to
+        answer, or just say what you want — whichever is fastest. I&apos;ll work
+        out the rest.
+      </p>
+      <Button
+        className="w-full"
+        disabled={creating}
+        onClick={async () => {
+          setCreating(true);
+          await onCreate(docType);
+        }}
+      >
+        {creating ? "Opening…" : "Start writing"}
+      </Button>
     </Modal>
   );
 }

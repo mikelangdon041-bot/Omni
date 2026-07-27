@@ -14,7 +14,11 @@ import {
 const supabase = createClient();
 
 function normalizeDoc(row: WriterDoc): WriterDoc {
-  return { ...row, context: { ...EMPTY_CONTEXT, ...(row.context || {}) } };
+  return {
+    ...row,
+    tags: row.tags || [],
+    context: { ...EMPTY_CONTEXT, ...(row.context || {}) },
+  };
 }
 
 // The list query below already selects every column, so each row IS the same
@@ -50,7 +54,9 @@ export function useWriterDocs(userId: string | null) {
     if (userId) {
       const cached = getCached<WriterDoc[]>(`docs:${userId}`);
       if (cached) {
-        setDocs(cached);
+        // Normalize on read too — a cache written before a field existed
+        // (tags, new context keys) would otherwise paint an undefined.
+        setDocs(cached.map(normalizeDoc));
         setLoading(false);
       }
     }
@@ -90,7 +96,22 @@ export function useWriterDocs(userId: string | null) {
     [userId],
   );
 
-  return { docs, loading, add, remove, refresh };
+  // Bulk delete from the library's multi-select.
+  const removeMany = useCallback(
+    async (ids: string[]) => {
+      if (!ids.length) return;
+      setDocs((prev) => {
+        const next = prev.filter((d) => !ids.includes(d.id));
+        if (userId) setCached(`docs:${userId}`, next);
+        return next;
+      });
+      await supabase.from("writer_docs").delete().in("id", ids);
+      if (userId) for (const id of ids) dropCached(`doc:${userId}:${id}`);
+    },
+    [userId],
+  );
+
+  return { docs, loading, add, remove, removeMany, refresh };
 }
 
 export function useWriterDoc(id: string, userId: string | null) {
@@ -106,7 +127,7 @@ export function useWriterDoc(id: string, userId: string | null) {
     const cacheKey = userId ? `doc:${userId}:${id}` : null;
     const cached = cacheKey ? getCached<{ _t: number; row: WriterDoc }>(cacheKey) : null;
     if (cached?.row) {
-      setDoc(cached.row);
+      setDoc(normalizeDoc(cached.row));
       setLoading(false);
     } else {
       setLoading(true);
@@ -168,6 +189,21 @@ export function useWriterDoc(id: string, userId: string | null) {
     };
   }, [flush]);
 
+  // Discard: throw the piece away entirely. Cancels any pending autosave first
+  // so the unmount flush can't resurrect a row we just deleted, and prunes the
+  // list cache so the library doesn't paint a ghost on the way back.
+  const remove = useCallback(async () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = null;
+    pendingRef.current = {};
+    await supabase.from("writer_docs").delete().eq("id", id);
+    if (userId) {
+      dropCached(`doc:${userId}:${id}`);
+      const list = getCached<WriterDoc[]>(`docs:${userId}`);
+      if (list) setCached(`docs:${userId}`, list.filter((d) => d.id !== id));
+    }
+  }, [id, userId]);
+
   const addVersion = useCallback(
     async (v: Omit<WriterVersion, "id" | "created_at">) => {
       const { data } = await supabase
@@ -181,7 +217,7 @@ export function useWriterDoc(id: string, userId: string | null) {
     [],
   );
 
-  return { doc, versions, loading, save, flush, addVersion };
+  return { doc, versions, loading, save, flush, addVersion, remove };
 }
 
 export function useWriterStyles(userId: string | null) {
