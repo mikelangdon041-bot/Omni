@@ -37,6 +37,7 @@ import { Modal } from "@/components/ui/Modal";
 import { RichText } from "@/components/ui/RichText";
 import { useToast } from "@/components/ui/Feedback";
 import { startLiveCapture, type LiveCapture } from "@/lib/meetingprep/liveCapture";
+import { tidyNotesHtml } from "@/lib/meetingprep/notes";
 import { transcribeUpload, type UploadProgress } from "@/lib/meetingprep/uploadCapture";
 
 export interface CaptureAction {
@@ -404,7 +405,7 @@ export function MeetingRecorder({
 
       setResult({
         title: json.title || hint.trim() || "Recorded meeting",
-        notesHtml: json.notes || "",
+        notesHtml: tidyNotesHtml(json.notes || ""),
         actions: (json.actions || []).map((text: string) => ({ text, selected: true })),
         transcript: source,
         smallTalk:

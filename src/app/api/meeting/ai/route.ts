@@ -504,7 +504,7 @@ Attribution, which matters and is easy to get wrong:
 
 - title: a short, specific name for this meeting as a person would write it in a calendar (5-8 words, no quotes). Use real names/topics from the transcript when they're clear, e.g. "Dr. Patel — dosing concerns and advisory board". If the transcript is too thin to tell, use a plain descriptive title.
 - notes: ONE nested bullet list covering the whole meeting, as HTML using ONLY <ul>, <li>, <b> and <i>. No headings, no <p>, no styling attributes, no markdown. Structure:
-  - Top level: one <li> per topic, in the order topics came up. The topic name is the first few words of that bullet ("Territory review expectations — …"), not a separate heading. 3-7 topics; no "Introduction" / "Discussion" / "Conclusion" filler.
+  - Top level: one <li> per topic, in the order topics came up, 3-7 of them; no "Introduction" / "Discussion" / "Conclusion" filler. The topic bullet is itself a complete statement of what that topic came to — it is not a heading and it is not a label. It must NOT end in a dash, colon, ellipsis or any other trailing punctuation waiting for the nested bullets to finish the thought; it has to stand on its own if the nested list under it were deleted.
   - Nested <ul> inside each topic for the substance, 2-3 levels deep. Complete sentences. Preserve names, figures, product names and dates exactly as spoken. Never invent anything that wasn't said.
   - It must read as one document someone can paste straight into OneNote or Word and have it keep its shape.
 

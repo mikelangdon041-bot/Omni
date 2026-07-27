@@ -92,6 +92,10 @@ export interface Debrief {
   // rendered as separate cards you could only copy one at a time — these get
   // pasted wholesale into OneNote, so they have to be a single document.
   notesHtml?: string;
+  // Renames the user has applied ("the manager" -> "Sarah Chen"). Kept so a
+  // re-analysis, which regenerates the notes from the transcript, doesn't
+  // undo their naming — the map is replayed over the fresh output.
+  nameMap?: Record<string, string>;
   // Typed answers to the structured debrief questions, keyed by question key.
   notes?: Record<string, string>;
   // Notes split into editable sections. `summary` is the older single-blob

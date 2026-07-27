@@ -23,7 +23,13 @@ import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { RichText } from "@/components/ui/RichText";
-import { debriefNotesHtml } from "@/lib/meetingprep/notes";
+import { debriefNotesHtml, tidyNotesHtml } from "@/lib/meetingprep/notes";
+import {
+  applyNameMap,
+  countMatchesInHtml,
+  renameInHtml,
+  renameInText,
+} from "@/lib/meetingprep/rename";
 import { useConfirm, useToast } from "@/components/ui/Feedback";
 import { TranscriptCapture } from "@/components/studio/TranscriptCapture";
 import { useKolLite } from "./KolLink";
@@ -84,6 +90,9 @@ export function DebriefTab({
   const [findOpen, setFindOpen] = useState(false);
   const [findWhat, setFindWhat] = useState("");
   const [findWith, setFindWith] = useState("");
+  // Where in the notes the user last selected something, so the rename button
+  // can appear next to it.
+  const [pick, setPick] = useState<{ text: string; top: number; left: number } | null>(null);
   const notesRef = useRef<HTMLDivElement>(null);
 
   const debrief = m.debrief || {};
@@ -168,13 +177,17 @@ export function DebriefTab({
           ...(transcriptOverride !== undefined
             ? { transcript: transcriptOverride }
             : {}),
-          notesHtml: json.notes || "",
+          notesHtml: applyNameMap(
+            tidyNotesHtml(json.notes || ""),
+            debrief.nameMap,
+            true,
+          ),
           // A re-analysis replaces the notes; the two older shapes would
           // otherwise linger underneath the new document.
           sections: [],
           summary: "",
           actions: (json.actions || []).map((text: string) => ({
-            text,
+            text: applyNameMap(text, debrief.nameMap),
             done: false,
             selected: true,
           })),
@@ -236,29 +249,54 @@ export function DebriefTab({
     await analyze(pairs.length ? text : undefined);
   }
 
+  // A selection inside the notes is the natural way to say "this name" —
+  // clicking a word or dragging over a phrase both land here.
+  function onNotesSelect() {
+    const sel = window.getSelection();
+    const el = notesRef.current;
+    if (!sel || sel.isCollapsed || !el || !sel.rangeCount) return setPick(null);
+    const text = sel.toString().trim();
+    if (!text || text.length > 60 || !el.contains(sel.anchorNode)) return setPick(null);
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    const box = el.getBoundingClientRect();
+    setPick({
+      text,
+      top: rect.top - box.top - 38,
+      left: Math.max(0, rect.left - box.left),
+    });
+  }
+
+  function openRenameFor(text: string) {
+    setFindWhat(text);
+    setFindWith("");
+    setPick(null);
+    setFindOpen(true);
+  }
+
   // Replace a name (or any wording) everywhere at once — notes, follow-ups
   // and the stored transcript. A name that came out wrong is usually wrong in
   // every place it appears, so fixing them one at a time is the wrong shape.
   function replaceEverywhere() {
     const what = findWhat.trim();
-    if (!what) return;
-    const rx = new RegExp(escapeRx(what), "g");
     const to = findWith.trim();
+    if (!what || !to) return;
 
     save({
       debrief: {
         ...debrief,
-        notesHtml: notesHtml.replace(rx, to),
-        actions: actions.map((a) => ({ ...a, text: a.text.replace(rx, to) })),
+        notesHtml: renameInHtml(notesHtml, what, to),
+        actions: actions.map((a) => ({ ...a, text: renameInText(a.text, what, to) })),
         ...(debrief.transcript
-          ? { transcript: debrief.transcript.replace(rx, to) }
+          ? { transcript: renameInText(debrief.transcript, what, to) }
           : {}),
+        // Remembered, so re-running the notes doesn't undo it.
+        nameMap: { ...(debrief.nameMap || {}), [what]: to },
       },
     });
     setFindOpen(false);
     setFindWhat("");
     setFindWith("");
-    toast("success", `Replaced "${what}" with "${to}" throughout.`);
+    toast("success", `"${what}" is now "${to}" throughout.`);
   }
 
   // Adds the follow-ups at `indexes` to the global to-do list, skipping any
@@ -408,7 +446,24 @@ export function DebriefTab({
             {/* One document, not a stack of cards: these get pasted whole
                 into OneNote, and separate blocks can't be. Top-level bullets
                 are the topics; everything nests beneath them. */}
-            <div ref={notesRef}>
+            <div
+              ref={notesRef}
+              className="relative"
+              onMouseUp={onNotesSelect}
+              onKeyUp={onNotesSelect}
+            >
+              {pick && (
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => openRenameFor(pick.text)}
+                  style={{ top: pick.top, left: pick.left }}
+                  className="absolute z-20 flex items-center gap-1 rounded-lg border border-border bg-surface px-2 py-1 text-xs font-medium shadow-lg"
+                >
+                  <Replace size={12} /> Rename &ldquo;{pick.text.slice(0, 24)}
+                  {pick.text.length > 24 ? "…" : ""}&rdquo;
+                </button>
+              )}
               <RichText
                 value={notesHtml}
                 onChange={(html) =>
@@ -487,48 +542,62 @@ export function DebriefTab({
       <Modal
         open={findOpen}
         onClose={() => setFindOpen(false)}
-        title="Rename throughout"
+        title={findWhat ? `Rename "${findWhat}"` : "Rename throughout"}
         size="sm"
       >
         <div className="space-y-3">
           <p className="text-sm text-muted">
-            Changes every occurrence at once — in the notes, the follow-ups and
-            the saved transcript. Useful when a name came out wrong, since it
-            is usually wrong everywhere it appears.
+            Changes every mention at once — in the notes, the follow-ups and the
+            saved transcript — and remembers it, so redoing the notes from the
+            transcript keeps the name.
           </p>
+          {!findWhat && (
+            <Input
+              label="Who or what"
+              value={findWhat}
+              onChange={(e) => setFindWhat(e.target.value)}
+              placeholder="the manager"
+              autoFocus
+            />
+          )}
           <Input
-            label="Replace"
-            value={findWhat}
-            onChange={(e) => setFindWhat(e.target.value)}
-            placeholder="Speaker A"
-            autoFocus
-          />
-          <Input
-            label="With"
+            label="Call them"
             value={findWith}
             onChange={(e) => setFindWith(e.target.value)}
-            placeholder="Dr. Chen"
+            placeholder="Sarah Chen"
+            autoFocus={!!findWhat}
           />
+          <button
+            type="button"
+            onClick={() => setFindWith("I")}
+            className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-muted transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+          >
+            This was me
+          </button>
+          {findWith.trim() === "I" && (
+            <p className="text-xs text-muted">
+              Object and possessive forms are handled too — &ldquo;send Zach the
+              data&rdquo; becomes &ldquo;send me the data&rdquo;, &ldquo;Zach&apos;s
+              territory&rdquo; becomes &ldquo;my territory&rdquo;.
+            </p>
+          )}
           {findWhat.trim() && (
             <p className="text-xs text-muted">
-              {
-                (notesHtml.match(
-                  new RegExp(escapeRx(findWhat.trim()), "g"),
-                ) || []).length
-              }{" "}
-              in the notes,{" "}
-              {
-                actions.filter((a) => a.text.includes(findWhat.trim())).length
-              }{" "}
-              follow-up(s).
+              {countMatchesInHtml(notesHtml, findWhat.trim())} in the notes,{" "}
+              {actions.filter((a) => countMatchesInHtml(a.text, findWhat.trim())).length}{" "}
+              follow-up(s). Whole words only — renaming &ldquo;Zach&rdquo; leaves
+              &ldquo;Zachary&rdquo; alone.
             </p>
           )}
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setFindOpen(false)}>
               Cancel
             </Button>
-            <Button disabled={!findWhat.trim()} onClick={replaceEverywhere}>
-              Replace all
+            <Button
+              disabled={!findWhat.trim() || !findWith.trim()}
+              onClick={replaceEverywhere}
+            >
+              Rename everywhere
             </Button>
           </div>
         </div>

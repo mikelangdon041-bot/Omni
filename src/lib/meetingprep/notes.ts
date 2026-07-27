@@ -49,3 +49,16 @@ function escapeHtml(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
 }
+
+// Belt-and-braces for the model's habit of ending a topic bullet with a
+// dangling dash before its nested list ("Territory review —<ul>…"). The prompt
+// forbids it; this strips it if one slips through, so the notes never show a
+// bullet trailing off into nothing.
+export function tidyNotesHtml(html: string): string {
+  return (html || "")
+    // Trailing dash/colon/ellipsis immediately before a nested list.
+    .replace(/[\s]*[-–—:]+\s*(?=<(?:ul|ol)\b)/gi, "")
+    // Or at the very end of a list item.
+    .replace(/[\s]*[-–—:]+\s*(?=<\/li>)/gi, "")
+    .trim();
+}
