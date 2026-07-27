@@ -18,8 +18,13 @@ const DIARIZE = process.env.OPENAI_DIARIZE !== "0";
 // later one. Must be 2-10s per the API.
 const SAMPLE_SECONDS = 6;
 
+// Containers we accept for upload. Video ones are here on purpose: a voice
+// memo moved off a phone routinely lands as .mp4/.mov/.m4v, and a Teams
+// recording is video. ffmpeg strips the video track before anything is
+// transcribed, so what reaches the speech API is always audio only.
 const ALLOWED_EXT = new Set([
   "mp3", "m4a", "wav", "aac", "ogg", "oga", "webm", "mp4", "mpeg", "mpga", "flac",
+  "mov", "m4v", "mkv", "avi", "3gp", "amr", "wma", "opus", "aiff", "aif", "caf",
 ]);
 
 // Transcribe an uploaded meeting recording of any size, for a meeting that

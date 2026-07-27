@@ -4,8 +4,13 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 
+// Containers we accept for upload. Video ones are here on purpose: a voice
+// memo moved off a phone routinely lands as .mp4/.mov/.m4v, and a Teams
+// recording is video. ffmpeg strips the video track before anything is
+// transcribed, so what reaches the speech API is always audio only.
 const ALLOWED_EXT = new Set([
   "mp3", "m4a", "wav", "aac", "ogg", "oga", "webm", "mp4", "mpeg", "mpga", "flac",
+  "mov", "m4v", "mkv", "avi", "3gp", "amr", "wma", "opus", "aiff", "aif", "caf",
 ]);
 
 export async function POST(req: Request) {

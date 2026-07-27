@@ -12,6 +12,9 @@ import ffmpegStatic from "ffmpeg-static";
 // transcription budget and not — and speech recognition is unaffected.
 const CHUNK_SECONDS = 180;
 const MP3_ARGS = ["-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-q:a", "6"];
+// m4a holds an untouched AAC stream, which is what phone recordings and the
+// audio track of an mp4/mov almost always are.
+const AUDIO_COPY_EXT = "m4a";
 
 const ffmpegPath = (ffmpegStatic as unknown as string) || "ffmpeg";
 
@@ -143,10 +146,34 @@ export async function chunkAudio(
       ]);
       return { chunks: [{ index: 0, bytes: await readFile(outPath) }], ext: "mp3" };
     } catch {
+      // fall through to a straight audio-stream copy
+    }
+
+    // 3. Lift the audio stream out without re-encoding it. Recovers when the
+    //    mp3 encoder is the thing that failed, and — the reason it matters
+    //    here — still drops the video track. Voice memos transferred off a
+    //    phone routinely arrive as .mp4/.mov, and shipping that whole
+    //    container to a speech API means paying to upload video nobody wants.
+    try {
+      const copyPath = path.join(dir, `audio.${AUDIO_COPY_EXT}`);
+      await run([
+        "-hide_banner",
+        "-loglevel", "error",
+        "-i", inputPath,
+        "-vn",
+        "-c:a", "copy",
+        copyPath,
+      ]);
+      return {
+        chunks: [{ index: 0, bytes: await readFile(copyPath) }],
+        ext: AUDIO_COPY_EXT,
+      };
+    } catch {
       // fall through to sending the original bytes
     }
 
-    // 3. Untouched.
+    // 4. Untouched. Last resort — ffmpeg couldn't read the file at all, and
+    //    Whisper often still can.
     return { chunks: [{ index: 0, bytes: input }], ext: whisperExt(inputExt) };
   } finally {
     await rm(dir, { recursive: true, force: true });

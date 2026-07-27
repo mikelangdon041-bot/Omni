@@ -13,8 +13,13 @@ const TRANSCRIBE_MODEL = process.env.OPENAI_TRANSCRIBE_MODEL || "whisper-1";
 // because the recorder restarts MediaRecorder every few minutes.
 const MAX_BYTES = 24 * 1024 * 1024;
 
+// Containers we accept for upload. Video ones are here on purpose: a voice
+// memo moved off a phone routinely lands as .mp4/.mov/.m4v, and a Teams
+// recording is video. ffmpeg strips the video track before anything is
+// transcribed, so what reaches the speech API is always audio only.
 const ALLOWED_EXT = new Set([
   "mp3", "m4a", "wav", "aac", "ogg", "oga", "webm", "mp4", "mpeg", "mpga", "flac",
+  "mov", "m4v", "mkv", "avi", "3gp", "amr", "wma", "opus", "aiff", "aif", "caf",
 ]);
 
 async function whisper(bytes: Buffer, name: string, type: string): Promise<string> {

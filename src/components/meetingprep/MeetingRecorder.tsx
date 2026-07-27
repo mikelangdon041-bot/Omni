@@ -755,13 +755,14 @@ export function MeetingRecorder({
           <h2 className="font-semibold tracking-tight">Upload a recording</h2>
           <p className="mt-1 flex-1 text-sm text-muted">
             You already have the audio — a Teams recording, a voice memo,
-            anything. Any length. I&apos;ll transcribe it, write nested-bullet
-            notes, pull out the action items, and create the meeting for you.
+            anything. Any length, and video files are fine: the audio is
+            extracted and the picture discarded. I&apos;ll transcribe it, write
+            the notes, pull out the action items, and create the meeting.
           </p>
           <input
             ref={fileRef}
             type="file"
-            accept="audio/*,video/mp4,video/webm,.m4a,.mp3,.wav,.webm"
+            accept="audio/*,video/*,.m4a,.mp3,.wav,.webm,.mp4,.mov,.m4v,.aac,.amr,.caf,.opus"
             className="hidden"
             onChange={(e) => {
               void handleFile(e.target.files?.[0] || null);
