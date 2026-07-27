@@ -1,25 +1,25 @@
 "use client";
 
-// Client half of "upload a meeting recording": picks the right transport for
-// the file's size and reports real progress, so a 90-minute recording gives
-// the same feedback as a 2-minute one.
+// Client half of "upload a meeting recording": pushes the file to storage and
+// reports one honest percentage for the whole job.
 //
-// Small files ride along in a multipart POST. Bigger ones can't — Vercel caps
-// request bodies at ~4.5 MB — so they go straight to storage via a signed URL
-// and the server streams back chunk-by-chunk transcription progress. Either
-// way the audio is deleted server-side as soon as it has been read.
+// Every file takes the same path regardless of size — Vercel rejects request
+// bodies past ~4.5 MB, and going through storage is also what lets the server
+// split the audio into chunks it can report as it finishes them. The audio is
+// deleted server-side as soon as it has been read.
+//
+// The bar covers both phases on a single 0-100 scale: uploading the bytes is
+// the first quarter, transcribing the chunks is the rest. Two separate bars
+// that each reset to zero read as "it started over".
 
-const DIRECT_LIMIT = 4 * 1024 * 1024;
 const ENDPOINT = "/api/meeting/transcribe-upload";
+const UPLOAD_SHARE = 25;
 
 export interface UploadProgress {
-  /** "uploading" | "transcribing" */
-  stage: "uploading" | "transcribing";
-  /** 0-100 while uploading; undefined once transcribing by segment count. */
-  percent?: number;
-  done?: number;
-  total?: number;
-  label?: string;
+  /** 0-100 across the whole operation. */
+  percent: number;
+  /** Short status line, already written for a human. */
+  label: string;
 }
 
 export async function transcribeUpload(
@@ -27,22 +27,6 @@ export async function transcribeUpload(
   onProgress: (p: UploadProgress) => void,
   signal?: AbortSignal,
 ): Promise<string> {
-  if (file.size <= DIRECT_LIMIT) {
-    onProgress({ stage: "transcribing", done: 0, total: 1 });
-    const form = new FormData();
-    form.append("audio", file);
-    const res = await fetch(ENDPOINT, {
-      method: "POST",
-      credentials: "same-origin",
-      body: form,
-      signal,
-    });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(json.error || `Transcription failed (${res.status})`);
-    onProgress({ stage: "transcribing", done: 1, total: 1 });
-    return String(json.text || "");
-  }
-
   const ext = (file.name.split(".").pop() || "webm").toLowerCase();
   const signRes = await fetch(ENDPOINT, {
     method: "POST",
@@ -56,7 +40,7 @@ export async function transcribeUpload(
   const path = String(signed.path || "");
 
   // Cleans up an upload that made it to storage but never became a
-  // transcript, so no orphaned audio is left sitting there.
+  // transcript, so no orphaned audio is left behind.
   const discard = () =>
     fetch(ENDPOINT, {
       method: "POST",
@@ -66,7 +50,7 @@ export async function transcribeUpload(
     }).catch(() => {});
 
   try {
-    onProgress({ stage: "uploading", percent: 0 });
+    onProgress({ percent: 0, label: "Uploading" });
     await new Promise<void>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("PUT", signed.signedUrl);
@@ -74,8 +58,8 @@ export async function transcribeUpload(
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) {
           onProgress({
-            stage: "uploading",
-            percent: Math.round((e.loaded / e.total) * 100),
+            percent: Math.round((e.loaded / e.total) * UPLOAD_SHARE),
+            label: "Uploading",
           });
         }
       };
@@ -89,7 +73,7 @@ export async function transcribeUpload(
       xhr.send(file);
     });
 
-    onProgress({ stage: "transcribing", label: "Reading the recording…" });
+    onProgress({ percent: UPLOAD_SHARE, label: "Reading the recording" });
     const res = await fetch(ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -128,17 +112,21 @@ export async function transcribeUpload(
           continue;
         }
         if (msg.type === "progress") {
-          onProgress({
-            stage: "transcribing",
-            done: msg.done,
-            total: msg.total,
-            label: msg.label,
-          });
+          if (msg.total) {
+            const share = (msg.done ?? 0) / msg.total;
+            onProgress({
+              percent: Math.round(UPLOAD_SHARE + share * (100 - UPLOAD_SHARE)),
+              label: "Transcribing",
+            });
+          } else if (msg.label) {
+            onProgress({ percent: UPLOAD_SHARE, label: msg.label });
+          }
         }
         if (msg.type === "error") throw new Error(msg.error || "Transcription failed");
         if (msg.type === "done") text = msg.text || "";
       }
     }
+    onProgress({ percent: 100, label: "Transcribing" });
     // The server removed the file once it read it; nothing left to discard.
     return text;
   } catch (e) {

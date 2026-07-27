@@ -261,7 +261,6 @@ export async function POST(req: Request) {
       const wanted = onlyKey ? sections.filter((s) => s.key === onlyKey) : sections;
       const res = await anthropic().messages.create({
         model: WRITER_MODEL,
-        temperature: 0.4,
         max_tokens: 6000,
         output_config: { format: { type: "json_schema", schema: BRIEF_SCHEMA } },
         system: `You are a sharp, experienced chief of staff writing a pre-meeting brief for someone about to walk into the room. Produce sections a real person would hand another person, not an AI-generated report.
@@ -311,7 +310,6 @@ Hard rules:
       const context = meetingContext(meeting, "");
       const res = await anthropic().messages.create({
         model: WRITER_MODEL,
-        temperature: 0.1,
         max_tokens: 1500,
         output_config: { format: { type: "json_schema", schema: AUTOFILL_SCHEMA } },
         system: `You extract structured meeting details from free-form background text, notes, and documents the writer provided.
@@ -352,7 +350,6 @@ Rules:
       const count = Math.min(12, Math.max(4, Number(body?.count) || 8));
       const res = await anthropic().messages.create({
         model: WRITER_MODEL,
-        temperature: 0.8,
         max_tokens: 3000,
         output_config: { format: { type: "json_schema", schema: IDEAS_SCHEMA } },
         system: `You are a creative, experienced strategist brainstorming for an upcoming meeting. The writer wants ideas for what ELSE they could bring up, showcase, or prepare — the things the sharpest people in their position would do. Produce exactly ${count} items.
@@ -386,7 +383,6 @@ ${NO_FORMATTING_RULE}
       const count = Math.min(12, Math.max(3, Number(body?.count) || 8));
       const res = await anthropic().messages.create({
         model: WRITER_MODEL,
-        temperature: 0.6,
         max_tokens: 4000,
         output_config: { format: { type: "json_schema", schema: GRILL_SCHEMA } },
         system: `You play the toughest realistic version of the other side of an upcoming meeting. Produce exactly ${count} items.
@@ -419,7 +415,6 @@ ${NO_FORMATTING_RULE}
       const context = String(body?.context || "").slice(0, 20000);
       const res = await anthropic().messages.create({
         model: WRITER_MODEL,
-        temperature: 0.4,
         max_tokens: 800,
         system: `You are a sharp, supportive speaking coach. The user practiced answering a hard meeting question out loud (you see the transcript) or in writing. Give coaching as short plain text:
 
@@ -445,7 +440,6 @@ Be direct and specific to THEIR answer, never generic. No markdown headings, no 
         return NextResponse.json({ error: "No transcript provided" }, { status: 400 });
       const res = await anthropic().messages.create({
         model: WRITER_MODEL,
-        temperature: 0.3,
         max_tokens: 4000,
         output_config: { format: { type: "json_schema", schema: DEBRIEF_SCHEMA } },
         system: `You distill a meeting transcript/notes into a debrief.
@@ -474,7 +468,6 @@ ${OUTLINE_RULE}`,
       const hint = String(body?.hint || "").slice(0, 2000);
       const res = await anthropic().messages.create({
         model: WRITER_MODEL,
-        temperature: 0.2,
         max_tokens: 8000,
         output_config: { format: { type: "json_schema", schema: CAPTURE_SCHEMA } },
         system: `You turn the raw transcript of a meeting that was just recorded into usable notes. The transcript comes from automatic speech recognition, so expect missing punctuation, no speaker labels, and mis-heard words — infer sensibly from context but never invent content.

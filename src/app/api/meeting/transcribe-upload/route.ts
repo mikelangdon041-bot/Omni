@@ -9,11 +9,9 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 const TRANSCRIBE_MODEL = process.env.OPENAI_TRANSCRIBE_MODEL || "whisper-1";
-// Whisper's own per-request cap.
-const MAX_BYTES = 24 * 1024 * 1024;
-// Vercel rejects request bodies past ~4.5 MB, so anything bigger has to go
-// to storage via a signed URL instead of riding along in a multipart POST.
-const DIRECT_LIMIT = 4 * 1024 * 1024;
+// Whisper calls run a few at a time — transcribing a full-length meeting one
+// chunk after another overran the function's time limit.
+const CONCURRENCY = 4;
 
 const ALLOWED_EXT = new Set([
   "mp3", "m4a", "wav", "aac", "ogg", "oga", "webm", "mp4", "mpeg", "mpga", "flac",
@@ -25,10 +23,13 @@ const ALLOWED_EXT = new Set([
 // nothing to clean up later. The file is deleted in a `finally`, on the
 // success path and every failure path alike.
 //
+// Every upload takes the same route regardless of size — Vercel rejects
+// request bodies past ~4.5 MB anyway, and going through storage is what lets
+// the file be split into chunks and reported as a real percentage.
+//
 //   { action: "sign", ext }          → signed URL to PUT the file straight to storage
 //   { action: "from-storage", path } → NDJSON progress stream, ends { type:"done", text }
 //   { action: "discard", path }      → drop an upload that never got transcribed
-//   multipart `audio`                → small files, transcribed inline
 function pathFor(userId: string, ext: string) {
   return `${userId}/meeting-uploads/${crypto.randomUUID()}.${ext}`;
 }
@@ -105,26 +106,41 @@ export async function POST(req: Request) {
           const send = (obj: unknown) =>
             controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
           try {
-            let parts: { bytes: Buffer; name: string; type: string }[];
-            if (input.length <= MAX_BYTES) {
-              parts = [
-                { bytes: input, name: `upload.${ext}`, type: blob.type || "audio/webm" },
-              ];
-            } else {
-              send({ type: "progress", label: "Splitting the recording into segments…" });
-              const chunks = await chunkAudio(input, ext);
-              parts = chunks.map((c) => ({
-                bytes: c.bytes,
-                name: `chunk-${c.index}.wav`,
-                type: "audio/wav",
-              }));
-            }
-            send({ type: "progress", done: 0, total: parts.length });
-            const texts: string[] = [];
-            for (let i = 0; i < parts.length; i++) {
-              texts.push(await whisper(parts[i].bytes, parts[i].name, parts[i].type));
-              send({ type: "progress", done: i + 1, total: parts.length });
-            }
+            // Always split, not just past Whisper's size cap. Chunking is what
+            // makes progress meaningful: a 60-minute meeting becomes ~20 pieces
+            // that complete one by one, instead of a single opaque request the
+            // UI can only spin on.
+            send({ type: "progress", label: "Reading the recording" });
+            const chunks = await chunkAudio(input, ext);
+            const parts = chunks.map((c) => ({
+              bytes: c.bytes,
+              name: `chunk-${c.index}.wav`,
+              type: "audio/wav",
+            }));
+            if (parts.length === 0) throw new Error("No audio found in that file");
+
+            const total = parts.length;
+            send({ type: "progress", done: 0, total });
+
+            // Transcribe a few at a time. Sequential was simpler, but a
+            // full-length meeting then ran past the function's time limit.
+            // Results are stored by index so the transcript stays in order.
+            const texts: string[] = new Array(total).fill("");
+            let done = 0;
+            let next = 0;
+            const worker = async () => {
+              for (;;) {
+                const i = next++;
+                if (i >= total) return;
+                texts[i] = await whisper(parts[i].bytes, parts[i].name, parts[i].type);
+                done += 1;
+                send({ type: "progress", done, total });
+              }
+            };
+            await Promise.all(
+              Array.from({ length: Math.min(CONCURRENCY, total) }, worker),
+            );
+
             send({ type: "done", text: texts.filter(Boolean).join("\n\n") });
           } catch (err) {
             send({ type: "error", error: (err as Error).message || "Transcription failed" });
@@ -153,30 +169,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   }
 
-  // Small file: straight through, nothing ever touches storage.
-  const form = await req.formData().catch(() => null);
-  const audio = form?.get("audio");
-  if (!(audio instanceof File)) {
-    return NextResponse.json({ error: "No audio file" }, { status: 400 });
-  }
-  if (audio.size > DIRECT_LIMIT) {
-    return NextResponse.json(
-      { error: "That file needs the storage upload path." },
-      { status: 413 },
-    );
-  }
-  try {
-    const bytes = Buffer.from(await audio.arrayBuffer());
-    const text = await whisper(
-      bytes,
-      audio.name || "upload.webm",
-      audio.type || "audio/webm",
-    );
-    return NextResponse.json({ text });
-  } catch (err) {
-    return NextResponse.json(
-      { error: (err as Error).message || "Transcription failed" },
-      { status: 500 },
-    );
-  }
+  return NextResponse.json(
+    { error: "Send JSON: sign, then from-storage." },
+    { status: 400 },
+  );
 }

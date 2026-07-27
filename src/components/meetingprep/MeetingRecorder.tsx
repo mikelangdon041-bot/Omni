@@ -184,7 +184,7 @@ export function MeetingRecorder({
     if (!file) return;
     setError("");
     setFileName(file.name);
-    setUpload({ stage: "uploading", percent: 0 });
+    setUpload({ percent: 0, label: "Uploading" });
     setPhase("uploading");
     try {
       const text = await transcribeUpload(file, setUpload);
@@ -216,7 +216,6 @@ export function MeetingRecorder({
     setFileName("");
     setElapsed(0);
     setPhase("idle");
-    toast("success", "Recording discarded — nothing was saved.");
   }
 
   async function summarize() {
@@ -290,38 +289,27 @@ export function MeetingRecorder({
   // Uploading an existing recording
   // ------------------------------------------------------------------
   if (phase === "uploading") {
-    const pct = upload?.stage === "uploading" ? (upload.percent ?? 0) : null;
+    // One bar, one number, counting once from 0 to 100 across the whole job.
+    const pct = upload?.percent ?? 0;
     return (
       <div className="rounded-xl border border-border bg-surface p-5 shadow-sm">
-        <p className="flex items-center gap-2 text-sm font-medium">
-          <Loader2 size={15} className="animate-spin text-[var(--accent)]" />
-          {upload?.stage === "uploading"
-            ? `Uploading ${fileName}…`
-            : upload?.label
-              ? upload.label
-              : upload?.total
-                ? `Transcribing — segment ${upload.done ?? 0} of ${upload.total}.`
-                : "Transcribing…"}
-        </p>
-        {pct !== null && (
-          <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-canvas">
-            <div
-              className="h-full rounded-full bg-[var(--accent)] transition-all"
-              style={{ width: `${pct}%` }}
-            />
-          </div>
-        )}
-        {upload?.stage === "transcribing" && !!upload.total && (
-          <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-canvas">
-            <div
-              className="h-full rounded-full bg-[var(--accent)] transition-all"
-              style={{ width: `${((upload.done ?? 0) / upload.total) * 100}%` }}
-            />
-          </div>
-        )}
+        <div className="flex items-center gap-3">
+          <p className="flex flex-1 items-center gap-2 text-sm font-medium">
+            <Loader2 size={15} className="animate-spin text-[var(--accent)]" />
+            {upload?.label || "Working"} {fileName && <span className="truncate text-muted">· {fileName}</span>}
+          </p>
+          <span className="shrink-0 font-mono text-sm font-semibold tabular-nums text-[var(--accent)]">
+            {pct}%
+          </span>
+        </div>
+        <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-canvas">
+          <div
+            className="h-full rounded-full bg-[var(--accent)] transition-all duration-300"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
         <p className="mt-3 text-xs text-muted">
-          Long recordings are split into segments and transcribed one by one —
-          a full-length meeting can take a few minutes. Keep this tab open.
+          A full-length meeting can take a few minutes. Keep this tab open.
         </p>
       </div>
     );
@@ -352,17 +340,14 @@ export function MeetingRecorder({
           size="sm"
         >
           <div className="space-y-4">
+            {/* An uploaded file has no elapsed time — only a live recording
+                does. Saying "00:00 captured" on the upload path was just
+                wrong, so the timing line is scoped to the recorder. */}
             <p className="text-sm text-muted">
-              {mmss(elapsed)} captured. Want me to turn it into notes with
-              follow-up actions?
+              {elapsed > 0
+                ? `${mmss(elapsed)} captured. Want me to turn it into notes with follow-up actions?`
+                : "Got it. Want me to turn this into notes with follow-up actions?"}
             </p>
-            <div className="flex items-start gap-2 rounded-lg bg-canvas px-3 py-2 text-xs text-muted">
-              <ShieldCheck size={14} className="mt-0.5 shrink-0 text-[var(--accent)]" />
-              <span>
-                The audio is already gone either way — it was never stored.
-                Discarding drops the transcript with it.
-              </span>
-            </div>
             <Input
               label="Anything I should know about this meeting? (optional)"
               value={hint}
@@ -435,8 +420,7 @@ export function MeetingRecorder({
               Keep the full transcript ({result.transcript.length.toLocaleString()}{" "}
               characters)
               <span className="mt-0.5 block text-xs text-muted">
-                Untick and only these notes are saved — the transcript is
-                discarded with the audio.
+                Untick and only these notes are saved.
               </span>
             </span>
           </label>
