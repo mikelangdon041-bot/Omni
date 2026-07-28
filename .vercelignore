@@ -1,4 +1,8 @@
 # The Windows tray recorder. It is a Rust/Tauri app that talks to this
 # deployment over HTTP; none of it is part of the site, and its build output
 # runs to hundreds of megabytes.
-desktop
+#
+# The leading slash is load-bearing: an unanchored "desktop" matches any
+# directory of that name at any depth, which silently swallowed
+# src/app/api/desktop and 404'd the endpoint the recorder signs in through.
+/desktop
