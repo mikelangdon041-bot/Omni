@@ -14,6 +14,36 @@ const show = (id, on) => {
   $(id).hidden = !on;
 };
 
+/// The three views are very different heights — two fields to sign in, a
+/// button to record, a page of settings — so one fixed window size leaves
+/// most of it empty most of the time. Size to whatever is actually on screen.
+///
+/// setSize takes the *outer* size, so the title bar and borders have to be
+/// added on top of the content; measuring them beats guessing, because it is
+/// the difference between a snug window and one with a scrollbar in it.
+async function fitWindow() {
+  const view = [...document.querySelectorAll("section")].find((s) => !s.hidden);
+  if (!view) return;
+  const { getCurrentWindow, LogicalSize } = window.__TAURI__.window;
+  const win = getCurrentWindow();
+  try {
+    const [outer, inner, scale] = await Promise.all([
+      win.outerSize(),
+      win.innerSize(),
+      win.scaleFactor(),
+    ]);
+    const chrome = (outer.height - inner.height) / scale;
+    // Body padding, top and bottom, plus the frame.
+    const height = Math.ceil(view.getBoundingClientRect().height) + 44 + chrome;
+    await win.setSize(new LogicalSize(440, Math.min(820, Math.max(240, height))));
+  } catch {
+    // Sizing is a nicety; a window that will not resize is still usable.
+  }
+}
+
+// Content height is only known after layout, and again after fonts land.
+const refit = () => requestAnimationFrame(() => requestAnimationFrame(fitWindow));
+
 let status = null;
 let devices = { inputs: [], outputs: [] };
 /** Settings is a separate view rather than a state of the main one. */
@@ -34,8 +64,12 @@ function render() {
     // could not be uploaded) has to say why, and where the recording went.
     $("setup-error").textContent = status.message || "";
     $("setup-error").hidden = !status.message;
-    if (status.omni_url) $("url").value = status.omni_url;
-    if (status.username) $("username").value = status.username;
+    // Never overwrite a field being typed into: this runs on every status
+    // event, not just the first.
+    if (document.activeElement !== $("username")) {
+      $("username").value = status.username || "";
+    }
+    refit();
     return;
   }
 
@@ -88,6 +122,7 @@ function render() {
   show("open-meeting", Boolean(status.last_meeting));
   $("hotkey-hint").textContent = status.hotkey;
   $("who").textContent = status.username;
+  refit();
 }
 
 /** Say plainly what will and will not be captured — this is the setting that
@@ -133,7 +168,9 @@ async function openSettings() {
   $("capture-system").checked = status.capture_system;
   $("keep-audio").checked = status.keep_audio;
   $("open-when-done").checked = status.open_when_done;
+  $("start-at-login").checked = status.start_at_login;
   $("hotkey").value = status.hotkey;
+  $("url").value = status.omni_url;
   fillDeviceSelects();
   showingSettings = true;
   render();
@@ -150,7 +187,6 @@ $("signin").addEventListener("submit", async (e) => {
   button.textContent = "Signing in…";
   try {
     await invoke("sign_in", {
-      omniUrl: $("url").value,
       username: $("username").value,
       password: $("password").value,
     });
@@ -178,12 +214,14 @@ $("settings-save").addEventListener("click", async () => {
   try {
     await invoke("save_settings", {
       patch: {
+        omni_url: $("url").value,
         mic_device_id: $("mic-device").value,
         system_device_id: $("system-device").value,
         capture_mic: $("capture-mic").checked,
         capture_system: $("capture-system").checked,
         keep_audio: $("keep-audio").checked,
         open_when_done: $("open-when-done").checked,
+        start_at_login: $("start-at-login").checked,
         hotkey: $("hotkey").value,
       },
     });

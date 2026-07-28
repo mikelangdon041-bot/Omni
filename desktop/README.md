@@ -12,6 +12,10 @@ Press **Ctrl+Shift+R** anywhere. Press it again when the meeting ends. The
 recording uploads, gets transcribed, becomes notes with follow-ups, and the
 finished meeting opens in your browser.
 
+It starts with Windows and sits in the tray, because a shortcut you have to
+remember to launch something for is not a shortcut, and by the time you notice
+the meeting has started.
+
 ## What it captures
 
 Two sources, mixed to one mono track:
@@ -63,10 +67,18 @@ you.
 
 ## Signing in
 
-Same username and password as the web app; it maps to the same synthetic
-`<username>@omni.local` address. Only the refresh token is kept, in the Windows
-Credential Manager under **Omni Recorder**. Your password is exchanged once and
-forgotten.
+Username and password, and nothing else: there is one Omni and the app already
+knows where it is (`DEFAULT_OMNI_URL` in `settings.rs`, changeable in Settings
+if the deployment ever moves). Asking for the address on the screen whose job
+is to remove friction was one field of pure friction, and a placeholder there
+read as already-filled and submitted empty.
+
+It is the same username and password as the web app, mapped to the same
+synthetic `<username>@omni.local` address. Only the refresh token is kept, in
+the Windows Credential Manager under **Omni Recorder**; your password is
+exchanged once and forgotten. A refresh token the server refuses is deleted,
+which is what returns the app to the sign-in screen rather than leaving it
+apparently signed in and failing at the end of every recording.
 
 ## Building it
 

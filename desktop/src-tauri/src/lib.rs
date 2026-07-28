@@ -32,6 +32,7 @@ use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
+use tauri_plugin_autostart::ManagerExt as AutostartExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_notification::NotificationExt;
 
@@ -65,6 +66,7 @@ pub struct Status {
     capture_system: bool,
     keep_audio: bool,
     open_when_done: bool,
+    start_at_login: bool,
     mic_device_id: String,
     system_device_id: String,
     /// URL of the last finished meeting, so "Open it" works after the fact.
@@ -102,6 +104,7 @@ impl AppState {
             capture_system: settings.capture_system,
             keep_audio: settings.keep_audio,
             open_when_done: settings.open_when_done,
+            start_at_login: settings.start_at_login,
             mic_device_id: settings.mic_device_id.clone(),
             system_device_id: settings.system_device_id.clone(),
             last_meeting: String::new(),
@@ -444,22 +447,23 @@ fn list_audio_devices() -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({ "inputs": inputs, "outputs": outputs }))
 }
 
+// Signing in is a username and a password. There is one Omni and the app
+// already knows where it is, so asking for the address every time was one
+// field of pure friction on the screen that exists to remove friction. It
+// lives in Settings instead, for the day the deployment moves.
 #[tauri::command]
-async fn sign_in(
-    app: AppHandle,
-    omni_url: String,
-    username: String,
-    password: String,
-) -> Result<(), String> {
-    let typed = omni_url.trim().trim_end_matches('/').to_string();
-    if typed.is_empty() {
-        return Err("Enter your Omni address.".into());
-    }
-    let base = if typed.starts_with("http") {
-        typed
-    } else {
-        format!("https://{typed}")
+async fn sign_in(app: AppHandle, username: String, password: String) -> Result<(), String> {
+    let base = {
+        let state = app.state::<AppState>();
+        let settings = state.settings.lock().unwrap();
+        let url = settings.normalized_url();
+        if url.is_empty() {
+            settings::DEFAULT_OMNI_URL.to_string()
+        } else {
+            url
+        }
     };
+
     let config = auth::fetch_config(&base).await.map_err(|e| e.to_string())?;
     auth::sign_in(&config, &username, &password)
         .await
@@ -500,13 +504,27 @@ fn sign_out(app: AppHandle) {
 
 #[derive(serde::Deserialize)]
 pub struct SettingsPatch {
+    omni_url: String,
     mic_device_id: String,
     system_device_id: String,
     capture_mic: bool,
     capture_system: bool,
     keep_audio: bool,
     open_when_done: bool,
+    start_at_login: bool,
     hotkey: String,
+}
+
+/// Keep the Windows run-at-login entry in step with the setting. Best effort:
+/// a registry write that fails is worth reporting, never worth blocking the
+/// rest of the settings over.
+fn apply_autostart(app: &AppHandle, enabled: bool) {
+    let manager = app.autolaunch();
+    let _ = if enabled {
+        manager.enable()
+    } else {
+        manager.disable()
+    };
 }
 
 #[tauri::command]
@@ -515,12 +533,23 @@ fn save_settings(app: AppHandle, patch: SettingsPatch) -> Result<(), String> {
         let state = app.state::<AppState>();
         let mut settings = state.settings.lock().unwrap();
         let previous = settings.hotkey.clone();
+        // An address cleared to nothing would lock the app out of its own
+        // deployment, so an empty box means "put it back to the default".
+        let typed = patch.omni_url.trim().trim_end_matches('/').to_string();
+        settings.omni_url = if typed.is_empty() {
+            settings::DEFAULT_OMNI_URL.to_string()
+        } else if typed.starts_with("http") {
+            typed
+        } else {
+            format!("https://{typed}")
+        };
         settings.mic_device_id = patch.mic_device_id;
         settings.system_device_id = patch.system_device_id;
         settings.capture_mic = patch.capture_mic;
         settings.capture_system = patch.capture_system;
         settings.keep_audio = patch.keep_audio;
         settings.open_when_done = patch.open_when_done;
+        settings.start_at_login = patch.start_at_login;
         settings.hotkey = if patch.hotkey.trim().is_empty() {
             settings::DEFAULT_HOTKEY.to_string()
         } else {
@@ -539,8 +568,11 @@ fn save_settings(app: AppHandle, patch: SettingsPatch) -> Result<(), String> {
     if previous_hotkey != settings.hotkey {
         register_hotkey(&app, &previous_hotkey, &settings.hotkey)?;
     }
+    apply_autostart(&app, settings.start_at_login);
 
     set_status(&app, move |s| {
+        s.start_at_login = settings.start_at_login;
+        s.omni_url = settings.omni_url;
         s.mic_device_id = settings.mic_device_id;
         s.system_device_id = settings.system_device_id;
         s.capture_mic = settings.capture_mic;
@@ -590,6 +622,14 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(
+            // The registry Run key rather than a Startup-folder shortcut, so
+            // uninstalling takes it with it.
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            // Started by Windows, not by a person: go to the tray, do not pop
+            // a window in front of whatever they are already doing.
+            Some(vec!["--autostart"]),
+        ))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
@@ -621,7 +661,12 @@ pub fn run() {
 
             let loaded = settings::load();
             let hotkey = loaded.hotkey.clone();
+            let start_at_login = loaded.start_at_login;
             app.manage(AppState::new(loaded));
+
+            // Reassert it every launch: an app moved or reinstalled leaves a
+            // Run entry pointing at a path that no longer exists.
+            apply_autostart(&handle, start_at_login);
 
             // Tray first: it is the app's only permanent surface, and if the
             // window is closed it is the only way back in.
@@ -680,8 +725,11 @@ pub fn run() {
             update_tray(&handle, &snapshot);
 
             // Nothing to configure means nothing to look at: it starts in the
-            // tray. The first run has no session, so it opens to sign-in.
-            if snapshot.phase == Phase::Setup {
+            // tray. The first run has no session, so it opens to sign-in —
+            // unless Windows started it at login, where putting a window in
+            // front of whatever someone is doing is not a welcome.
+            let launched_by_windows = std::env::args().any(|a| a == "--autostart");
+            if snapshot.phase == Phase::Setup && !launched_by_windows {
                 show_window(&handle);
             }
             Ok(())

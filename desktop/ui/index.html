@@ -16,10 +16,6 @@
       </p>
       <form id="signin">
         <label>
-          Omni address
-          <input id="url" type="text" placeholder="omni.vercel.app" autocomplete="off" spellcheck="false" />
-        </label>
-        <label>
           Username
           <input id="username" type="text" autocomplete="username" spellcheck="false" />
         </label>
@@ -116,11 +112,27 @@
       </label>
 
       <label class="check">
+        <input type="checkbox" id="start-at-login" />
+        <span>
+          <b>Start with Windows</b>
+          <small>Sits in the tray so the shortcut works without launching anything first.</small>
+        </span>
+      </label>
+
+      <label class="check">
         <input type="checkbox" id="keep-audio" />
         <span>
           <b>Keep the recording in Omni</b>
           <small>Off by default: the audio is deleted once it has been transcribed.</small>
         </span>
+      </label>
+
+      <!-- Not on the sign-in screen: there is one Omni and the app knows where
+           it is. Here only so a moved deployment is not a dead end. -->
+      <label>
+        Omni address
+        <input id="url" type="text" autocomplete="off" spellcheck="false" />
+        <small class="hint">Only change this if Omni moves to a new URL.</small>
       </label>
 
       <p class="error" id="settings-error" hidden></p>

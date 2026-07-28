@@ -13,6 +13,12 @@ use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Shift+R";
 
+/// Where Omni actually lives. Filled in on first run so the sign-in screen has
+/// nothing to type but a username and password. A placeholder here instead
+/// read as already-filled and the form submitted with an empty address.
+/// Editable, for the day the deployment moves.
+pub const DEFAULT_OMNI_URL: &str = "https://omni-nine-navy.vercel.app";
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -35,12 +41,16 @@ pub struct Settings {
     pub hotkey: String,
     /// Open the finished meeting in the browser when the upload completes.
     pub open_when_done: bool,
+    /// Start with Windows. On by default: a hotkey you have to remember to
+    /// launch something for is not a hotkey, and the meeting has usually
+    /// started by the time you notice.
+    pub start_at_login: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            omni_url: String::new(),
+            omni_url: DEFAULT_OMNI_URL.to_string(),
             username: String::new(),
             mic_device_id: String::new(),
             system_device_id: String::new(),
@@ -49,6 +59,7 @@ impl Default for Settings {
             keep_audio: false,
             hotkey: DEFAULT_HOTKEY.to_string(),
             open_when_done: true,
+            start_at_login: true,
         }
     }
 }
