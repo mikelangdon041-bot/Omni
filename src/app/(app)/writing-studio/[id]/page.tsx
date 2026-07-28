@@ -29,6 +29,7 @@ import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { RichText, RichTextView } from "@/components/ui/RichText";
+import { AutoRichField } from "@/components/ui/AutoRichField";
 import { useConfirm, useToast } from "@/components/ui/Feedback";
 import { ChipGroup } from "@/components/writer/Chips";
 import { IntakeSection } from "@/components/writer/IntakeSection";
@@ -42,6 +43,7 @@ import {
 import {
   ACTION_CHIPS,
   AUDIENCE_CHIPS,
+  FIDELITY_OPTIONS,
   LENGTHS,
   TONE_CHIPS,
   chipOptions,
@@ -64,11 +66,12 @@ export default function WriterDocPage() {
     id,
     userId,
   );
-  const { settings } = useWriterSettings(userId);
+  const { settings, save: saveSettings } = useWriterSettings(userId);
   const { styles } = useWriterStyles(userId);
 
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [editingSig, setEditingSig] = useState(false);
   const [tagDraft, setTagDraft] = useState("");
   const [guidance, setGuidance] = useState("");
   const [variantResults, setVariantResults] = useState<
@@ -227,6 +230,9 @@ export default function WriterDocPage() {
     return words || "Untitled";
   }
 
+  // Emails carry the saved signature unless this piece opts out.
+  const signatureOn = isEmail && ctx.useSignature && !!settings?.signature?.trim();
+
   const hasIntake =
     !!inputPlain.trim() ||
     !!notesPlain.trim() ||
@@ -234,29 +240,35 @@ export default function WriterDocPage() {
     !!ctx.keyPoints.trim() ||
     !!htmlToPlain(ctx.background).trim();
 
-  // Upload a document, PDF, or screenshot straight into the box — saving an
-  // email as a PDF or screenshotting it is the usual route in.
-  async function ingestFile(file: File) {
-    if (!doc) return;
+  // Get a document, PDF, or screenshot into the box. Uploading is one route in;
+  // pasting a screenshot straight from the clipboard or dropping a file onto
+  // the box are the same call, which is how most of these actually arrive.
+  async function ingestFiles(files: File[]) {
+    if (!doc || !files.length) return;
     setUploading(true);
+    // Accumulated locally rather than re-read from the doc each pass: with two
+    // files in flight the second read could land before React had re-rendered
+    // the first one in, and quietly drop it.
+    let combined = docRef.current?.original || "";
     try {
-      const form = new FormData();
-      form.append("file", file);
-      const res = await fetch("/api/writer/ingest", {
-        method: "POST",
-        credentials: "same-origin",
-        body: form,
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Could not read that file");
-      const current = docRef.current;
-      if (!current) return;
-      save({
-        original: current.original.trim()
-          ? `${current.original}<p></p>${json.html}`
-          : json.html,
-      });
-      toast("success", `Added ${file.name}`);
+      for (const file of files) {
+        const form = new FormData();
+        form.append("file", file);
+        const res = await fetch("/api/writer/ingest", {
+          method: "POST",
+          credentials: "same-origin",
+          body: form,
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "Could not read that file");
+        if (!docRef.current) return;
+        combined = combined.trim() ? `${combined}<p></p>${json.html}` : json.html;
+        save({ original: combined });
+        toast(
+          "success",
+          file.name ? `Added ${file.name}` : "Read the screenshot into the box",
+        );
+      }
     } catch (e) {
       toast("error", (e as Error).message);
     } finally {
@@ -307,13 +319,15 @@ export default function WriterDocPage() {
           original: inputPlain,
           previous: refining ? doc.content : "",
           guidance: refineGuidance || "",
+          fidelity: ctx.fidelity,
+          noGreeting: ctx.noGreeting,
           context: {
             ...ctx,
             brief: notesPlain,
             background: htmlToPlain(ctx.background),
           },
           styles: styleTexts,
-          signature: isEmail ? htmlToPlain(settings?.signature || "") : "",
+          signature: signatureOn ? htmlToPlain(settings?.signature || "") : "",
           variants: refining ? 1 : settings?.variant_count ?? 1,
         }),
       });
@@ -366,11 +380,10 @@ export default function WriterDocPage() {
 
   async function copyOut() {
     if (!doc) return;
-    const sigHtml = isEmail && settings?.signature ? `<br>${settings.signature}` : "";
-    const html = `${doc.content}${sigHtml}`;
+    const html = `${doc.content}${signatureOn ? `<br>${settings!.signature}` : ""}`;
     const plain =
       htmlToPlain(doc.content) +
-      (isEmail && settings?.signature ? `\n\n${htmlToPlain(settings.signature)}` : "");
+      (signatureOn ? `\n\n${htmlToPlain(settings!.signature)}` : "");
     try {
       await navigator.clipboard.write([
         new ClipboardItem({
@@ -389,7 +402,7 @@ export default function WriterDocPage() {
     if (!doc) return;
     const body =
       htmlToPlain(doc.content) +
-      (settings?.signature ? `\n\n${htmlToPlain(settings.signature)}` : "");
+      (signatureOn ? `\n\n${htmlToPlain(settings!.signature)}` : "");
     window.location.href = `mailto:?subject=${encodeURIComponent(doc.subject)}&body=${encodeURIComponent(body)}`;
   }
 
@@ -497,6 +510,7 @@ export default function WriterDocPage() {
                 <RichText
                   value={doc.original}
                   onChange={(html) => save({ original: html })}
+                  onFiles={(files) => void ingestFiles(files)}
                   placeholder={
                     'e.g. paste an email and add "reply pushing the meeting to next week" — or write your own rough version and I\'ll tidy it up.'
                   }
@@ -506,12 +520,13 @@ export default function WriterDocPage() {
                   <input
                     ref={fileRef}
                     type="file"
+                    multiple
                     className="hidden"
                     accept=".pdf,.docx,.doc,.txt,.md,.csv,.png,.jpg,.jpeg,.gif,.webp"
                     onChange={(e) => {
-                      const f = e.target.files?.[0];
+                      const files = Array.from(e.target.files || []);
                       e.target.value = "";
-                      if (f) void ingestFile(f);
+                      if (files.length) void ingestFiles(files);
                     }}
                   />
                   <button
@@ -524,7 +539,8 @@ export default function WriterDocPage() {
                     {uploading ? "Reading…" : "Upload a file"}
                   </button>
                   <span className="text-[10px] leading-snug text-muted">
-                    PDF, Word, text, or a screenshot — I&apos;ll read it into the box.
+                    Or just paste a screenshot into the box, or drop a file on it.
+                    PDF, Word, text or image.
                   </span>
                 </div>
               </div>
@@ -532,15 +548,67 @@ export default function WriterDocPage() {
               <div>
                 <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
                   Anything else I should know?{" "}
-                  <span className="font-normal normal-case">(optional)</span>
+                  <span className="font-normal normal-case">
+                    (optional — this is treated as an instruction, so
+                    &ldquo;just fix the grammar and cut it down&rdquo; is enough
+                    on its own)
+                  </span>
                 </p>
                 <RichText
                   value={ctx.brief}
                   onChange={(html) => setCtx({ brief: html })}
-                  placeholder="Who it's for, what's at stake, anything to avoid…"
+                  placeholder="Who it's for, what's at stake, what to change, anything to avoid…"
                   minHeight="min-h-20"
                 />
               </div>
+
+              {/* The dial that decides whether you get your draft back or
+                  somebody else's. It lives here, in the main box, because
+                  everything else on this page is optional and this isn't. */}
+              <div>
+                <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                  How much should I change?
+                </p>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {FIDELITY_OPTIONS.map((f) => {
+                    const on = ctx.fidelity === f.key;
+                    return (
+                      <button
+                        key={f.key}
+                        type="button"
+                        onClick={() => setCtx({ fidelity: f.key })}
+                        className={`rounded-lg border px-2 py-1.5 text-xs font-semibold transition ${
+                          on
+                            ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)] shadow-sm"
+                            : "border-border bg-surface text-muted hover:border-[var(--accent)]/50 hover:text-ink"
+                        }`}
+                      >
+                        {f.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-1 text-[11px] leading-snug text-muted">
+                  {FIDELITY_OPTIONS.find((f) => f.key === ctx.fidelity)?.blurb}
+                </p>
+              </div>
+
+              {(isEmail || doc.doc_type === "message") && (
+                <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border px-2.5 py-2 text-xs text-ink transition hover:border-[var(--accent)]/50">
+                  <input
+                    type="checkbox"
+                    checked={ctx.noGreeting}
+                    onChange={(e) => setCtx({ noGreeting: e.target.checked })}
+                    className="h-3.5 w-3.5 accent-[var(--accent)]"
+                  />
+                  <span>
+                    Skip the greeting
+                    <span className="ml-1 text-muted">
+                      (no &ldquo;Hi Sarah,&rdquo; — start on the first sentence)
+                    </span>
+                  </span>
+                </label>
+              )}
 
               <Button
                 className="w-full !bg-gradient-to-r !from-[var(--grad-from)] !via-[var(--grad-via)] !to-[var(--grad-to)] !text-white shadow-md transition hover:opacity-90"
@@ -736,14 +804,57 @@ export default function WriterDocPage() {
                 )}
               </div>
 
-              {isEmail && settings?.signature && doc.content.trim() ? (
-                <div className="rounded-lg bg-canvas px-3 py-2">
-                  <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                    Signature (appended on copy/send)
-                  </p>
-                  <RichTextView html={settings.signature} />
+              {/* Signature: set it once here, reuse it on every email. It is
+                  appended at copy/send time rather than written into the body,
+                  so editing the draft can never mangle it. */}
+              {isEmail && (
+                <div className="rounded-lg bg-canvas px-3 py-2.5">
+                  <div className="flex items-center gap-2">
+                    <label className="flex cursor-pointer items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                      <input
+                        type="checkbox"
+                        checked={ctx.useSignature}
+                        onChange={(e) => setCtx({ useSignature: e.target.checked })}
+                        className="h-3.5 w-3.5 accent-[var(--accent)]"
+                      />
+                      Append my signature
+                    </label>
+                    <span className="flex-1" />
+                    <button
+                      type="button"
+                      onClick={() => setEditingSig((v) => !v)}
+                      className="rounded px-1.5 py-0.5 text-[11px] font-medium text-[var(--accent)] transition hover:bg-[var(--accent-soft)]"
+                    >
+                      {editingSig
+                        ? "Done"
+                        : settings?.signature?.trim()
+                          ? "Edit"
+                          : "Add one"}
+                    </button>
+                  </div>
+                  {editingSig && settings ? (
+                    <div className="mt-2">
+                      <AutoRichField
+                        label="Signature (saved for every email)"
+                        initialHtml={settings.signature || ""}
+                        canEdit
+                        onSave={(html) => saveSettings({ signature: html })}
+                        placeholder="Name, title, phone… (saves automatically)"
+                        minHeight="min-h-16"
+                      />
+                    </div>
+                  ) : settings?.signature?.trim() ? (
+                    <div className={ctx.useSignature ? "mt-1.5" : "mt-1.5 opacity-40"}>
+                      <RichTextView html={settings.signature} />
+                    </div>
+                  ) : (
+                    <p className="mt-1 text-[11px] leading-snug text-muted">
+                      No signature saved yet. Add one and it gets appended to
+                      every email you copy or send from here.
+                    </p>
+                  )}
                 </div>
-              ) : null}
+              )}
 
               {doc.content.trim() && (
                 <div className="flex flex-wrap gap-2 border-t border-border pt-3">

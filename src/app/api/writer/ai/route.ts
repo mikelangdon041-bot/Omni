@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { anthropic, WRITER_MODEL } from "@/lib/anthropic";
 import { AUDIENCE_CHIPS, TONE_CHIPS } from "@/lib/writer/types";
+import { stripEmDashes } from "@/lib/writer/sanitize";
+import { buildGeneratePrompt } from "@/lib/writer/prompt";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -44,6 +46,7 @@ function firstText(res: {
   const block = res.content.find((b) => b.type === "text");
   return (block?.text || "").trim();
 }
+
 
 export async function POST(req: Request) {
   const supabase = await createClient();
@@ -145,43 +148,18 @@ Return only the JSON.`,
       const signature = String(body?.signature || "");
       const variants = Math.min(4, Math.max(1, Number(body?.variants) || 1));
 
-      const typeNotes: Record<string, string> = {
-        email:
-          "This is an email. Also produce a subject line (concise, specific, no clickbait). Do NOT include the signature in the body — it is appended separately.",
-        document: "This is a document/memo. Use clear structure; headings only if genuinely helpful.",
-        message: "This is a short message (Teams/Slack/text). Keep it tight; no greetings unless natural.",
-        social: "This is a LinkedIn/social post. Strong hook in the first line, skimmable, no hashtag spam.",
-        summary: "This is a summary/abstract. Faithful, complete, no invention, as tight as possible.",
-        other: "Follow the user's description of what this should be.",
-      };
-
-      const styleBlock = styles.length
-        ? `Writing styles to follow (treat these as binding rules):\n${styles
-            .map((s) => `--- Style "${s.name}" ---\n${s.text}`)
-            .join("\n")}`
-        : "";
-
-      const list = (v: unknown) => (Array.isArray(v) && v.length ? v.join("; ") : "");
-
-      const notes = String(ctx.brief || "").slice(0, 30000);
-
-      const intake = [
-        notes && `Anything else the user wanted you to know:\n${notes}`,
-        list(ctx.actions) && `Requested edits: ${list(ctx.actions)}`,
-        list(ctx.tone) && `Tone: ${list(ctx.tone)}`,
-        list(ctx.audience) && `Audience: ${list(ctx.audience)}`,
-        ctx.length && ctx.length !== "as_is" && `Length: make it ${String(ctx.length).replace("_", " ")}`,
-        ctx.recipient && `Recipient: ${ctx.recipient}`,
-        ctx.ask && `What the writer is asking for / wants to happen: ${ctx.ask}`,
-        ctx.keyPoints && `Key points that MUST be included:\n${ctx.keyPoints}`,
-        ctx.background && `Background / context:\n${ctx.background}`,
-      ]
-        .filter(Boolean)
-        .join("\n\n");
-
-      const task = previous
-        ? `Here is the current draft you produced earlier. Revise it according to the new guidance while keeping everything that wasn't asked to change.\n\nCurrent draft:\n${previous}\n\nNew guidance: ${guidance || "(none — light general polish)"}`
-        : `Here is everything the user put in the box. Work out what it is and deliver what they want.\n\nWhat the user wrote:\n${input || notes}`;
+      const { system, user: userMessage } = buildGeneratePrompt({
+        docType,
+        input,
+        previous,
+        guidance,
+        fidelity: String(body?.fidelity || "light"),
+        noGreeting: !!body?.noGreeting,
+        ctx,
+        styles,
+        signature,
+        variants,
+      });
 
       const res = await anthropic().messages.create({
         model: WRITER_MODEL,
@@ -189,26 +167,8 @@ Return only the JSON.`,
         output_config: {
           format: { type: "json_schema", schema: GENERATE_SCHEMA },
         },
-        system: `You are an elite writing partner. You produce polished, natural writing that sounds like a real person — never like AI filler.
-
-Hard rules:
-- Return JSON: {"variants":[{"subject":"...","html":"..."}]} with exactly ${variants} variant(s).${variants > 1 ? " Make the variants genuinely different in angle/structure, not reworded copies." : ""}
-- "html" is the piece itself as simple HTML: <p> for paragraphs, <br> only inside a paragraph, <ul>/<ol>/<li> for lists, <b>/<i> sparingly. No inline styles, no headings unless the piece truly needs them, no markdown.
-- "subject" is only meaningful for emails; otherwise return "".
-- The user has ONE input box, so work out for yourself what they gave you. It is one of: (a) a rough draft of their own — improve it, preserving their meaning, facts and specifics, and never inventing content; (b) source material such as an email or message plus an instruction about what to do with it — understand it and do exactly what they asked (reply, decline, forward, summarize…), pulling the recipient's name, topic, dates and commitments straight from it; or (c) a plain description of what they want — write it from scratch. Never ask which it is, never explain your reading of it, and never invent specific facts, numbers, or commitments the user didn't provide.
-- If key points are listed, include every one.
-- Names: address the recipient by name whenever it can be inferred from anything provided (the pasted email's sender, the recipient field, the background). NEVER output a placeholder like [Name] or [Recipient]. If no name is inferable, open naturally without one (e.g. "Hi," / "Hi there,") or skip the greeting if the format doesn't need it.
-- Only use [square brackets] for a genuinely missing hard fact (a date, a number) the user must fill in — never for names or things you can infer.
-- No preamble, no explanations.
-- Avoid AI tells: no "I hope this email finds you well", no "delve", no exclamation stacking, no needless bullet lists.
-${typeNotes[docType] || typeNotes.other}
-${styleBlock ? `\n${styleBlock}` : ""}${signature ? `\n(The user's emails get this signature appended automatically after your body — never write your own sign-off block with contact details.)` : ""}`,
-        messages: [
-          {
-            role: "user",
-            content: `${intake ? `Intake:\n${intake}\n\n` : ""}${task}`,
-          },
-        ],
+        system,
+        messages: [{ role: "user", content: userMessage }],
       });
 
       if (res.stop_reason === "refusal")
@@ -220,9 +180,10 @@ ${styleBlock ? `\n${styleBlock}` : ""}${signature ? `\n(The user's emails get th
       const parsed = JSON.parse(firstText(res) || "{}");
       const out = (Array.isArray(parsed.variants) ? parsed.variants : [])
         .slice(0, variants)
+        // The prompt asks for no em dashes; this guarantees it.
         .map((v: { subject?: unknown; html?: unknown }) => ({
-          subject: String(v?.subject || ""),
-          html: String(v?.html || ""),
+          subject: stripEmDashes(String(v?.subject || "")),
+          html: stripEmDashes(String(v?.html || "")),
         }))
         .filter((v: { html: string }) => v.html.trim());
       if (!out.length)

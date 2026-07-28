@@ -2,9 +2,12 @@
 
 export type DocType = "email" | "document" | "message" | "social" | "summary" | "other";
 export type DocMode = "create" | "edit";
+/** How much license the AI has with the user's draft. */
+export type Fidelity = "light" | "polish" | "rewrite";
 
 export interface WriterContext {
   brief: string; // free-text brief (HTML) — "here's an email, write a reply saying…"
+  fidelity: Fidelity; // how far from the draft it may stray
   actions: string[]; // what to do (edit mode mostly)
   tone: string[];
   audience: string[];
@@ -13,11 +16,14 @@ export interface WriterContext {
   keyPoints: string;
   ask: string; // what you're asking the recipient for
   recipient: string; // name / role (emails, messages)
+  noGreeting: boolean; // skip "Hi Sarah," and open on the first real sentence
+  useSignature: boolean; // append the saved signature on copy/send (emails)
   styleIds: string[];
 }
 
 export const EMPTY_CONTEXT: WriterContext = {
   brief: "",
+  fidelity: "light",
   actions: [],
   tone: [],
   audience: [],
@@ -26,6 +32,8 @@ export const EMPTY_CONTEXT: WriterContext = {
   keyPoints: "",
   ask: "",
   recipient: "",
+  noGreeting: false,
+  useSignature: true,
   styleIds: [],
 };
 
@@ -79,6 +87,27 @@ export const DOC_TYPES: { key: DocType; emoji: string; label: string; blurb: str
   { key: "social", emoji: "📣", label: "LinkedIn / social", blurb: "A post people actually read." },
   { key: "summary", emoji: "📝", label: "Summary / abstract", blurb: "Distill something long into less." },
   { key: "other", emoji: "✨", label: "Anything else", blurb: "Describe it and go." },
+];
+
+// The single most important dial: how much of the user's own draft survives.
+// It defaults to "light" because the usual complaint about a writing AI is that
+// it hands back something unrecognisable when all you wanted was a proofread.
+export const FIDELITY_OPTIONS: { key: Fidelity; label: string; blurb: string }[] = [
+  {
+    key: "light",
+    label: "🔍 Just fix it",
+    blurb: "Grammar, typos and the odd clumsy phrase. Your words, your order, your length.",
+  },
+  {
+    key: "polish",
+    label: "✍️ Polish",
+    blurb: "Tighten the wording and the flow. Same content, same shape, nothing new added.",
+  },
+  {
+    key: "rewrite",
+    label: "🚀 Rewrite",
+    blurb: "Free rein to restructure and rework. For rough sketches, or writing from scratch.",
+  },
 ];
 
 export const ACTION_CHIPS = [

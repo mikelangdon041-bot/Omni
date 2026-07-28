@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import { Bold, Italic, List, ListOrdered, IndentIncrease, IndentDecrease } from "lucide-react";
 
@@ -16,20 +16,32 @@ function cleanPaste(html: string): string {
 // Rich-text editor matching the session/KOL notes format: a compact toolbar
 // (bold/italic · bullets/numbers · indent/outdent), keyboard shortcuts, and
 // clean paste. Stores HTML; emits on input.
+// Files carried by a paste or a drop. A screenshot copied with Snipping Tool
+// or ⌘⇧4 arrives here as an image file, which is how "paste the screenshot
+// straight in" works without an upload dialog.
+function filesFrom(dt: DataTransfer | null): File[] {
+  if (!dt) return [];
+  return Array.from(dt.files || []).filter((f) => f.size > 0);
+}
+
 export function RichText({
   value,
   onChange,
   placeholder = "Start typing… (saves automatically)",
   minHeight = "min-h-28",
+  onFiles,
 }: {
   value: string;
   onChange: (html: string) => void;
   placeholder?: string;
   minHeight?: string;
+  /** Handle images pasted or files dropped into the editor. */
+  onFiles?: (files: File[]) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const composing = useRef(false);
   const last = useRef(value);
+  const [dragging, setDragging] = useState(false);
 
   // Sync external value in without clobbering the caret while typing.
   useEffect(() => {
@@ -59,6 +71,17 @@ export function RichText({
   }
 
   function onPaste(e: React.ClipboardEvent) {
+    // A pasted screenshot has no useful text — hand the image off instead.
+    if (onFiles) {
+      const images = filesFrom(e.clipboardData).filter((f) =>
+        f.type.startsWith("image/"),
+      );
+      if (images.length) {
+        e.preventDefault();
+        onFiles(images);
+        return;
+      }
+    }
     const html = e.clipboardData.getData("text/html");
     const text = e.clipboardData.getData("text/plain");
     if (!html && !text) return;
@@ -94,7 +117,27 @@ export function RichText({
   }
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border focus-within:border-[var(--accent)] focus-within:ring-2 focus-within:ring-[var(--accent)]/20">
+    <div
+      onDragOver={(e) => {
+        if (!onFiles || !e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => {
+        if (!onFiles) return;
+        const files = filesFrom(e.dataTransfer);
+        setDragging(false);
+        if (!files.length) return;
+        e.preventDefault();
+        onFiles(files);
+      }}
+      className={`overflow-hidden rounded-lg border focus-within:border-[var(--accent)] focus-within:ring-2 focus-within:ring-[var(--accent)]/20 ${
+        dragging
+          ? "border-[var(--accent)] ring-2 ring-[var(--accent)]/30"
+          : "border-border"
+      }`}
+    >
       <div className="flex items-center gap-0.5 border-b border-border bg-canvas px-2 py-1.5">
         <Btn title="Bold (⌘B)" onClick={() => exec("bold")}><Bold size={14} /></Btn>
         <Btn title="Italic (⌘I)" onClick={() => exec("italic")}><Italic size={14} /></Btn>

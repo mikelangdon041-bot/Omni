@@ -12,12 +12,25 @@ export const maxDuration = 120;
 
 const MAX_BYTES = 15 * 1024 * 1024;
 
-const IMAGE_TYPES: Record<string, "image/png" | "image/jpeg" | "image/gif" | "image/webp"> = {
+type ImageMime = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+
+const IMAGE_TYPES: Record<string, ImageMime> = {
   png: "image/png",
   jpg: "image/jpeg",
   jpeg: "image/jpeg",
   gif: "image/gif",
   webp: "image/webp",
+};
+
+// A screenshot pasted from the clipboard often arrives as "image.png" — but not
+// always, and not on every browser — so fall back to the declared MIME type
+// rather than the file name when working out what we were handed.
+const IMAGE_MIMES: Record<string, ImageMime> = {
+  "image/png": "image/png",
+  "image/jpeg": "image/jpeg",
+  "image/jpg": "image/jpeg",
+  "image/gif": "image/gif",
+  "image/webp": "image/webp",
 };
 
 const TRANSCRIBE_SYSTEM = `You transcribe a document or screenshot into clean HTML so it can be pasted into a writing tool.
@@ -84,10 +97,12 @@ export async function POST(req: Request) {
 
     const buffer = Buffer.from(await file.arrayBuffer());
     const name = file.name.toLowerCase();
-    const ext = name.split(".").pop() || "";
+    const ext = name.includes(".") ? name.split(".").pop() || "" : "";
+    const mime = (file.type || "").toLowerCase();
+    const imageType = IMAGE_TYPES[ext] || IMAGE_MIMES[mime];
 
     // Screenshots and photos — read them with Claude's vision.
-    if (IMAGE_TYPES[ext]) {
+    if (imageType) {
       const res = await anthropic().messages.create({
         model: WRITER_MODEL,
         max_tokens: 8000,
@@ -100,7 +115,7 @@ export async function POST(req: Request) {
                 type: "image",
                 source: {
                   type: "base64",
-                  media_type: IMAGE_TYPES[ext],
+                  media_type: imageType,
                   data: buffer.toString("base64"),
                 },
               },
@@ -118,7 +133,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ html });
     }
 
-    if (ext === "docx" || ext === "doc") {
+    if (ext === "docx" || ext === "doc" || mime.includes("wordprocessingml")) {
       const mammoth = (await import("mammoth")).default;
       const html = (await mammoth.convertToHtml({ buffer })).value || "";
       if (!html.trim())
@@ -129,7 +144,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ html });
     }
 
-    if (ext === "pdf") {
+    if (ext === "pdf" || mime === "application/pdf") {
       let text = "";
       try {
         const { PDFParse } = await import("pdf-parse");
