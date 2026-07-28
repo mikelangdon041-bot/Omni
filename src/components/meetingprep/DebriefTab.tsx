@@ -18,6 +18,7 @@ import {
   Minimize2,
   Replace,
   Undo2,
+  Wand2,
   Sparkles,
   Trash2,
 } from "lucide-react";
@@ -26,7 +27,7 @@ import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { RichText } from "@/components/ui/RichText";
-import { debriefNotesHtml, tidyNotesHtml } from "@/lib/meetingprep/notes";
+import { cleanNotesHtml, debriefNotesHtml, tidyNotesHtml } from "@/lib/meetingprep/notes";
 import {
   applyNameMap,
   countMatchesInHtml,
@@ -45,6 +46,7 @@ import {
   type DebriefAction,
   type MpMeeting,
 } from "@/lib/meetingprep/types";
+import { htmlToPlain } from "@/lib/writer/types";
 import type { DueDatePreset } from "@/lib/territory/types";
 
 const supabase = createClient();
@@ -107,6 +109,7 @@ export function DebriefTab({
   const [mailSubject, setMailSubject] = useState("");
   const [mailBody, setMailBody] = useState("");
   const [mailCopied, setMailCopied] = useState(false);
+  const [filling, setFilling] = useState(false);
   const [picking, setPicking] = useState(false);
   const [chosen, setChosen] = useState<Set<number>>(new Set());
   const notesRef = useRef<HTMLDivElement>(null);
@@ -277,27 +280,23 @@ export function DebriefTab({
   function onNotesSelect() {
     const sel = window.getSelection();
     const el = notesRef.current;
-    if (!sel || !el || !sel.rangeCount || !el.contains(sel.anchorNode)) {
+    // Deliberately requires a non-empty selection. Firing on a plain click
+    // put this in the way constantly while reading or editing.
+    if (!sel || sel.isCollapsed || !el || !sel.rangeCount || !el.contains(sel.anchorNode)) {
       setPick(null);
       setPickLi(null);
       return;
     }
-    const li = enclosingLi();
-    setPickLi(li);
-
-    const text = sel.isCollapsed ? "" : sel.toString().trim();
-    const anchor = sel.isCollapsed ? li : null;
-    const rect = text
-      ? sel.getRangeAt(0).getBoundingClientRect()
-      : anchor?.getBoundingClientRect();
-    if (!rect || (!text && !li)) return setPick(null);
-
+    const text = sel.toString().trim();
+    if (!text || text.length > 60) {
+      setPick(null);
+      setPickLi(null);
+      return;
+    }
+    setPickLi(enclosingLi());
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
     const box = el.getBoundingClientRect();
-    setPick({
-      text: text && text.length <= 60 ? text : "",
-      top: rect.top - box.top - 38,
-      left: Math.max(0, rect.left - box.left),
-    });
+    setPick({ text, top: rect.top - box.top - 38, left: Math.max(0, rect.left - box.left) });
   }
 
   // The <li> the caret or selection currently sits in, plus its nesting depth.
@@ -398,6 +397,60 @@ export function DebriefTab({
     setFindWhat("");
     setFindWith("");
     toast("success", `"${what}" is now "${to}" throughout.`);
+  }
+
+  // Pull the meeting's own details out of the transcript: who was there, what
+  // it was for, when, how long. Saves retyping what the recording already
+  // says, and only fills fields that are currently empty so it can't
+  // overwrite something you typed yourself.
+  async function fillSetup() {
+    const source = (debrief.transcript || "").trim();
+    if (!source) return;
+    setFilling(true);
+    try {
+      const res = await fetch("/api/meeting/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          action: "autofill",
+          meeting: { title: m.title, priorTranscript: source },
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Could not read the setup");
+
+      const patch: Partial<MpMeeting> = {};
+      if (!m.title?.trim() && json.title) patch.title = json.title;
+      if (!m.location?.trim() && json.location) patch.location = json.location;
+      if (!m.date && json.date && !Number.isNaN(Date.parse(json.date))) {
+        patch.date = new Date(json.date).toISOString();
+      }
+      if (json.durationMin > 0 && !m.duration_min) patch.duration_min = json.durationMin;
+      if (!htmlToPlain(m.objectives || "").trim() && json.objectives) {
+        patch.objectives = `<p>${json.objectives}</p>`;
+      }
+      if (!htmlToPlain(m.concerns || "").trim() && json.concerns) {
+        patch.concerns = `<p>${json.concerns}</p>`;
+      }
+      const known = new Set((m.attendees || []).map((a) => a.name.toLowerCase()));
+      const extra = (json.attendees || []).filter(
+        (a: { name?: string }) => a.name && !known.has(a.name.toLowerCase()),
+      );
+      if (extra.length) patch.attendees = [...(m.attendees || []), ...extra];
+
+      const n = Object.keys(patch).length;
+      if (n === 0) {
+        toast("success", "Setup already has everything the transcript mentions.");
+      } else {
+        save(patch);
+        toast("success", `Filled in ${n} setup field${n === 1 ? "" : "s"} from the transcript.`);
+      }
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setFilling(false);
+    }
   }
 
   // --- recap email --------------------------------------------------------
@@ -603,6 +656,17 @@ export function DebriefTab({
                     <Undo2 size={14} /> Undo shorten
                   </Button>
                 )}
+                {(debrief.transcript || "").trim() && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={filling}
+                    onClick={() => void fillSetup()}
+                    title="Read attendees, date, objectives and concerns out of the transcript"
+                  >
+                    <Wand2 size={14} /> {filling ? "Reading…" : "Fill in setup"}
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="secondary"
@@ -693,13 +757,24 @@ export function DebriefTab({
                   )}
                 </div>
               )}
-              <RichText
-                value={notesHtml}
-                onChange={(html) =>
-                  save({ debrief: { ...debrief, notesHtml: html } })
-                }
-                minHeight="min-h-64"
-              />
+              <div
+                onBlur={() => {
+                  // Tidy on blur, never mid-keystroke: collapsing an empty
+                  // bullet while the caret is in it would move the caret.
+                  const cleaned = cleanNotesHtml(notesHtml);
+                  if (cleaned !== notesHtml) {
+                    save({ debrief: { ...debrief, notesHtml: cleaned } });
+                  }
+                }}
+              >
+                <RichText
+                  value={notesHtml}
+                  onChange={(html) =>
+                    save({ debrief: { ...debrief, notesHtml: html } })
+                  }
+                  minHeight="min-h-64"
+                />
+              </div>
             </div>
           </section>
 

@@ -62,3 +62,64 @@ export function tidyNotesHtml(html: string): string {
     .replace(/[\s]*[-–—:]+\s*(?=<\/li>)/gi, "")
     .trim();
 }
+
+// Tidy up a bullet list after hand-editing.
+//
+// Deleting the text of a bullet that has children leaves an empty <li> that
+// still draws its own marker, so you get a stray bullet sitting above the
+// indented ones. The fix is to lift the children up a level rather than leave
+// an empty parent behind. Runs on blur, not on every keystroke, so it can
+// never fight the caret while typing.
+export function cleanNotesHtml(html: string): string {
+  if (typeof window === "undefined" || !html) return html;
+  const doc = new DOMParser().parseFromString(`<div>${html}</div>`, "text/html");
+  const root = doc.body.firstElementChild;
+  if (!root) return html;
+
+  let changed = true;
+  let passes = 0;
+  while (changed && passes < 5) {
+    changed = false;
+    passes += 1;
+
+    for (const li of Array.from(root.querySelectorAll("li"))) {
+      const nested = Array.from(li.children).filter(
+        (c) => c.tagName === "UL" || c.tagName === "OL",
+      );
+      // Text of this bullet, ignoring anything in its sub-list.
+      const own = Array.from(li.childNodes)
+        .filter((n) => !(n instanceof Element && (n.tagName === "UL" || n.tagName === "OL")))
+        .map((n) => n.textContent || "")
+        .join("")
+        .replace(/ /g, " ")
+        .trim();
+
+      if (own) continue;
+
+      if (nested.length > 0) {
+        // Empty parent: promote its children into the list it sits in.
+        const parentList = li.parentElement;
+        for (const list of nested) {
+          while (list.firstElementChild) {
+            parentList?.insertBefore(list.firstElementChild, li);
+          }
+        }
+        li.remove();
+        changed = true;
+      } else if (!li.querySelector("img")) {
+        // Nothing in it at all.
+        li.remove();
+        changed = true;
+      }
+    }
+
+    for (const list of Array.from(root.querySelectorAll("ul, ol"))) {
+      if (!list.querySelector("li")) {
+        list.remove();
+        changed = true;
+      }
+    }
+  }
+
+  return root.innerHTML;
+}

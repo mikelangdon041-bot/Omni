@@ -27,23 +27,29 @@ export function renameInText(text: string, from: string, to: string): string {
   if (!from.trim() || !text) return text;
 
   if (FIRST_PERSON.has(to.trim())) {
+    const f = escapeRx(from);
     return (
       text
-        // "Zach's territory" -> "my territory"
-        .replace(new RegExp(`(?<![A-Za-z0-9])${escapeRx(from)}'s(?![A-Za-z0-9])`, "g"), "my")
-        // "send Zach the data" / "with Zach" -> object form
+        // Possessive first: "the manager's team" is "my team", not "I's team".
+        // Both apostrophes matter — generated notes use the typographic one,
+        // and matching only the straight one is why this used to produce "I".
+        .replace(new RegExp(`(?<![A-Za-z0-9])${f}['’]s(?![A-Za-z0-9])`, "gi"), "my")
+        // Object position after a preposition or a transitive verb.
         .replace(
           new RegExp(
-            `(?<![A-Za-z0-9])(to|with|for|from|about|between|alongside|told|asked|ask|give|gave|send|sent|email|emailed|owes|owe)\\s+${escapeRx(from)}(?![A-Za-z0-9])`,
+            `(?<![A-Za-z0-9])(to|with|for|from|about|between|alongside|against|on|by|at|of|towards?|regarding|told|tell|asked|ask|give|gave|show|showed|send|sent|email|emailed|owes|owe|join|joined|met|meet|copy|copied|update|updated)\\s+${f}(?![A-Za-z0-9])`,
             "gi",
           ),
-          (_m, verb) => `${verb} me`,
+          (_m, lead) => `${lead} me`,
         )
-        // Everything left is the subject.
-        .replace(boundedRx(from), "I")
-        // "my territory was reviewed" at the start of a sentence needs its
-        // capital back — the substitutions above are lower case by design.
-        .replace(/(^|[.!?]\s+)(my|me)\b/g, (_m, lead, word) => `${lead}${word[0].toUpperCase()}${word.slice(1)}`)
+        // Whatever is left is the subject.
+        .replace(boundedRx(from, "gi"), "I")
+        // The substitutions above are lower case by design; sentence starts
+        // need their capital back.
+        .replace(
+          /(^|[.!?]\s+|<li>|<\/?[a-z]+>\s*)(my|me)\b/g,
+          (_m, lead, word) => `${lead}${word[0].toUpperCase()}${word.slice(1)}`,
+        )
     );
   }
 
