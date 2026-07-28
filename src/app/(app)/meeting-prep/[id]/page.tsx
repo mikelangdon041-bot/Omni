@@ -31,8 +31,17 @@ export default function MeetingPage() {
   const { userId } = useUserId();
   const { meeting, loading, save, flush, saveState } = useMpMeeting(id, userId);
   const { settings, save: saveSettings } = useMpSettings(userId);
+  // A deep link can say which tab to open — the Windows recorder sends you
+  // straight to Debrief, the same place the in-app record flow lands. Read off
+  // window rather than useSearchParams so the page needs no Suspense boundary,
+  // and read once so a later render can't yank the tab back.
+  const [linkedTab] = useState<Tab | null>(() => {
+    if (typeof window === "undefined") return null;
+    const t = new URLSearchParams(window.location.search).get("tab") || "";
+    return (TABS as readonly string[]).includes(t) ? (t as Tab) : null;
+  });
   // Remembers which tab you were on for THIS meeting specifically.
-  const [tab, setTab] = usePersistedState<Tab>(`mp-tab:${id}`, "Setup", TABS);
+  const [tab, setTab] = usePersistedState<Tab>(`mp-tab:${id}`, "Setup", TABS, linkedTab);
 
   const generator = useBriefGenerator({
     meeting,

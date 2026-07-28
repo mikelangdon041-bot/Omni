@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { routeAuth } from "@/lib/supabase/route";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { chunkAudio, extractSample } from "@/lib/ffmpeg";
 import { openai } from "@/lib/openai";
@@ -180,10 +180,9 @@ async function purge(admin: Admin, userId: string, uploadId: string) {
 }
 
 export async function POST(req: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Cookie session (web) or bearer token (the Windows desktop recorder) — the
+  // pipeline below is identical either way.
+  const { user } = await routeAuth(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json().catch(() => null);

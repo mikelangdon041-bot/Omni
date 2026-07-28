@@ -1,0 +1,63 @@
+[package]
+name = "omni-recorder"
+version = "0.1.0"
+description = "Records a meeting from the system tray and sends it to Omni."
+authors = ["Omni"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "omni_recorder_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-notification = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# HTTP to Omni and to Supabase's auth endpoint. rustls rather than the system
+# stack so the binary carries its own roots and cannot be tripped by a machine
+# with an odd certificate store.
+reqwest = { version = "0.12", default-features = false, features = [
+  "json",
+  "rustls-tls",
+  "stream",
+] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "fs"] }
+futures-util = "0.3"
+
+# WASAPI, used in loopback mode on the render endpoint. This is the whole
+# reason the recorder is a native app: ffmpeg's dshow input can only see
+# capture devices, and this machine has no Stereo Mix or virtual cable, so
+# there is no device-shaped way to reach what the speakers are playing.
+wasapi = "0.23"
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com"] }
+
+# The upload is bounded by network, not disk, so the recording is encoded as
+# it is captured rather than written as WAV and converted afterwards.
+mp3lame-encoder = "0.2"
+
+# `windows-native` is not optional despite the name: without it keyring
+# compiles in a mock store that lives in process memory, so signing in appears
+# to work and the session is gone the next time the app starts.
+keyring = { version = "3", features = ["windows-native"] }
+anyhow = "1"
+chrono = "0.4"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

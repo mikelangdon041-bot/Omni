@@ -1,0 +1,4 @@
+# The Windows tray recorder. It is a Rust/Tauri app that talks to this
+# deployment over HTTP; none of it is part of the site, and its build output
+# runs to hundreds of megabytes.
+desktop

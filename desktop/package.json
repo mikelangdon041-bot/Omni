@@ -1,0 +1,14 @@
+{
+  "name": "omni-recorder",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Omni Recorder — Windows tray app that records a meeting and sends it to Omni.",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

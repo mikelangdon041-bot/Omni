@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Omni Recorder</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <!-- Sign in. Shown on first run and whenever the session is gone. -->
+    <section id="setup" hidden>
+      <h1>Omni Recorder</h1>
+      <p class="lede">
+        Record a meeting with a keyboard shortcut. It captures what you hear
+        and what you say, then writes the notes into Omni.
+      </p>
+      <form id="signin">
+        <label>
+          Omni address
+          <input id="url" type="text" placeholder="omni.vercel.app" autocomplete="off" spellcheck="false" />
+        </label>
+        <label>
+          Username
+          <input id="username" type="text" autocomplete="username" spellcheck="false" />
+        </label>
+        <label>
+          Password
+          <input id="password" type="password" autocomplete="current-password" />
+        </label>
+        <p class="error" id="setup-error" hidden></p>
+        <button class="primary" type="submit" id="signin-button">Sign in</button>
+      </form>
+    </section>
+
+    <!-- The everyday view: one button and what it is doing. -->
+    <section id="main" hidden>
+      <header>
+        <div>
+          <p class="eyebrow">Omni Recorder</p>
+          <h1 id="headline">Ready</h1>
+        </div>
+        <button class="ghost" id="settings-open" title="Settings" aria-label="Settings">⚙</button>
+      </header>
+
+      <div class="stage">
+        <div class="timer" id="timer" hidden>
+          <span class="dot"></span><span id="elapsed">00:00</span>
+        </div>
+        <div class="meter" id="meter" hidden><div class="fill" id="meter-fill"></div></div>
+
+        <div class="bar" id="progress" hidden>
+          <div class="bar-track"><div class="bar-fill" id="progress-fill"></div></div>
+          <p class="bar-label"><span id="progress-label">Working</span><span id="progress-pct">0%</span></p>
+        </div>
+
+        <p class="note" id="note"></p>
+
+        <button class="primary big" id="record">Start recording</button>
+        <button class="link" id="open-meeting" hidden>Open the meeting</button>
+      </div>
+
+      <footer>
+        <p>
+          Press <kbd id="hotkey-hint">Ctrl+Shift+R</kbd> anywhere to start or stop.
+          Closing this window keeps it running in the tray.
+        </p>
+      </footer>
+    </section>
+
+    <!-- Settings. Devices are picked here once and never asked about again. -->
+    <section id="settings" hidden>
+      <header>
+        <div>
+          <p class="eyebrow">Omni Recorder</p>
+          <h1>Settings</h1>
+        </div>
+        <button class="ghost" id="settings-close" aria-label="Back">✕</button>
+      </header>
+
+      <label class="check">
+        <input type="checkbox" id="capture-system" />
+        <span>
+          <b>Record what I hear</b>
+          <small>The meeting's own audio, taken straight from the speakers. No screen share, no prompt.</small>
+        </span>
+      </label>
+      <label>
+        Speakers to capture
+        <select id="system-device"></select>
+      </label>
+
+      <label class="check">
+        <input type="checkbox" id="capture-mic" />
+        <span>
+          <b>Record my microphone</b>
+          <small>Your side of the conversation.</small>
+        </span>
+      </label>
+      <label>
+        Microphone
+        <select id="mic-device"></select>
+      </label>
+
+      <label>
+        Shortcut
+        <input id="hotkey" type="text" spellcheck="false" placeholder="Ctrl+Shift+R" />
+        <small class="hint">Works anywhere in Windows. Modifiers plus one key, e.g. Ctrl+Shift+R or Alt+F9.</small>
+      </label>
+
+      <label class="check">
+        <input type="checkbox" id="open-when-done" />
+        <span>
+          <b>Open the meeting when it is ready</b>
+          <small>Jumps straight to the notes in your browser.</small>
+        </span>
+      </label>
+
+      <label class="check">
+        <input type="checkbox" id="keep-audio" />
+        <span>
+          <b>Keep the recording in Omni</b>
+          <small>Off by default: the audio is deleted once it has been transcribed.</small>
+        </span>
+      </label>
+
+      <p class="error" id="settings-error" hidden></p>
+      <div class="row">
+        <button class="primary" id="settings-save">Save</button>
+        <button class="ghost wide" id="sign-out">Sign out</button>
+      </div>
+      <p class="signed-in">Signed in as <b id="who"></b></p>
+    </section>
+
+    <script src="app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,347 @@
+/* Omni's palette, so the recorder and the app it feeds look related. */
+:root {
+  --accent: #5a4ff3;
+  --accent-hover: #4a3fde;
+  --accent-soft: #ebe9fe;
+  --canvas: #f7f6fb;
+  --surface: #ffffff;
+  --ink: #161427;
+  --muted: #6c6982;
+  --border: #e7e5f2;
+  --danger: #dc2626;
+  --ok: #059669;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --accent: #8b82ff;
+    --accent-hover: #a099ff;
+    --accent-soft: #262244;
+    --canvas: #131221;
+    --surface: #1b1a2c;
+    --ink: #f2f1f8;
+    --muted: #a2a0b8;
+    --border: #2e2c46;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* The browser's own `[hidden]` rule is only `display: none`, which any
+   explicit `display` below beats — so the timer and the meeting link stayed
+   on screen while idle. Hiding has to win outright. */
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  padding: 22px;
+  min-height: 100vh;
+  font: 14px/1.5 "Segoe UI", system-ui, sans-serif;
+  color: var(--ink);
+  background: var(--canvas);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+h1 {
+  margin: 2px 0 0;
+  font-size: 22px;
+  letter-spacing: -0.01em;
+}
+
+.eyebrow {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.lede {
+  margin: 6px 0 20px;
+  color: var(--muted);
+}
+
+label {
+  display: block;
+  margin-bottom: 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+input[type="text"],
+input[type="password"],
+select {
+  display: block;
+  width: 100%;
+  margin-top: 5px;
+  padding: 9px 10px;
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+input:focus,
+select:focus {
+  border-color: var(--accent);
+}
+
+.hint {
+  display: block;
+  margin-top: 5px;
+  font-weight: 400;
+}
+
+small {
+  color: var(--muted);
+}
+
+.check {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 11px 12px;
+  margin-bottom: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.check input {
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+  width: 15px;
+  height: 15px;
+}
+
+.check b {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.check small {
+  display: block;
+  margin-top: 2px;
+  font-weight: 400;
+}
+
+button {
+  font: inherit;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.primary {
+  width: 100%;
+  padding: 11px 14px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.primary:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.primary.big {
+  padding: 15px;
+  font-size: 15px;
+}
+
+.primary.stop {
+  background: var(--danger);
+}
+
+.ghost {
+  padding: 9px 12px;
+  color: var(--muted);
+  background: transparent;
+  border-color: var(--border);
+}
+
+.ghost:hover {
+  color: var(--ink);
+}
+
+.ghost.wide {
+  width: 100%;
+}
+
+.link {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px;
+  color: var(--accent);
+  background: transparent;
+  font-weight: 600;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.row > * {
+  flex: 1;
+}
+
+.stage {
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.timer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  font-size: 30px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--danger);
+}
+
+.dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.meter {
+  height: 6px;
+  margin-bottom: 16px;
+  overflow: hidden;
+  background: var(--canvas);
+  border-radius: 99px;
+}
+
+.meter .fill {
+  height: 100%;
+  width: 0;
+  background: var(--danger);
+  border-radius: 99px;
+  transition: width 0.12s linear;
+}
+
+.bar {
+  margin-bottom: 14px;
+}
+
+.bar-track {
+  height: 8px;
+  overflow: hidden;
+  background: var(--canvas);
+  border-radius: 99px;
+}
+
+.bar-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  border-radius: 99px;
+  transition: width 0.3s ease;
+}
+
+.bar-label {
+  display: flex;
+  justify-content: space-between;
+  margin: 7px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.note {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+
+.note.bad {
+  color: var(--danger);
+}
+
+.note.good {
+  color: var(--ok);
+}
+
+.note:empty {
+  display: none;
+}
+
+.error {
+  padding: 9px 11px;
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border-radius: 8px;
+  white-space: pre-wrap;
+}
+
+footer {
+  margin-top: 16px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+footer p {
+  margin: 0;
+}
+
+kbd {
+  padding: 2px 6px;
+  font: inherit;
+  font-weight: 600;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+}
+
+.signed-in {
+  margin: 14px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}

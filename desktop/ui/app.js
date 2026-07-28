@@ -1,0 +1,228 @@
+// The window is a view of one thing: the status the Rust side emits. It never
+// keeps its own copy of what is happening, so a recording started by the
+// hotkey while this window was hidden shows up correctly the moment it opens.
+
+// Plain HTML with no bundler, so Tauri is reached through the global rather
+// than an npm import. That global exists because `withGlobalTauri` is on in
+// tauri.conf.json; without it this line is the first thing that breaks, and
+// the window renders as a blank rectangle.
+const invoke = window.__TAURI__.core.invoke;
+const listen = window.__TAURI__.event.listen;
+
+const $ = (id) => document.getElementById(id);
+const show = (id, on) => {
+  $(id).hidden = !on;
+};
+
+let status = null;
+let devices = { inputs: [], outputs: [] };
+/** Settings is a separate view rather than a state of the main one. */
+let showingSettings = false;
+
+const mmss = (s) =>
+  `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+
+function render() {
+  if (!status) return;
+
+  const signedIn = status.signed_in && status.omni_url;
+  show("setup", !signedIn);
+  show("settings", signedIn && showingSettings);
+  show("main", signedIn && !showingSettings);
+  if (!signedIn) {
+    // Being thrown back here mid-flow (an expired session, a recording that
+    // could not be uploaded) has to say why, and where the recording went.
+    $("setup-error").textContent = status.message || "";
+    $("setup-error").hidden = !status.message;
+    if (status.omni_url) $("url").value = status.omni_url;
+    if (status.username) $("username").value = status.username;
+    return;
+  }
+
+  const recording = status.phase === "recording";
+  const working = status.phase === "working";
+
+  $("headline").textContent = recording
+    ? "Recording"
+    : working
+      ? "Writing it up"
+      : status.phase === "done"
+        ? "Saved to Omni"
+        : status.phase === "error"
+          ? "Something went wrong"
+          : "Ready";
+
+  show("timer", recording);
+  show("meter", recording);
+  $("elapsed").textContent = mmss(status.seconds || 0);
+  // A meter that only moves in the top of its range reads as broken during
+  // speech, which sits low. Square-rooting it makes normal talking visible.
+  $("meter-fill").style.width = `${Math.round(Math.sqrt((status.level || 0) / 100) * 100)}%`;
+
+  show("progress", working);
+  $("progress-fill").style.width = `${status.percent || 0}%`;
+  $("progress-label").textContent = status.message || "Working";
+  $("progress-pct").textContent = `${status.percent || 0}%`;
+
+  const note = $("note");
+  note.className = "note";
+  if (status.phase === "error") {
+    note.textContent = status.message;
+    note.classList.add("bad");
+  } else if (status.phase === "done") {
+    note.textContent = status.message ? `“${status.message}”` : "";
+    note.classList.add("good");
+  } else if (recording) {
+    note.textContent = capturingLine();
+  } else if (working) {
+    note.textContent = "You can close this window. It keeps going in the tray.";
+  } else {
+    note.textContent = capturingLine();
+  }
+
+  const button = $("record");
+  button.textContent = recording ? "Stop and write it up" : "Start recording";
+  button.classList.toggle("stop", recording);
+  button.disabled = working;
+
+  show("open-meeting", Boolean(status.last_meeting));
+  $("hotkey-hint").textContent = status.hotkey;
+  $("who").textContent = status.username;
+}
+
+/** Say plainly what will and will not be captured — this is the setting that
+    silently costs you half a meeting when it is wrong. */
+function capturingLine() {
+  const parts = [];
+  if (status.capture_system) parts.push("what you hear");
+  if (status.capture_mic) parts.push("your microphone");
+  if (parts.length === 0) return "Nothing is selected to record. Open Settings.";
+  return `Capturing ${parts.join(" and ")}.`;
+}
+
+function fillDeviceSelects() {
+  const build = (select, list, chosen, defaultLabel) => {
+    select.innerHTML = "";
+    const auto = document.createElement("option");
+    auto.value = "";
+    const fallback = list.find((d) => d.is_default);
+    auto.textContent = fallback
+      ? `${defaultLabel} (${fallback.name})`
+      : defaultLabel;
+    select.append(auto);
+    for (const device of list) {
+      const option = document.createElement("option");
+      option.value = device.id;
+      option.textContent = device.name;
+      select.append(option);
+    }
+    select.value = list.some((d) => d.id === chosen) ? chosen : "";
+  };
+  build($("mic-device"), devices.inputs, status.mic_device_id, "Windows default");
+  build($("system-device"), devices.outputs, status.system_device_id, "Windows default");
+}
+
+async function openSettings() {
+  try {
+    devices = await invoke("list_audio_devices");
+  } catch (e) {
+    $("settings-error").textContent = String(e);
+    $("settings-error").hidden = false;
+  }
+  $("capture-mic").checked = status.capture_mic;
+  $("capture-system").checked = status.capture_system;
+  $("keep-audio").checked = status.keep_audio;
+  $("open-when-done").checked = status.open_when_done;
+  $("hotkey").value = status.hotkey;
+  fillDeviceSelects();
+  showingSettings = true;
+  render();
+}
+
+// --- wiring ----------------------------------------------------------------
+
+$("signin").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const button = $("signin-button");
+  const error = $("setup-error");
+  error.hidden = true;
+  button.disabled = true;
+  button.textContent = "Signing in…";
+  try {
+    await invoke("sign_in", {
+      omniUrl: $("url").value,
+      username: $("username").value,
+      password: $("password").value,
+    });
+    $("password").value = "";
+  } catch (e) {
+    error.textContent = String(e);
+    error.hidden = false;
+  } finally {
+    button.disabled = false;
+    button.textContent = "Sign in";
+  }
+});
+
+$("record").addEventListener("click", () => invoke("toggle_recording"));
+$("open-meeting").addEventListener("click", () => invoke("open_url", { url: status.last_meeting }));
+$("settings-open").addEventListener("click", openSettings);
+$("settings-close").addEventListener("click", () => {
+  showingSettings = false;
+  render();
+});
+
+$("settings-save").addEventListener("click", async () => {
+  const error = $("settings-error");
+  error.hidden = true;
+  try {
+    await invoke("save_settings", {
+      patch: {
+        mic_device_id: $("mic-device").value,
+        system_device_id: $("system-device").value,
+        capture_mic: $("capture-mic").checked,
+        capture_system: $("capture-system").checked,
+        keep_audio: $("keep-audio").checked,
+        open_when_done: $("open-when-done").checked,
+        hotkey: $("hotkey").value,
+      },
+    });
+    showingSettings = false;
+    render();
+  } catch (e) {
+    // Most often a shortcut another app already owns, which has to be said
+    // rather than silently left unregistered.
+    error.textContent = String(e);
+    error.hidden = false;
+  }
+});
+
+$("sign-out").addEventListener("click", async () => {
+  await invoke("sign_out");
+  showingSettings = false;
+});
+
+// Typing a shortcut is guesswork; capturing the keypress is not.
+$("hotkey").addEventListener("keydown", (e) => {
+  e.preventDefault();
+  const parts = [];
+  if (e.ctrlKey) parts.push("Ctrl");
+  if (e.altKey) parts.push("Alt");
+  if (e.shiftKey) parts.push("Shift");
+  if (e.metaKey) parts.push("Super");
+  const key = e.key;
+  if (!["Control", "Alt", "Shift", "Meta"].includes(key)) {
+    parts.push(key.length === 1 ? key.toUpperCase() : key);
+  }
+  if (parts.length) $("hotkey").value = parts.join("+");
+});
+
+listen("status", (event) => {
+  status = event.payload;
+  render();
+});
+
+invoke("get_status").then((s) => {
+  status = s;
+  render();
+});
