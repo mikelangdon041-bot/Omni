@@ -185,6 +185,39 @@ export default function WriterDocPage() {
           if (partial.audience!.length) filled.push("audience");
           else delete partial.audience;
         }
+        // The note is meant to be enough on its own, so what you asked for in
+        // prose also flips the switches it maps to. Only ever fills what you
+        // left alone, and every change is named in the banner so nothing moves
+        // behind your back.
+        if (!cur.context.actions.length && Array.isArray(ex.actions) && ex.actions.length) {
+          partial.actions = ex.actions.filter((a: string) => ACTION_CHIPS.includes(a));
+          if (partial.actions!.length) filled.push("what matters");
+          else delete partial.actions;
+        }
+        if (
+          cur.context.length === "as_is" &&
+          ex.length &&
+          ex.length !== "as_is" &&
+          LENGTHS.some((l) => l.key === ex.length)
+        ) {
+          partial.length = String(ex.length);
+          filled.push("length");
+        }
+        if (
+          cur.context.fidelity === "light" &&
+          ex.fidelity &&
+          ex.fidelity !== "light" &&
+          FIDELITY_OPTIONS.some((f) => f.key === ex.fidelity)
+        ) {
+          partial.fidelity = ex.fidelity as WriterContext["fidelity"];
+          filled.push(
+            FIDELITY_OPTIONS.find((f) => f.key === ex.fidelity)!.label.replace(/^\S+\s/, ""),
+          );
+        }
+        if (!cur.context.noGreeting && ex.noGreeting === true) {
+          partial.noGreeting = true;
+          filled.push("no greeting");
+        }
         const docPartial: Partial<WriterDoc> = {};
         if (Object.keys(partial).length)
           docPartial.context = { ...cur.context, ...partial };
@@ -633,6 +666,7 @@ export default function WriterDocPage() {
             icon={Palette}
             tint="bg-violet-100 text-violet-600"
             badge={toneStyleCount ? `${toneStyleCount} picked` : undefined}
+            revealWhen={toneStyleCount > 0}
           >
             <ChipGroup
               label="What matters here?"
@@ -670,6 +704,7 @@ export default function WriterDocPage() {
             icon={ListChecks}
             tint="bg-sky-100 text-sky-600"
             badge={detailCount ? `${detailCount} filled` : undefined}
+            revealWhen={detailCount > 0}
           >
             {(isEmail || doc.doc_type === "message") && (
               <Input

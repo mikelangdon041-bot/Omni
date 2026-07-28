@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { anthropic, WRITER_MODEL } from "@/lib/anthropic";
-import { AUDIENCE_CHIPS, TONE_CHIPS } from "@/lib/writer/types";
+import {
+  ACTION_CHIPS,
+  AUDIENCE_CHIPS,
+  FIDELITY_OPTIONS,
+  LENGTHS,
+  TONE_CHIPS,
+} from "@/lib/writer/types";
 import { stripEmDashes } from "@/lib/writer/sanitize";
 import { buildGeneratePrompt } from "@/lib/writer/prompt";
 
@@ -106,8 +112,33 @@ Be specific and quote short examples from the samples. Under 250 words. Return o
             type: "array" as const,
             items: { type: "string" as const, enum: AUDIENCE_CHIPS },
           },
+          actions: {
+            type: "array" as const,
+            items: { type: "string" as const, enum: ACTION_CHIPS },
+          },
+          length: {
+            type: "string" as const,
+            enum: LENGTHS.map((l) => l.key),
+          },
+          fidelity: {
+            type: "string" as const,
+            enum: FIDELITY_OPTIONS.map((f) => f.key),
+          },
+          noGreeting: { type: "boolean" as const },
         },
-        required: ["title", "recipient", "ask", "keyPoints", "background", "tone", "audience"],
+        required: [
+          "title",
+          "recipient",
+          "ask",
+          "keyPoints",
+          "background",
+          "tone",
+          "audience",
+          "actions",
+          "length",
+          "fidelity",
+          "noGreeting",
+        ],
         additionalProperties: false,
       };
 
@@ -115,7 +146,7 @@ Be specific and quote short examples from the samples. Under 250 words. Return o
         model: WRITER_MODEL,
         max_tokens: 2000,
         output_config: { format: { type: "json_schema", schema: EXTRACT_SCHEMA } },
-        system: `The user is drafting a ${docType} in a writing tool. They typed into one box — it may be a rough draft of their own, a pasted email or message they're responding to plus an instruction, or just a description of what they want. Extract structured intake details from it so the tool can file them into the right fields.
+        system: `The user is drafting a ${docType} in a writing tool. They typed into one box — it may be a rough draft of their own, a pasted email or message they're responding to plus an instruction, or just a description of what they want. Extract structured intake details from it so the tool can file them into the right fields and flip the right switches on their behalf.
 
 Rules:
 - Only extract what is clearly present or safely inferable. Use "" (or [] for arrays) when unsure — never guess or invent.
@@ -125,6 +156,11 @@ Rules:
 - keyPoints: points that must be included, one per line. Empty if none stated.
 - background: a compact summary of relevant context from pasted source material (who said what, dates, history). Empty if the brief has no source material.
 - tone / audience: pick ONLY from the allowed values, and only when the brief clearly implies them. Usually 0–2 picks.
+- Sentences the user addressed to YOU ("make it shorter", "this is going to my VP", "she hates long emails") outrank anything implied by the material they pasted. If they say who it is going to, that is the audience and the recipient, whatever the pasted draft is addressed to.
+- actions: the specific fixes they asked for, mapped onto the allowed values ("fix the spelling" → "Fix grammar & typos"; "cut it down" → "Tighten / shorten"; "make it less harsh" → "Softer / more diplomatic"). [] if they asked for nothing specific.
+- length: "shorter", "much_shorter" or "longer" ONLY if they asked about length ("cut it down" → shorter, "way too long, halve it" → much_shorter, "flesh it out" → longer). Otherwise "as_is".
+- fidelity: how much license they are giving you. "light" if they want a proofread or only the specific fixes they named (this is the safe default). "polish" if they want it improved but still theirs. "rewrite" only if they asked for a rewrite, or if there is no draft of theirs to preserve because they are describing something to write from scratch.
+- noGreeting: true only if they said not to open with a greeting ("no hi", "skip the pleasantries", "get straight to it"). Otherwise false.
 Return only the JSON.`,
         messages: [{ role: "user", content: `Brief:\n\n${brief}` }],
       });
@@ -182,7 +218,7 @@ Return only the JSON.`,
         .slice(0, variants)
         // The prompt asks for no em dashes; this guarantees it.
         .map((v: { subject?: unknown; html?: unknown }) => ({
-          subject: stripEmDashes(String(v?.subject || "")),
+          subject: stripEmDashes(String(v?.subject || ""), { asSubject: true }),
           html: stripEmDashes(String(v?.html || "")),
         }))
         .filter((v: { html: string }) => v.html.trim());

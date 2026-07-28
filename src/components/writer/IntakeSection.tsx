@@ -13,6 +13,7 @@ export function IntakeSection({
   tint,
   badge,
   defaultOpen = false,
+  revealWhen = false,
   children,
 }: {
   title: string;
@@ -22,14 +23,22 @@ export function IntakeSection({
   /** Small summary shown when there's something selected inside. */
   badge?: string;
   defaultOpen?: boolean;
+  /**
+   * Opens the section without waiting to be clicked — used when something in
+   * here was filled in automatically, so the picks are visible rather than
+   * hidden behind a chevron. A click still wins either way.
+   */
+  revealWhen?: boolean;
   children: React.ReactNode;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const [override, setOverride] = useState<boolean | null>(null);
+  const open = override ?? (defaultOpen || revealWhen);
+  const setOpen = (next: boolean) => setOverride(next);
   return (
     <section className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => setOpen(!open)}
         className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left transition hover:bg-canvas/60"
       >
         <span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-lg", tint)}>
