@@ -94,6 +94,7 @@ export function DebriefTab({
   // can appear next to it.
   const [pick, setPick] = useState<{ text: string; top: number; left: number } | null>(null);
   const [emphasizeNotes, setEmphasizeNotes] = useState(true);
+  const [pct, setPct] = useState(0);
   const notesRef = useRef<HTMLDivElement>(null);
 
   const debrief = m.debrief || {};
@@ -153,6 +154,16 @@ export function DebriefTab({
     // being glued onto the front of the transcript as more transcript.
     if (!source && !notesText) return;
     setBusy(true);
+    setPct(0);
+    // The model reports no progress, so this is an estimate paced off how much
+    // text it has to read. It eases toward 95% and only reaches 100 when the
+    // notes actually land — it never claims to be done before it is.
+    const expectedMs = Math.min(120_000, 15_000 + (source.length + notesText.length) * 3);
+    const startedAt = Date.now();
+    const ticker = setInterval(() => {
+      const elapsed = Date.now() - startedAt;
+      setPct(Math.min(95, Math.round((1 - Math.exp(-elapsed / (expectedMs / 2.5))) * 95)));
+    }, 250);
     try {
       const res = await fetch("/api/meeting/ai", {
         method: "POST",
@@ -193,9 +204,11 @@ export function DebriefTab({
           })),
         },
       });
+      setPct(100);
     } catch (e) {
       toast("error", (e as Error).message);
     } finally {
+      clearInterval(ticker);
       setBusy(false);
     }
   }
@@ -446,6 +459,26 @@ export function DebriefTab({
             {/* One document, not a stack of cards: these get pasted whole
                 into OneNote, and separate blocks can't be. Top-level bullets
                 are the topics; everything nests beneath them. */}
+            {busy && (
+              <div className="mb-3 rounded-lg border border-border bg-canvas p-4">
+                <div className="flex items-center gap-3">
+                  <p className="flex flex-1 items-center gap-2 text-sm font-medium">
+                    <Sparkles size={15} className="animate-pulse text-[var(--accent)]" />
+                    Rewriting your notes
+                  </p>
+                  <span className="shrink-0 font-mono text-sm font-semibold tabular-nums text-[var(--accent)]">
+                    {pct}%
+                  </span>
+                </div>
+                <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-surface">
+                  <div
+                    className="h-full rounded-full bg-[var(--accent)] transition-all duration-300"
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
             <div
               ref={notesRef}
               className="relative"
@@ -636,6 +669,16 @@ export function DebriefTab({
                 </span>
               </span>
             </label>
+          )}
+
+          {detected.length <= 1 && (
+            <p className="rounded-lg bg-canvas p-3 text-xs text-muted">
+              This transcript has no speaker labels, so there is nobody to name
+              here — it was transcribed as one stream and the notes will stay
+              impersonal rather than guess who said what. Recordings made from
+              now on separate the voices. To put a real name on something like
+              &ldquo;the manager&rdquo;, select it in the notes and use Rename.
+            </p>
           )}
 
           {detected.length > 1 && (
