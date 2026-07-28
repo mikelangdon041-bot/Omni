@@ -13,8 +13,11 @@ import {
   FileAudio,
   ListTodo,
   MapPin,
+  Mail,
   MessageSquareText,
+  Minimize2,
   Replace,
+  Undo2,
   Sparkles,
   Trash2,
 } from "lucide-react";
@@ -31,6 +34,7 @@ import {
   renameInText,
 } from "@/lib/meetingprep/rename";
 import { useConfirm, useToast } from "@/components/ui/Feedback";
+import { useSessionProfile } from "@/lib/session";
 import { TranscriptCapture } from "@/components/studio/TranscriptCapture";
 import { useKolLite } from "./KolLink";
 import { logMeetingToTerritory } from "@/lib/meetingprep/territoryLog";
@@ -82,6 +86,7 @@ export function DebriefTab({
 }) {
   const toast = useToast();
   const confirm = useConfirm();
+  const { profile } = useSessionProfile();
   const kol = useKolLite(m.kol_id);
   const [busy, setBusy] = useState(false);
   const [redoOpen, setRedoOpen] = useState(false);
@@ -95,6 +100,14 @@ export function DebriefTab({
   const [pick, setPick] = useState<{ text: string; top: number; left: number } | null>(null);
   const [emphasizeNotes, setEmphasizeNotes] = useState(true);
   const [pct, setPct] = useState(0);
+  const [pickLi, setPickLi] = useState<HTMLLIElement | null>(null);
+  const [simplifying, setSimplifying] = useState(false);
+  const [undoNotes, setUndoNotes] = useState<string | null>(null);
+  const [mailOpen, setMailOpen] = useState(false);
+  const [mailBusy, setMailBusy] = useState(false);
+  const [mailSubject, setMailSubject] = useState("");
+  const [mailBody, setMailBody] = useState("");
+  const [mailCopied, setMailCopied] = useState(false);
   const notesRef = useRef<HTMLDivElement>(null);
 
   const debrief = m.debrief || {};
@@ -267,16 +280,73 @@ export function DebriefTab({
   function onNotesSelect() {
     const sel = window.getSelection();
     const el = notesRef.current;
-    if (!sel || sel.isCollapsed || !el || !sel.rangeCount) return setPick(null);
-    const text = sel.toString().trim();
-    if (!text || text.length > 60 || !el.contains(sel.anchorNode)) return setPick(null);
-    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    if (!sel || !el || !sel.rangeCount || !el.contains(sel.anchorNode)) {
+      setPick(null);
+      setPickLi(null);
+      return;
+    }
+    const li = enclosingLi();
+    setPickLi(li);
+
+    const text = sel.isCollapsed ? "" : sel.toString().trim();
+    const anchor = sel.isCollapsed ? li : null;
+    const rect = text
+      ? sel.getRangeAt(0).getBoundingClientRect()
+      : anchor?.getBoundingClientRect();
+    if (!rect || (!text && !li)) return setPick(null);
+
     const box = el.getBoundingClientRect();
     setPick({
-      text,
+      text: text && text.length <= 60 ? text : "",
       top: rect.top - box.top - 38,
       left: Math.max(0, rect.left - box.left),
     });
+  }
+
+  // The <li> the caret or selection currently sits in, plus its nesting depth.
+  // Simplifying works on a whole bullet and everything under it, which is the
+  // unit people actually think in.
+  function enclosingLi(): HTMLLIElement | null {
+    const sel = window.getSelection();
+    const root = notesRef.current;
+    if (!sel?.anchorNode || !root || !root.contains(sel.anchorNode)) return null;
+    let node: Node | null = sel.anchorNode;
+    while (node && node !== root) {
+      if (node instanceof HTMLLIElement) return node;
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  // Condense one bullet in place. The rest of the notes are untouched, and the
+  // previous version is kept so a too-aggressive trim can be put back.
+  async function simplifyBullet() {
+    const li = pickLi;
+    const editable = notesRef.current?.querySelector<HTMLElement>('[contenteditable="true"]');
+    if (!li || !editable) return;
+    setPick(null);
+    setSimplifying(true);
+    try {
+      const res = await fetch("/api/meeting/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ action: "simplify", fragment: li.outerHTML }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Could not simplify that point");
+      const fragment = String(json.fragment || "").trim();
+      if (!/^<li[\s>]/i.test(fragment)) throw new Error("Could not simplify that point");
+
+      setUndoNotes(notesHtml);
+      li.outerHTML = fragment;
+      save({ debrief: { ...debrief, notesHtml: editable.innerHTML } });
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setSimplifying(false);
+      setPickLi(null);
+    }
   }
 
   function openRenameFor(text: string) {
@@ -310,6 +380,61 @@ export function DebriefTab({
     setFindWhat("");
     setFindWith("");
     toast("success", `"${what}" is now "${to}" throughout.`);
+  }
+
+  // --- recap email --------------------------------------------------------
+  // Drafted from the notes that already exist, so it stays consistent with
+  // what was agreed rather than being a second, divergent summary.
+  async function draftRecap() {
+    setMailBusy(true);
+    try {
+      const res = await fetch("/api/meeting/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          action: "recap_email",
+          notes: notesHtml,
+          actions: actions.filter((a) => a.selected !== false).map((a) => a.text),
+          title: m.title,
+          when: m.date ? new Date(m.date).toLocaleDateString() : "",
+          sender: profile?.displayName || "",
+          recipients: (m.attendees || []).map((a) => a.name).filter(Boolean),
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Could not draft the email");
+      setMailSubject(json.subject || m.title || "Meeting recap");
+      setMailBody(json.body || "");
+    } catch (e) {
+      toast("error", (e as Error).message);
+      setMailOpen(false);
+    } finally {
+      setMailBusy(false);
+    }
+  }
+
+  async function copyMail() {
+    await navigator.clipboard
+      .writeText(`${mailSubject}\n\n${mailBody}`)
+      .catch(() => {});
+    setMailCopied(true);
+    setTimeout(() => setMailCopied(false), 1800);
+  }
+
+  function openMail(where: "outlook" | "gmail" | "default") {
+    // Attendees are stored by name only, so the recipient line is left for
+    // the user to fill in wherever they compose.
+    const to = "";
+    const s = encodeURIComponent(mailSubject);
+    const b = encodeURIComponent(mailBody);
+    const url =
+      where === "gmail"
+        ? `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(to)}&su=${s}&body=${b}`
+        : where === "outlook"
+          ? `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(to)}&subject=${s}&body=${b}`
+          : `mailto:${to}?subject=${s}&body=${b}`;
+    window.open(url, where === "default" ? "_self" : "_blank", "noopener");
   }
 
   // Adds the follow-ups at `indexes` to the global to-do list, skipping any
@@ -434,6 +559,28 @@ export function DebriefTab({
               </h2>
               <div className="flex items-center gap-3">
                 <span className="text-[11px] text-muted">Edits save automatically</span>
+                {undoNotes !== null && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => {
+                      save({ debrief: { ...debrief, notesHtml: undoNotes } });
+                      setUndoNotes(null);
+                    }}
+                  >
+                    <Undo2 size={14} /> Undo shorten
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    setMailOpen(true);
+                    void draftRecap();
+                  }}
+                >
+                  <Mail size={14} /> Email recap
+                </Button>
                 <Button size="sm" variant="secondary" onClick={() => setFindOpen(true)}>
                   <Replace size={14} /> Rename
                 </Button>
@@ -485,17 +632,34 @@ export function DebriefTab({
               onMouseUp={onNotesSelect}
               onKeyUp={onNotesSelect}
             >
-              {pick && (
-                <button
-                  type="button"
+              {pick && (pick.text || pickLi) && (
+                <div
                   onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => openRenameFor(pick.text)}
                   style={{ top: pick.top, left: pick.left }}
-                  className="absolute z-20 flex items-center gap-1 rounded-lg border border-border bg-surface px-2 py-1 text-xs font-medium shadow-lg"
+                  className="absolute z-20 flex items-center gap-1 rounded-lg border border-border bg-surface p-1 shadow-lg"
                 >
-                  <Replace size={12} /> Rename &ldquo;{pick.text.slice(0, 24)}
-                  {pick.text.length > 24 ? "…" : ""}&rdquo;
-                </button>
+                  {pick.text && (
+                    <button
+                      type="button"
+                      onClick={() => openRenameFor(pick.text)}
+                      className="flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition hover:bg-canvas"
+                    >
+                      <Replace size={12} /> Rename &ldquo;{pick.text.slice(0, 20)}
+                      {pick.text.length > 20 ? "…" : ""}&rdquo;
+                    </button>
+                  )}
+                  {pickLi && (
+                    <button
+                      type="button"
+                      disabled={simplifying}
+                      onClick={() => void simplifyBullet()}
+                      className="flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition hover:bg-canvas disabled:opacity-60"
+                      title="Shorten this bullet and everything under it"
+                    >
+                      <Minimize2 size={12} /> {simplifying ? "Shortening…" : "Too detailed"}
+                    </button>
+                  )}
+                </div>
               )}
               <RichText
                 value={notesHtml}
@@ -571,6 +735,60 @@ export function DebriefTab({
           </section>
         </>
       )}
+
+      <Modal
+        open={mailOpen}
+        onClose={() => setMailOpen(false)}
+        title="Email recap"
+        size="lg"
+      >
+        <div className="space-y-3">
+          {mailBusy ? (
+            <p className="flex items-center gap-2 py-8 text-sm text-muted">
+              <Sparkles size={15} className="animate-pulse text-[var(--accent)]" />
+              Drafting the recap…
+            </p>
+          ) : (
+            <>
+              <p className="text-sm text-muted">
+                The note people send round afterwards so everyone has the same
+                understanding of what was agreed. Edit it before you send.
+              </p>
+              <Input
+                label="Subject"
+                value={mailSubject}
+                onChange={(e) => setMailSubject(e.target.value)}
+              />
+              <Textarea
+                label="Message"
+                value={mailBody}
+                onChange={(e) => setMailBody(e.target.value)}
+                className="min-h-72 text-sm"
+              />
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Button variant="secondary" size="sm" onClick={() => void copyMail()}>
+                  <Copy size={14} /> {mailCopied ? "Copied" : "Copy"}
+                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="secondary" size="sm" onClick={() => openMail("outlook")}>
+                    Open in Outlook
+                  </Button>
+                  <Button variant="secondary" size="sm" onClick={() => openMail("gmail")}>
+                    Open in Gmail
+                  </Button>
+                  <Button size="sm" onClick={() => openMail("default")}>
+                    <Mail size={14} /> Mail app
+                  </Button>
+                </div>
+              </div>
+              <p className="text-[11px] text-muted">
+                Long recaps can exceed what a compose link will carry. If the
+                message opens truncated, use Copy and paste it in.
+              </p>
+            </>
+          )}
+        </div>
+      </Modal>
 
       <Modal
         open={findOpen}

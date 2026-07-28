@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { anthropic, WRITER_MODEL } from "@/lib/anthropic";
+import { anthropic, QUICK_MODEL, WRITER_MODEL } from "@/lib/anthropic";
 import { stripHtml } from "@/lib/territory/utils";
 
 export const runtime = "nodejs";
@@ -120,6 +120,20 @@ async function kolBlockFor(
 // Formatting rule shared by every action that writes brief content — Claude's
 // default house style leans on bold labels and headers; this app renders
 // content as plain prose in a document, not a chat bubble.
+const NO_DASH_RULE =
+  "Never use an em dash or an en dash. Not to join clauses, not as an aside, not before a list. Use a comma, a semicolon, a colon or a full stop instead. Hyphens inside compound words (tier-one, endo-first, one-on-one) are fine.";
+
+// The prompt rule catches most of it; this catches the rest. A dash used as
+// punctuation becomes a comma; hyphens inside compound words (tier-one,
+// one-on-one) are left alone because they are not the problem.
+function stripDashes(text: string): string {
+  return text
+    .replace(/ ?[—–] ?/g, ", ")
+    .replace(/,\s*,/g, ",")
+    .replace(/,\s*([.;:!?])/g, "$1")
+    .replace(/,\s*(<\/li>|<ul>|<\/ul>|<ol>)/gi, "$1");
+}
+
 const NO_FORMATTING_RULE =
   "Plain prose. No bold, no markdown, no headers, no emoji. Use <b> only mid-sentence for a genuinely critical word or number, never to label a whole line or start a bullet. Write like a person handing over notes, not like an AI assistant's answer.";
 
@@ -222,6 +236,16 @@ const DEBRIEF_SCHEMA = {
 // A captured recording has no meeting row to take its name from, and its
 // notes are split into sections rather than one blob — each section becomes
 // an independently editable, deletable rich-text block in the UI.
+const EMAIL_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    subject: { type: "string" as const },
+    body: { type: "string" as const },
+  },
+  required: ["subject", "body"],
+  additionalProperties: false,
+};
+
 const CAPTURE_SCHEMA = {
   type: "object" as const,
   properties: {
@@ -507,6 +531,7 @@ Attribution, which matters and is easy to get wrong:
   - Top level: one <li> per topic, in the order topics came up, 3-7 of them; no "Introduction" / "Discussion" / "Conclusion" filler. The topic bullet is itself a complete statement of what that topic came to — it is not a heading and it is not a label. It must NOT end in a dash, colon, ellipsis or any other trailing punctuation waiting for the nested bullets to finish the thought; it has to stand on its own if the nested list under it were deleted.
   - Nested <ul> inside each topic for the substance, 2-3 levels deep. Complete sentences. Preserve names, figures, product names and dates exactly as spoken. Never invent anything that wasn't said.
   - It must read as one document someone can paste straight into OneNote or Word and have it keep its shape.
+  - ${NO_DASH_RULE}
 
 WRITE NOTES, NOT A RETELLING. This is the difference between useful and useless, so weigh it heavily.
 
@@ -569,13 +594,99 @@ THE WRITER'S OWN NOTES are background context. Use them to understand the meetin
       const parsed = JSON.parse(firstText(res) || "{}");
       return NextResponse.json({
         title: String(parsed.title || "").slice(0, 200),
-        notes: String(parsed.notes || ""),
-        actions: (Array.isArray(parsed.actions) ? parsed.actions : []).map(String),
+        notes: stripDashes(String(parsed.notes || "")),
+        actions: (Array.isArray(parsed.actions) ? parsed.actions : []).map((a: unknown) =>
+          stripDashes(String(a)),
+        ),
         smallTalk: {
           found: Boolean(parsed.smallTalk?.found),
           description: String(parsed.smallTalk?.description || ""),
           firstSubstantiveLine: String(parsed.smallTalk?.firstSubstantiveLine || ""),
         },
+      });
+    }
+
+    // Condense one bullet (and whatever is nested under it) without touching
+    // the rest of the notes. A cheap rewrite of text that already exists, so
+    // it runs on the quick model rather than the writer.
+    if (action === "simplify") {
+      const fragment = String(body?.fragment || "").slice(0, 20000);
+      if (!fragment.trim())
+        return NextResponse.json({ error: "Nothing to simplify" }, { status: 400 });
+      const res = await anthropic().messages.create({
+        model: QUICK_MODEL,
+        max_tokens: 2000,
+        system: `You shorten one bullet from a set of meeting notes. You are given a single <li> and everything nested inside it. Return the same <li>, condensed.
+
+- Return ONLY the rewritten <li>...</li>. No commentary, no wrapper <ul>, no markdown, no explanation.
+- Keep the same HTML vocabulary: <li>, nested <ul>, <b>, <i>. Nothing else.
+- Cut roughly half. Collapse sub-bullets that restate or elaborate the same point into the parent. Two or three tightly-worded children beat six thin ones, and a bullet with one child usually reads better as a single sentence.
+- Keep every name, figure, date, product and decision. Losing a fact is a failure; losing a qualifier, a hedge or a restatement is the point.
+- Do not add anything that is not already in the fragment.
+- Never open with a person or pronoun followed by a verb of speaking or thinking (said, noted, stated, clarified, flagged, felt...). State what is true, decided or open.
+- ${NO_DASH_RULE}`,
+        messages: [{ role: "user", content: fragment }],
+      });
+      return NextResponse.json({ fragment: stripDashes(firstText(res)) });
+    }
+
+    // Draft the "here's what we agreed" email people send after a meeting.
+    if (action === "recap_email") {
+      const notes = String(body?.notes || "").slice(0, 40000);
+      const acts: string[] = Array.isArray(body?.actions)
+        ? body.actions.map(String).slice(0, 40)
+        : [];
+      if (!notes.trim() && acts.length === 0)
+        return NextResponse.json({ error: "Nothing to write about" }, { status: 400 });
+
+      const meetingTitle = String(body?.title || "").slice(0, 200);
+      const when = String(body?.when || "").slice(0, 60);
+      const sender = String(body?.sender || "").slice(0, 80);
+      const recipients = Array.isArray(body?.recipients)
+        ? body.recipients.map(String).slice(0, 20)
+        : [];
+
+      const res = await anthropic().messages.create({
+        model: QUICK_MODEL,
+        max_tokens: 3000,
+        output_config: { format: { type: "json_schema", schema: EMAIL_SCHEMA } },
+        system: `You write the short recap email someone sends after a meeting so everyone has the same understanding of what was agreed. Plain, professional, warm without being effusive.
+
+Shape it exactly like this:
+- One line thanking them for the time, naming the meeting or its subject.
+- One short line framing the summary ("Here's a quick recap of what we covered and what happens next" or similar). Vary it; don't use the same sentence every time.
+- The substance as plain-text bullets, each starting "- ". Keep them tight; this is an email, not the full notes. Merge or drop detail that does not matter to the recipients.
+- If there are follow-ups, a short "Next steps" block, each line naming the owner where it is known.
+- A closing line inviting corrections, which is the real reason people send this: "If I've missed or misstated anything, let me know."
+- Sign off with the sender's name.
+
+Rules:
+- body is PLAIN TEXT, not HTML. Blank lines between blocks. No markdown, no bold, no headers, no emoji.
+- Write it as the sender, in the first person.
+- Only include what is in the notes and follow-ups. Never invent an agreement, a deadline or an owner.
+- Where the notes record something as unresolved, say it is still open rather than implying it was settled.
+- subject: short and specific, no "Re:", no quotes. Name the meeting and the date if known.
+- ${NO_DASH_RULE}`,
+        messages: [
+          {
+            role: "user",
+            content: [
+              meetingTitle && `Meeting: ${meetingTitle}`,
+              when && `When: ${when}`,
+              sender && `Sender (write as this person): ${sender}`,
+              recipients.length && `Recipients: ${recipients.join(", ")}`,
+              `Notes:\n${notes}`,
+              acts.length && `Follow-ups:\n${acts.map((a) => `- ${a}`).join("\n")}`,
+            ]
+              .filter(Boolean)
+              .join("\n\n"),
+          },
+        ],
+      });
+      const parsed = JSON.parse(firstText(res) || "{}");
+      return NextResponse.json({
+        subject: stripDashes(String(parsed.subject || "")),
+        body: stripDashes(String(parsed.body || "")),
       });
     }
 

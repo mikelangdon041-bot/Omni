@@ -18,3 +18,8 @@ export const WRITER_MODEL = process.env.ANTHROPIC_WRITER_MODEL || "claude-opus-4
 // ("`temperature` is deprecated for this model"), not a warning — every
 // Meeting Prep AI action silently failed this way until 2026-07-26. Steer
 // output with the prompt, or with `output_config: { effort }`, instead.
+
+// Cheap, fast model for the small transformations that don't need the writer
+// model: condensing a bullet, drafting a recap email from notes that already
+// exist. Both are rewrites of text we already have, not fresh reasoning.
+export const QUICK_MODEL = process.env.ANTHROPIC_QUICK_MODEL || "claude-haiku-4-5";
