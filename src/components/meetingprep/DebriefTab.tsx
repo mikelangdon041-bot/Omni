@@ -364,10 +364,25 @@ export function DebriefTab({
     const to = findWith.trim();
     if (!what || !to) return;
 
+    // Every place a name lives, not just the notes. Missing one leaves the
+    // meeting half-renamed, which reads worse than not renaming at all.
+    const typedNotes: Record<string, string> = {};
+    for (const [k, v] of Object.entries(notes)) {
+      typedNotes[k] = renameInText(String(v || ""), what, to);
+    }
+
     save({
+      title: renameInText(m.title || "", what, to),
+      attendees: (m.attendees || []).map((a) => ({
+        ...a,
+        name: renameInText(a.name || "", what, to),
+        role: renameInText(a.role || "", what, to),
+        notes: renameInText(a.notes || "", what, to),
+      })),
       debrief: {
         ...debrief,
         notesHtml: renameInHtml(notesHtml, what, to),
+        notes: typedNotes,
         actions: actions.map((a) => ({ ...a, text: renameInText(a.text, what, to) })),
         ...(debrief.transcript
           ? { transcript: renameInText(debrief.transcript, what, to) }
@@ -376,6 +391,12 @@ export function DebriefTab({
         nameMap: { ...(debrief.nameMap || {}), [what]: to },
       },
     });
+
+    // A drafted email is on screen and saved nowhere, so it has to be renamed
+    // in place or it silently keeps the old name.
+    setMailSubject((v) => renameInText(v, what, to));
+    setMailBody((v) => renameInText(v, what, to));
+
     setFindOpen(false);
     setFindWhat("");
     setFindWith("");

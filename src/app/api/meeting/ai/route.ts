@@ -120,6 +120,55 @@ async function kolBlockFor(
 // Formatting rule shared by every action that writes brief content — Claude's
 // default house style leans on bold labels and headers; this app renders
 // content as plain prose in a document, not a chat bubble.
+// Every attributed position has to be traceable to words actually spoken.
+// The model is asked for a verbatim quote; this checks the quote is really in
+// the transcript rather than taking its word for it. Anything unverifiable is
+// a fabricated attribution, which is the failure mode worth catching: it reads
+// authoritative and puts a view in the wrong person's mouth.
+function normalizeForMatch(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[^a-z0-9' ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+interface Position {
+  speaker: string;
+  position: string;
+  quote: string;
+}
+
+function verifyPositions(
+  raw: unknown,
+  transcript: string,
+): { grounded: Position[]; dropped: number } {
+  const haystack = normalizeForMatch(transcript);
+  const grounded: Position[] = [];
+  let dropped = 0;
+  for (const item of Array.isArray(raw) ? raw : []) {
+    const p = item as Partial<Position>;
+    const quote = normalizeForMatch(String(p?.quote || ""));
+    // Too short to be evidence of anything.
+    if (quote.split(" ").length < 4) {
+      dropped += 1;
+      continue;
+    }
+    if (!haystack.includes(quote)) {
+      dropped += 1;
+      continue;
+    }
+    grounded.push({
+      speaker: String(p?.speaker || ""),
+      position: String(p?.position || ""),
+      quote: String(p?.quote || ""),
+    });
+  }
+  return { grounded, dropped };
+}
+
 const NO_DASH_RULE =
   "Never use an em dash or an en dash. Not to join clauses, not as an aside, not before a list. Use a comma, a semicolon, a colon or a full stop instead. Hyphens inside compound words (tier-one, endo-first, one-on-one) are fine.";
 
@@ -249,6 +298,22 @@ const EMAIL_SCHEMA = {
 const CAPTURE_SCHEMA = {
   type: "object" as const,
   properties: {
+    // Generated before the notes on purpose. Each attribution has to be tied
+    // to a verbatim quote first, which is what stops two speakers' views
+    // being merged or a concern landing on whoever answered it.
+    positions: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: {
+          speaker: { type: "string" as const },
+          position: { type: "string" as const },
+          quote: { type: "string" as const },
+        },
+        required: ["speaker", "position", "quote"],
+        additionalProperties: false,
+      },
+    },
     title: { type: "string" as const },
     // One document, not a set of cards. The notes get pasted wholesale into
     // OneNote and the like, so they have to be a single nested list rather
@@ -269,7 +334,7 @@ const CAPTURE_SCHEMA = {
       additionalProperties: false,
     },
   },
-  required: ["title", "notes", "actions", "smallTalk"],
+  required: ["positions", "title", "notes", "actions", "smallTalk"],
   additionalProperties: false,
 };
 
@@ -533,6 +598,17 @@ Attribution, which matters and is easy to get wrong:
   - It must read as one document someone can paste straight into OneNote or Word and have it keep its shape.
   - ${NO_DASH_RULE}
 
+FIRST, before writing anything else, fill "positions". This is a grounding step and it exists for a specific reason: when notes are written straight from a conversation, attribution drifts. Two people's views get merged into one, or a concern gets pinned on the person who answered it rather than the person who raised it. Forcing every attribution back to the exact words first is what stops that.
+
+For each distinct stance, concern, decision or commitment in the transcript, record:
+- speaker: the label EXACTLY as it appears in the transcript ("Speaker A", "Dr. Chen"). If the transcript carries no speaker labels at all, use an empty string and do not guess.
+- position: what that person holds or committed to, in one sentence.
+- quote: 6 to 20 words copied VERBATIM from that speaker's own line, character for character, so it can be found in the transcript by exact string search. Do not paraphrase, do not tidy the grammar, do not stitch together words from two different lines. If you cannot produce a verbatim quote for a position, do not record that position at all.
+
+Record both sides of every disagreement as separate positions. If the same person says something twice, record it once.
+
+THEN write "notes" using only what you recorded. Every attribution in the notes must correspond to a position you recorded, and to that position's speaker. A point you could not ground goes in the notes with no attribution rather than being guessed at. Never merge two speakers' positions into one bullet, and never move a concern from the person who raised it to the person who responded.
+
 WRITE NOTES, NOT A RETELLING. This is the difference between useful and useless, so weigh it heavily.
 
 THE BANNED SENTENCE SHAPE: a bullet must never open with a person, role or pronoun followed by a verb of speaking, thinking or feeling. Not "I", not "Shrey", not "the manager", not "they". The banned verbs include said, told, explained, noted, stated, clarified, affirmed, confirmed, flagged, raised, mentioned, added, responded, replied, asked, acknowledged, committed, understood, felt, thought, believed, emphasised, pointed out, indicated, reported, expressed, suggested, argued, pushed back, wanted, offered, agreed, disagreed. Swapping one of these verbs for another one is NOT a fix — the shape is the problem, not the word. "I clarified…" is exactly as wrong as "I said…".
@@ -548,6 +624,8 @@ Write what is now true, decided, or open — not who uttered it:
   GOOD: "The territory review is for orientation — colour and background a list cannot give, plus who the key people are. Explicitly not a performance review."
   BAD:  "I committed to following up with team members."
   GOOD: nothing — a commitment is not a note. It belongs in actions.
+
+Most bullets need no attribution at all. Add the bracketed name only where a reader would act differently for knowing who holds the view: a contested position, an unresolved disagreement, a commitment someone owns. Shared context, agreed facts and background carry no name. If more than about a third of your bullets end in a name, you are over-attributing and should strip the ones that do not change what the reader does.
 
 Attribution, when it genuinely matters — a contested position, an unresolved disagreement, a view the reader must respond to — goes in brackets at the end of the sentence, never as the verb: "Endo-first guidance stands (Shrey had read earlier feedback as a steer toward tier-one cardiology)."
 
@@ -592,7 +670,13 @@ THE WRITER'S OWN NOTES are background context. Use them to understand the meetin
           { status: 502 },
         );
       const parsed = JSON.parse(firstText(res) || "{}");
+      // Quotes that aren't in the transcript mean the attribution was
+      // invented. Surfaced so the client can say the notes are unattributed
+      // rather than silently presenting a guess as fact.
+      const { grounded, dropped } = verifyPositions(parsed.positions, transcript);
       return NextResponse.json({
+        positions: grounded,
+        ungrounded: dropped,
         title: String(parsed.title || "").slice(0, 200),
         notes: stripDashes(String(parsed.notes || "")),
         actions: (Array.isArray(parsed.actions) ? parsed.actions : []).map((a: unknown) =>
@@ -655,8 +739,8 @@ THE WRITER'S OWN NOTES are background context. Use them to understand the meetin
 Shape it exactly like this:
 - One line thanking them for the time, naming the meeting or its subject.
 - One short line framing the summary ("Here's a quick recap of what we covered and what happens next" or similar). Vary it; don't use the same sentence every time.
-- The substance as plain-text bullets, each starting "- ". Keep them tight; this is an email, not the full notes. Merge or drop detail that does not matter to the recipients.
-- If there are follow-ups, a short "Next steps" block, each line naming the owner where it is known.
+- The substance as plain-text bullets, each starting with a bullet character and a space: "• ". Never a hyphen or a dash. Indent a sub-point with two spaces then "◦ ". Keep them tight; this is an email, not the full notes. Merge or drop detail that does not matter to the recipients.
+- If there are follow-ups, a short "Next steps" block, each line also starting "• " and naming the owner where it is known.
 - A closing line inviting corrections, which is the real reason people send this: "If I've missed or misstated anything, let me know."
 - Sign off with the sender's name.
 
@@ -686,7 +770,12 @@ Rules:
       const parsed = JSON.parse(firstText(res) || "{}");
       return NextResponse.json({
         subject: stripDashes(String(parsed.subject || "")),
-        body: stripDashes(String(parsed.body || "")),
+        // Backstop for the bullet character: models default to "- " however
+        // firmly the prompt says otherwise.
+        body: stripDashes(String(parsed.body || ""))
+          .replace(/^(\s*)[-*]\s+/gm, (_m, indent) =>
+            indent.length >= 2 ? `${indent}◦ ` : "• ",
+          ),
       });
     }
 
