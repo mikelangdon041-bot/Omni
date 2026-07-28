@@ -6,3 +6,7 @@
 # directory of that name at any depth, which silently swallowed
 # src/app/api/desktop and 404'd the endpoint the recorder signs in through.
 /desktop
+
+# The recorder's installer, kept at the top of the repo so it is easy to find
+# and easy to hand to a machine. It is not part of the site.
+Install Omni Recorder.exe

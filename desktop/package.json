@@ -5,7 +5,7 @@
   "description": "Omni Recorder — Windows tray app that records a meeting and sends it to Omni.",
   "scripts": {
     "dev": "tauri dev",
-    "build": "tauri build",
+    "build": "tauri build && node scripts/copy-installer.mjs",
     "tauri": "tauri"
   },
   "devDependencies": {

@@ -86,9 +86,15 @@ Needs the Rust toolchain and the MSVC C++ build tools.
 
 ```powershell
 npm install
-npx tauri build      # installer at src-tauri/target/release/bundle/nsis/
+npm run build        # builds, then copies the installer to the repo root
 npx tauri dev        # run against the ui/ folder directly
 ```
+
+`npm run build` leaves the installer at **`omni/Install Omni Recorder.exe`**,
+because the place Tauri puts it — five directories down in the build tree,
+under a name with a version and an architecture in it — is not somewhere
+anyone would look. That copy is committed, so the current installer is always
+one click away in the repo.
 
 The app is **not code signed**, so SmartScreen will warn on first run:
 *More info → Run anyway*. Signing it would need a certificate; it does not need
@@ -112,7 +118,7 @@ deployment: sign in, upload, transcribe, notes, meeting.
 
 ## Layout
 
-```
+```text
 ui/                  the window: one static page, no framework, no build step
 src-tauri/src/
   lib.rs             tray, hotkey, state machine, Tauri commands
