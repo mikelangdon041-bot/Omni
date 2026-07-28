@@ -37,6 +37,7 @@ import { useConfirm, useToast } from "@/components/ui/Feedback";
 import { useSessionProfile } from "@/lib/session";
 import { TranscriptCapture } from "@/components/studio/TranscriptCapture";
 import { useKolLite } from "./KolLink";
+import { MentionedPeople } from "./MentionedPeople";
 import { logMeetingToTerritory } from "@/lib/meetingprep/territoryLog";
 import {
   DEBRIEF_QUESTIONS,
@@ -57,8 +58,6 @@ function toLocalInput(iso: string | null): string {
 // Pull the speaker labels out of a stored transcript ("Speaker A:", "Dr. Chen:").
 // A label is a short prefix before a colon that opens several lines — one line
 // starting "Note:" is not a speaker.
-// Escape a user-typed string so it can be used as a literal in a RegExp.
-const escapeRx = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 function detectSpeakers(transcript: string): string[] {
   const counts = new Map<string, number>();
@@ -108,6 +107,8 @@ export function DebriefTab({
   const [mailSubject, setMailSubject] = useState("");
   const [mailBody, setMailBody] = useState("");
   const [mailCopied, setMailCopied] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const [chosen, setChosen] = useState<Set<number>>(new Set());
   const notesRef = useRef<HTMLDivElement>(null);
 
   const debrief = m.debrief || {};
@@ -120,7 +121,10 @@ export function DebriefTab({
   // Copy as rich text so the bullet nesting survives the paste into OneNote
   // or Word; the plain-text flavour keeps indentation for anywhere else.
   async function copyNotes() {
-    const el = notesRef.current;
+    // The editable node itself, not the wrapper around it: the wrapper also
+    // holds the toolbar and the floating rename popup, and serialising those
+    // is what made the paste land one level indented with stray markup.
+    const el = notesRef.current?.querySelector<HTMLElement>('[contenteditable="true"]');
     if (!el) return;
     try {
       await navigator.clipboard.write([
@@ -135,21 +139,14 @@ export function DebriefTab({
     setCopied(true);
     setTimeout(() => setCopied(false), 1800);
   }
-  // Ticked and not already pushed — what "Add to to-do list" will act on.
-  const selectedPending = actions
-    .map((a, i) => (a.selected !== false && !a.taskId ? i : -1))
+  // Follow-ups not already on the to-do list.
+  const pendingIndexes = actions
+    .map((a, i) => (a.taskId ? -1 : i))
     .filter((i) => i >= 0);
+  const pendingCount = pendingIndexes.length;
 
   // Everything here rides the meeting's existing debounced autosave, so
   // typing in a section behaves like every other field in the module.
-  const setAction = (index: number, patch: Partial<DebriefAction>) =>
-    save({
-      debrief: {
-        ...debrief,
-        actions: actions.map((a, i) => (i === index ? { ...a, ...patch } : a)),
-      },
-    });
-
   const notesText = DEBRIEF_QUESTIONS.map((q) =>
     (notes[q.key] || "").trim() ? `${q.label}\n${notes[q.key].trim()}` : "",
   )
@@ -484,6 +481,8 @@ export function DebriefTab({
       }
     }
     save({ debrief: { ...debrief, actions: next } });
+    setPicking(false);
+    setChosen(new Set());
     toast("success", n ? `${n} follow-up${n === 1 ? "" : "s"} added to your to-do list` : "Already added.");
   }
 
@@ -535,7 +534,19 @@ export function DebriefTab({
               <button
                 className="shrink-0 rounded p-1 text-muted hover:text-red-600"
                 aria-label="Remove transcript"
-                onClick={() => save({ debrief: { ...debrief, transcript: "" } })}
+                onClick={async () => {
+                  if (
+                    await confirm({
+                      title: "Delete the transcript?",
+                      message:
+                        "The recording it came from was already deleted, so this cannot be recovered. You will also lose the ability to redo the notes from it.",
+                      confirmLabel: "Delete transcript",
+                      danger: true,
+                    })
+                  ) {
+                    save({ debrief: { ...debrief, transcript: "" } });
+                  }
+                }}
               >
                 <Trash2 size={14} />
               </button>
@@ -692,65 +703,106 @@ export function DebriefTab({
             </div>
           </section>
 
+          <MentionedPeople
+            notesHtml={notesHtml}
+            userId={userId}
+            linkedKolId={m.kol_id}
+            onLinkKol={(kolId) => save({ kol_id: kolId })}
+          />
+
           <section className="rounded-xl border border-border bg-surface p-4 shadow-sm">
             <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
                 Follow-ups ({actions.length})
               </h2>
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={selectedPending.length === 0}
-                onClick={() => void pushActionsToTasks(selectedPending)}
-              >
-                <ListTodo size={14} />
-                {selectedPending.length === 0
-                  ? "All ticked ones added"
-                  : `Add ${selectedPending.length} to to-do list`}
-              </Button>
+              {/* Default is one Add per item plus Add all. Tick boxes only
+                  appear if you ask for them, because most of the time you
+                  either want one or you want the lot. */}
+              <div className="flex flex-wrap gap-2">
+                {pendingCount > 0 &&
+                  (picking ? (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setPicking(false);
+                          setChosen(new Set());
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        size="sm"
+                        disabled={chosen.size === 0}
+                        onClick={() => void pushActionsToTasks([...chosen])}
+                      >
+                        <ListTodo size={14} /> Add {chosen.size} selected
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => {
+                          setPicking(true);
+                          setChosen(new Set(pendingIndexes));
+                        }}
+                      >
+                        Choose some
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => void pushActionsToTasks(pendingIndexes)}
+                      >
+                        <ListTodo size={14} /> Add all to to-do list
+                      </Button>
+                    </>
+                  ))}
+              </div>
             </div>
-            <p className="mb-3 text-xs text-muted">
-              Untick anything you don&apos;t want on your to-do list.
-            </p>
             {actions.length === 0 ? (
               <p className="text-sm text-muted">No follow-ups detected.</p>
             ) : (
-              <ul className="space-y-1.5">
-                {actions.map((a, i) => {
-                  const ticked = a.selected !== false;
-                  return (
-                    <li key={i} className="flex items-start gap-2">
+              <ul className="mt-2 space-y-1.5">
+                {actions.map((a, i) => (
+                  <li key={i} className="flex items-start gap-2">
+                    {picking && !a.taskId && (
                       <input
                         type="checkbox"
-                        checked={ticked}
-                        disabled={!!a.taskId}
-                        onChange={(e) => setAction(i, { selected: e.target.checked })}
-                        className="mt-0.5 h-4 w-4 accent-[var(--accent)] disabled:opacity-40"
+                        checked={chosen.has(i)}
+                        onChange={(e) =>
+                          setChosen((prev) => {
+                            const next = new Set(prev);
+                            if (e.target.checked) next.add(i);
+                            else next.delete(i);
+                            return next;
+                          })
+                        }
+                        className="mt-1 h-4 w-4 shrink-0 accent-[var(--accent)]"
                         aria-label={`Include: ${a.text}`}
                       />
-                      <span
-                        className={`flex-1 text-sm ${
-                          a.taskId ? "" : ticked ? "" : "text-muted line-through"
-                        }`}
-                      >
-                        {a.text}
+                    )}
+                    <span className="flex-1 text-sm">{a.text}</span>
+                    {a.taskId ? (
+                      <span className="mt-0.5 flex shrink-0 items-center gap-1 text-[11px] font-medium text-emerald-700">
+                        <CheckCircle2 size={12} /> On your list
                       </span>
-                      {a.taskId ? (
-                        <span className="mt-0.5 flex shrink-0 items-center gap-1 text-[11px] font-medium text-emerald-700">
-                          <CheckCircle2 size={12} /> On your list
-                        </span>
-                      ) : (
+                    ) : (
+                      !picking && (
                         <button
                           onClick={() => void pushActionsToTasks([i])}
                           className="mt-0.5 flex shrink-0 items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-[11px] font-medium text-muted transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
-                          title="Add just this one to your to-do list"
+                          title="Add this one to your to-do list"
                         >
                           <ListTodo size={11} /> Add
                         </button>
-                      )}
-                    </li>
-                  );
-                })}
+                      )
+                    )}
+                  </li>
+                ))}
               </ul>
             )}
           </section>

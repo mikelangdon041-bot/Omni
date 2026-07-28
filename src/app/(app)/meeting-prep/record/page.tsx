@@ -40,6 +40,9 @@ export default function RecordMeetingPage() {
         })),
         debrief: {
           transcript: result.transcript,
+          // Renames applied before saving carry through, so redoing the notes
+          // from the transcript later keeps them.
+          nameMap: result.nameMap,
           notesHtml: result.notesHtml,
           // Only the ones still ticked on the review screen arrive here.
           actions: result.actions.map((a) => ({

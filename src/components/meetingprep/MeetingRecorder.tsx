@@ -27,6 +27,7 @@ import {
   Loader2,
   Mic,
   MonitorSpeaker,
+  Replace,
   ShieldCheck,
   Square,
   Trash2,
@@ -38,6 +39,7 @@ import { RichText } from "@/components/ui/RichText";
 import { useToast } from "@/components/ui/Feedback";
 import { startLiveCapture, type LiveCapture } from "@/lib/meetingprep/liveCapture";
 import { tidyNotesHtml } from "@/lib/meetingprep/notes";
+import { renameInHtml, renameInText } from "@/lib/meetingprep/rename";
 import { transcribeUpload, type UploadProgress } from "@/lib/meetingprep/uploadCapture";
 
 export interface CaptureAction {
@@ -56,6 +58,8 @@ export interface CaptureResult {
   smallTalk?: { description: string; cutAt: number };
   /** Names the user gave for the voices, plus anyone else in the room. */
   attendees?: string[];
+  /** Renames applied before saving, so a later redo keeps them. */
+  nameMap?: Record<string, string>;
 }
 
 type Phase =
@@ -164,10 +168,16 @@ export function MeetingRecorder({
   // Type the room once, then pick from it per voice — faster than retyping the
   // same name and it stops "Dr Chen" / "Dr. Chen" becoming two people.
   const [roster, setRoster] = useState("");
+  const [reviewPick, setReviewPick] = useState<{ text: string; top: number; left: number } | null>(null);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameWhat, setRenameWhat] = useState("");
+  const [renameWith, setRenameWith] = useState("");
+  const [nameMap, setNameMap] = useState<Record<string, string>>({});
   const [emphasizeNotes, setEmphasizeNotes] = useState(true);
 
   const captureRef = useRef<LiveCapture | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const reviewRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const elapsedRef = useRef(0);
 
@@ -354,6 +364,44 @@ export function MeetingRecorder({
       .join("\n");
   }
 
+  // Renaming before anything is saved. Same behaviour as the Debrief tab, but
+  // operating on local state: fixing a name shouldn't require saving a meeting
+  // with the wrong name in it first.
+  function onReviewSelect() {
+    const sel = window.getSelection();
+    const el = reviewRef.current;
+    if (!sel || sel.isCollapsed || !el || !sel.rangeCount || !el.contains(sel.anchorNode)) {
+      return setReviewPick(null);
+    }
+    const text = sel.toString().trim();
+    if (!text || text.length > 60) return setReviewPick(null);
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    const box = el.getBoundingClientRect();
+    setReviewPick({
+      text,
+      top: rect.top - box.top - 38,
+      left: Math.max(0, rect.left - box.left),
+    });
+  }
+
+  function applyReviewRename() {
+    const what = renameWhat.trim();
+    const to = renameWith.trim();
+    if (!what || !to || !result) return;
+    setResult({
+      ...result,
+      title: renameInText(result.title, what, to),
+      notesHtml: renameInHtml(result.notesHtml, what, to),
+      actions: result.actions.map((a) => ({ ...a, text: renameInText(a.text, what, to) })),
+      transcript: renameInText(result.transcript, what, to),
+    });
+    // Carried onto the saved meeting so a redo from the transcript keeps it.
+    setNameMap((m) => ({ ...m, [what]: to }));
+    setRenameOpen(false);
+    setRenameWhat("");
+    setRenameWith("");
+  }
+
   const rosterNames = roster
     .split(",")
     .map((n) => n.trim())
@@ -440,6 +488,7 @@ export function MeetingRecorder({
 
     await onSave({
       ...result,
+      nameMap,
       actions: result.actions.filter((a) => a.selected),
       transcript: keepTranscript ? trimmed : "",
       attendees,
@@ -683,11 +732,39 @@ export function MeetingRecorder({
             Edit anything below before saving — nothing is written until you do.
           </p>
 
-          <RichText
-            value={result.notesHtml}
-            onChange={(html) => patchResult({ notesHtml: html })}
-            minHeight="min-h-64"
-          />
+          <div
+            ref={reviewRef}
+            className="relative"
+            onMouseUp={onReviewSelect}
+            onKeyUp={onReviewSelect}
+          >
+            {reviewPick && (
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  setRenameWhat(reviewPick.text);
+                  setRenameWith("");
+                  setReviewPick(null);
+                  setRenameOpen(true);
+                }}
+                style={{ top: reviewPick.top, left: reviewPick.left }}
+                className="absolute z-20 flex items-center gap-1 rounded-lg border border-border bg-surface px-2 py-1 text-xs font-medium shadow-lg"
+              >
+                <Replace size={12} /> Rename &ldquo;{reviewPick.text.slice(0, 22)}
+                {reviewPick.text.length > 22 ? "…" : ""}&rdquo;
+              </button>
+            )}
+            <RichText
+              value={result.notesHtml}
+              onChange={(html) => patchResult({ notesHtml: html })}
+              minHeight="min-h-64"
+            />
+          </div>
+          <p className="mt-2 text-xs text-muted">
+            Select a name to change it everywhere, including the title, the
+            follow-ups and the transcript, before any of this is saved.
+          </p>
         </section>
 
         <section className="rounded-xl border border-border bg-surface p-5 shadow-sm">
@@ -915,6 +992,42 @@ export function MeetingRecorder({
         The audio is deleted as soon as it has been transcribed — it is never
         stored. You choose afterwards whether to keep even the transcript.
       </p>
+
+      <Modal
+        open={renameOpen}
+        onClose={() => setRenameOpen(false)}
+        title={renameWhat ? `Rename "${renameWhat}"` : "Rename"}
+        size="sm"
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-muted">
+            Changes every mention: the notes, the title, the follow-ups and the
+            transcript. Nothing is saved until you save the meeting.
+          </p>
+          <Input
+            label="Call them"
+            value={renameWith}
+            onChange={(e) => setRenameWith(e.target.value)}
+            placeholder="Dr. Chen"
+            autoFocus
+          />
+          <button
+            type="button"
+            onClick={() => setRenameWith("I")}
+            className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-muted transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+          >
+            This was me
+          </button>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setRenameOpen(false)}>
+              Cancel
+            </Button>
+            <Button disabled={!renameWith.trim()} onClick={applyReviewRename}>
+              Rename everywhere
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal
         open={pasteOpen}
