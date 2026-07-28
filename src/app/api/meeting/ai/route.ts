@@ -508,12 +508,30 @@ Attribution, which matters and is easy to get wrong:
   - Nested <ul> inside each topic for the substance, 2-3 levels deep. Complete sentences. Preserve names, figures, product names and dates exactly as spoken. Never invent anything that wasn't said.
   - It must read as one document someone can paste straight into OneNote or Word and have it keep its shape.
 
-WRITE NOTES, NOT A RETELLING. This is the difference between useful and useless, so weigh it heavily:
-- Organise by topic and by what came out of it, never by the order people spoke. Do NOT narrate the exchange turn by turn. If two consecutive bullets each begin with a person's name, you are transcribing a conversation instead of taking notes — restructure them.
-- State the substance directly, as settled fact. Write "Territory review was framed as level-setting after the territory switch and paternity leave, not a performance concern" — NOT "The manager explained that the intent was simply to learn about the territory…". Strip "X said", "Y responded", "X explained", "Y noted", "they mentioned" wherever the sentence works without it, which is nearly always.
-- Name someone only when it changes the meaning: a commitment they own, a decision they made, a position the reader has to respond to. Ordinary content carries no attribution at all.
-- Where people disagreed, give the resolved position and then the open point, rather than replaying both sides in sequence. Where something was left unresolved, say so plainly and say what would settle it.
-- A reader who was not in the meeting should be able to skim this and know where things stand — not reconstruct who talked when.
+WRITE NOTES, NOT A RETELLING. This is the difference between useful and useless, so weigh it heavily.
+
+THE BANNED SENTENCE SHAPE: a bullet must never open with a person, role or pronoun followed by a verb of speaking, thinking or feeling. Not "I", not "Shrey", not "the manager", not "they". The banned verbs include said, told, explained, noted, stated, clarified, affirmed, confirmed, flagged, raised, mentioned, added, responded, replied, asked, acknowledged, committed, understood, felt, thought, believed, emphasised, pointed out, indicated, reported, expressed, suggested, argued, pushed back, wanted, offered, agreed, disagreed. Swapping one of these verbs for another one is NOT a fix — the shape is the problem, not the word. "I clarified…" is exactly as wrong as "I said…".
+
+Write what is now true, decided, or open — not who uttered it:
+  BAD:  "I clarified that it was never a direction but an option."
+  GOOD: "Talking to other specialties who see Cushing's is an option, not a direction; endo-first guidance stands."
+  BAD:  "Shrey flagged a perceived East/West divide and a drop in team morale."
+  GOOD: "A perceived East/West divide and falling team morale are live concerns beyond this 1:1."
+  BAD:  "Shrey reported that several colleagues feel a lack of confidence and support."
+  GOOD: "Several colleagues feel a lack of confidence and support, and the intent behind recent changes is landing as negative."
+  BAD:  "I stated they know nothing about this territory and only wanted the MSL to walk them through it."
+  GOOD: "The territory review is for orientation — colour and background a list cannot give, plus who the key people are. Explicitly not a performance review."
+  BAD:  "I committed to following up with team members."
+  GOOD: nothing — a commitment is not a note. It belongs in actions.
+
+Attribution, when it genuinely matters — a contested position, an unresolved disagreement, a view the reader must respond to — goes in brackets at the end of the sentence, never as the verb: "Endo-first guidance stands (Shrey had read earlier feedback as a steer toward tier-one cardiology)."
+
+Also:
+- Organise by topic and by what came out of it, never by the order people spoke.
+- Where people disagreed, give the resolved position first and then what is still open, rather than replaying both sides in sequence. Where nothing was resolved, say so and say what would settle it.
+- A reader who was not in the meeting should skim this and know where things stand — not reconstruct who talked when.
+
+BEFORE YOU FINISH: reread every bullet you have written. If it describes someone saying, thinking or feeling something rather than stating what is true, decided or open, rewrite it. If a bullet is really a commitment, move it to actions and delete it from the notes.
 - actions: every concrete follow-up the recording implies or someone promised, each as one imperative sentence, with the owner and any deadline when stated (e.g. "Send Dr. Chen the phase 3 subgroup data by Friday"). Only real commitments and next steps — not topics, not general observations. Empty array if there genuinely are none.
 - smallTalk: meetings usually open with pleasantries — greetings, travel, weather, weekend plans, waiting for people to join, tech checks — before anyone says anything substantive. Never make a section for it.
   - found: true only when there is a genuine run of opening pleasantries. A one-line "hi, how are you" before real content does not count.
