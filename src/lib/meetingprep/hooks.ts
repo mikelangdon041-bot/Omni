@@ -91,6 +91,9 @@ export function useMpMeeting(id: string, userId: string | null) {
   const [meeting, setMeeting] = useState<MpMeeting | null>(null);
   const [loading, setLoading] = useState(true);
   const [saveState, setSaveState] = useState<SaveState>("idle");
+  // Once it's gone, neither the unmount flush nor the cache write may bring
+  // it back. Declared up here because both of those are below.
+  const deletedRef = useRef(false);
 
   useEffect(() => {
     // Instant paint from cache (warmed by the meetings list, or by a
@@ -123,7 +126,9 @@ export function useMpMeeting(id: string, userId: string | null) {
 
   // Any edit (autosave, AI refine, etc.) refreshes the instant-paint cache.
   useEffect(() => {
-    if (meeting && userId) setCached(`mtg:${userId}:${id}`, { _t: Date.now(), row: meeting });
+    if (meeting && userId && !deletedRef.current) {
+      setCached(`mtg:${userId}:${id}`, { _t: Date.now(), row: meeting });
+    }
   }, [meeting, userId, id]);
 
   const pendingRef = useRef<Partial<MpMeeting>>({});
@@ -134,12 +139,48 @@ export function useMpMeeting(id: string, userId: string | null) {
     timerRef.current = null;
     const p = pendingRef.current;
     pendingRef.current = {};
+    if (deletedRef.current) return;
     if (Object.keys(p).length) {
       setSaveState("saving");
       await supabase.from("mp_meetings").update(p).eq("id", id);
       setSaveState("saved");
     }
   }, [id]);
+
+  // Deleting from the meeting itself, rather than only from the list. A
+  // recording that turned out to be the wrong meeting, or one you did not
+  // mean to keep, is discovered on this page — the recorder opens straight to
+  // it — so having to go back to the list to bin it is a detour.
+  const remove = useCallback(async () => {
+    deletedRef.current = true;
+    pendingRef.current = {};
+    if (timerRef.current) clearTimeout(timerRef.current);
+
+    // A kept recording lives in storage, not in the row, so deleting the row
+    // alone would orphan the audio where nothing can reach or remove it.
+    const audioPath = meeting?.debrief?.audioPath;
+    if (audioPath) {
+      try {
+        await fetch("/api/meeting/transcribe-upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ action: "delete-audio", path: audioPath }),
+        });
+      } catch {
+        // Losing the audio cleanup must not stop the meeting going away.
+      }
+    }
+
+    await supabase.from("mp_meetings").delete().eq("id", id);
+    if (userId) {
+      dropCached(`mtg:${userId}:${id}`);
+      // The list paints from its own cache, which would otherwise show this
+      // meeting again the moment you land back on it.
+      const list = getCached<MpMeeting[]>(`meetings:${userId}`);
+      if (list) setCached(`meetings:${userId}`, list.filter((m) => m.id !== id));
+    }
+  }, [id, userId, meeting?.debrief?.audioPath]);
 
   const save = useCallback(
     (partial: Partial<MpMeeting>) => {
@@ -158,7 +199,7 @@ export function useMpMeeting(id: string, userId: string | null) {
     };
   }, [flush]);
 
-  return { meeting, loading, save, flush, saveState };
+  return { meeting, loading, save, flush, saveState, remove };
 }
 
 export function useMpSettings(userId: string | null) {

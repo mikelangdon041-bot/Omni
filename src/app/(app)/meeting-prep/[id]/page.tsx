@@ -5,9 +5,10 @@
 // the background while the user moves between tabs.
 
 import { useState } from "react";
-import { useParams } from "next/navigation";
-import { Check, CloudUpload } from "lucide-react";
+import { useParams, useRouter } from "next/navigation";
+import { Check, CloudUpload, Trash2 } from "lucide-react";
 import { BackButton } from "@/components/BackButton";
+import { useConfirm } from "@/components/ui/Feedback";
 import { Tabs } from "@/components/ui/Tabs";
 import { DiffPreviewModal, type DiffChange } from "@/components/ui/DiffPreviewModal";
 import { SetupTab } from "@/components/meetingprep/SetupTab";
@@ -28,8 +29,10 @@ type Tab = (typeof TABS)[number];
 
 export default function MeetingPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
+  const confirm = useConfirm();
   const { userId } = useUserId();
-  const { meeting, loading, save, flush, saveState } = useMpMeeting(id, userId);
+  const { meeting, loading, save, flush, saveState, remove } = useMpMeeting(id, userId);
   const { settings, save: saveSettings } = useMpSettings(userId);
   // A deep link can say which tab to open — the Windows recorder sends you
   // straight to Debrief, the same place the in-app record flow lands. Read off
@@ -121,21 +124,50 @@ export default function MeetingPage() {
             {meeting.title || "Untitled meeting"}
           </h1>
         </div>
-        {/* Autosave indicator — everything on every tab saves as you type. */}
-        <p
-          className="flex shrink-0 items-center gap-1 pb-0.5 text-[11px] font-medium text-muted"
-          title="Everything autosaves as you type"
-        >
-          {saveState === "pending" || saveState === "saving" ? (
-            <>
-              <CloudUpload size={13} className="animate-pulse" /> Saving…
-            </>
-          ) : (
-            <>
-              <Check size={13} className="text-emerald-600" /> Saved
-            </>
-          )}
-        </p>
+        <div className="flex shrink-0 items-center gap-3 pb-0.5">
+          {/* Autosave indicator — everything on every tab saves as you type. */}
+          <p
+            className="flex items-center gap-1 text-[11px] font-medium text-muted"
+            title="Everything autosaves as you type"
+          >
+            {saveState === "pending" || saveState === "saving" ? (
+              <>
+                <CloudUpload size={13} className="animate-pulse" /> Saving…
+              </>
+            ) : (
+              <>
+                <Check size={13} className="text-emerald-600" /> Saved
+              </>
+            )}
+          </p>
+          {/* Deleting belongs here as well as on the list. A recording that
+              caught the wrong meeting, or one you never meant to keep, is
+              discovered on this page — the desktop recorder opens straight to
+              it — and going back to the list to bin it is a detour. */}
+          <button
+            type="button"
+            onClick={async () => {
+              if (
+                await confirm({
+                  title: `Delete "${meeting.title || "this meeting"}"?`,
+                  message: meeting.debrief?.audioPath
+                    ? "The notes, transcript and the kept recording are all removed. This cannot be undone."
+                    : "The brief, rehearsal, and debrief are removed. This cannot be undone.",
+                  confirmLabel: "Delete",
+                  danger: true,
+                })
+              ) {
+                await remove();
+                router.push("/meeting-prep");
+              }
+            }}
+            className="rounded-lg p-1.5 text-muted transition hover:bg-red-50 hover:text-red-600"
+            title="Delete this meeting"
+            aria-label="Delete this meeting"
+          >
+            <Trash2 size={15} />
+          </button>
+        </div>
       </div>
 
       <Tabs tabs={TABS} active={tab} onChange={setTab} />
