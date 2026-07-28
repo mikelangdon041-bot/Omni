@@ -106,12 +106,15 @@ export interface TranscriptResult {
   text: string;
   /** Distinct voices the diarizer separated, e.g. ["A", "B"]. */
   speakers: string[];
+  /** Where the recording was kept, when the user asked to keep it. */
+  audioPath: string;
 }
 
 export async function transcribeUpload(
   file: File,
   onProgress: (p: UploadProgress) => void,
   signal?: AbortSignal,
+  keepAudio = false,
 ): Promise<TranscriptResult> {
   const ext = (file.name.split(".").pop() || "webm").toLowerCase();
   const uploadId = crypto.randomUUID();
@@ -148,10 +151,11 @@ export async function transcribeUpload(
 
     // --- 2. Reassemble and split ------------------------------------------
     onProgress({ percent: UPLOAD_SHARE, label: "Preparing the audio" });
-    const { totalChunks, chunkExt } = await post<{
+    const { totalChunks, chunkExt, audioPath } = await post<{
       totalChunks: number;
       chunkExt: string;
-    }>({ action: "prepare", uploadId, parts, ext }, signal);
+      audioPath: string;
+    }>({ action: "prepare", uploadId, parts, ext, keepAudio }, signal);
 
     // --- 3. Transcribe, one chunk per request ------------------------------
     const base = UPLOAD_SHARE + PREPARE_SHARE;
@@ -206,6 +210,7 @@ export async function transcribeUpload(
     return {
       text: texts.filter(Boolean).join("\n\n"),
       speakers: [...speakers].sort(),
+      audioPath: audioPath || "",
     };
   } catch (e) {
     await discard();

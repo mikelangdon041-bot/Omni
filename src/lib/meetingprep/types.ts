@@ -96,6 +96,9 @@ export interface Debrief {
   // re-analysis, which regenerates the notes from the transcript, doesn't
   // undo their naming — the map is replayed over the fresh output.
   nameMap?: Record<string, string>;
+  // Storage path of the recording, when the user chose to keep it. Absent
+  // means the audio was deleted after transcription, which is the default.
+  audioPath?: string;
   // Typed answers to the structured debrief questions, keyed by question key.
   notes?: Record<string, string>;
   // Notes split into editable sections. `summary` is the older single-blob

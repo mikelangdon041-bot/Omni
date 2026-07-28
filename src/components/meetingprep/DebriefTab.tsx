@@ -110,6 +110,7 @@ export function DebriefTab({
   const [mailBody, setMailBody] = useState("");
   const [mailCopied, setMailCopied] = useState(false);
   const [filling, setFilling] = useState(false);
+  const [audioUrl, setAudioUrl] = useState("");
   const [picking, setPicking] = useState(false);
   const [chosen, setChosen] = useState<Set<number>>(new Set());
   const notesRef = useRef<HTMLDivElement>(null);
@@ -399,6 +400,42 @@ export function DebriefTab({
     toast("success", `"${what}" is now "${to}" throughout.`);
   }
 
+  // A kept recording is fetched behind a short-lived signed link rather than
+  // a stored URL, so a saved meeting never carries a link that outlives access.
+  async function loadAudio() {
+    if (!debrief.audioPath || audioUrl) return;
+    const res = await fetch("/api/meeting/transcribe-upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ action: "audio-url", path: debrief.audioPath }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok && json.url) setAudioUrl(json.url);
+    else toast("error", json.error || "Could not open the recording");
+  }
+
+  async function deleteAudio() {
+    if (!debrief.audioPath) return;
+    if (
+      !(await confirm({
+        title: "Delete the recording?",
+        message: "The audio is removed for good. The transcript and notes stay.",
+        confirmLabel: "Delete recording",
+        danger: true,
+      }))
+    )
+      return;
+    await fetch("/api/meeting/transcribe-upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ action: "delete-audio", path: debrief.audioPath }),
+    }).catch(() => {});
+    setAudioUrl("");
+    save({ debrief: { ...debrief, audioPath: "" } });
+  }
+
   // Pull the meeting's own details out of the transcript: who was there, what
   // it was for, when, how long. Saves retyping what the recording already
   // says, and only fills fields that are currently empty so it can't
@@ -568,6 +605,35 @@ export function DebriefTab({
             />
           ))}
         </div>
+
+        {debrief.audioPath && (
+          <div className="mt-4 rounded-lg border border-border bg-canvas/40 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="flex items-center gap-1.5 text-sm font-medium">
+                <FileAudio size={14} className="text-[var(--accent)]" />
+                Recording kept
+              </p>
+              <div className="flex gap-2">
+                {!audioUrl && (
+                  <Button size="sm" variant="secondary" onClick={() => void loadAudio()}>
+                    Play
+                  </Button>
+                )}
+                <button
+                  onClick={() => void deleteAudio()}
+                  className="rounded p-1 text-muted transition hover:text-red-600"
+                  aria-label="Delete the recording"
+                  title="Delete the recording"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </div>
+            {audioUrl && (
+              <audio controls src={audioUrl} className="mt-2 w-full" preload="none" />
+            )}
+          </div>
+        )}
 
         <div className="mt-4 rounded-lg border border-border bg-canvas/40 p-3">
           <p className="mb-2 flex items-center gap-1.5 text-sm font-medium text-ink">

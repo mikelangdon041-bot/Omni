@@ -191,7 +191,8 @@ export async function POST(req: Request) {
 
   const admin = createAdminClient();
   const uploadId = String(body.uploadId || "");
-  if (!UUID_RE.test(uploadId)) {
+  const pathOnly = body.action === "audio-url" || body.action === "delete-audio";
+  if (!pathOnly && !UUID_RE.test(uploadId)) {
     return NextResponse.json({ error: "Bad upload id" }, { status: 400 });
   }
 
@@ -219,6 +220,33 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true });
     }
 
+    // A short-lived link to a kept recording, minted on demand rather than
+    // stored, so a saved meeting never carries a URL that outlives its access.
+    if (body.action === "audio-url") {
+      const path = String(body.path || "");
+      if (!path.startsWith(`${user.id}/meeting-audio/`)) {
+        return NextResponse.json({ error: "Bad path" }, { status: 400 });
+      }
+      const { data, error } = await admin.storage
+        .from("recordings")
+        .createSignedUrl(path, 60 * 60);
+      if (error || !data) {
+        return NextResponse.json({ error: "Recording not found" }, { status: 404 });
+      }
+      return NextResponse.json({ url: data.signedUrl });
+    }
+
+    // Deleting a kept recording, which is the whole point of keeping it being
+    // optional.
+    if (body.action === "delete-audio") {
+      const path = String(body.path || "");
+      if (!path.startsWith(`${user.id}/meeting-audio/`)) {
+        return NextResponse.json({ error: "Bad path" }, { status: 400 });
+      }
+      await admin.storage.from("recordings").remove([path]);
+      return NextResponse.json({ ok: true });
+    }
+
     // Reassemble the uploaded parts, split the audio, and stage the chunks.
     // Bounded by ffmpeg, not by transcription — that's what keeps it inside
     // the time limit however long the recording is.
@@ -238,6 +266,15 @@ export async function POST(req: Request) {
       }
       const input = Buffer.concat(buffers);
       buffers.length = 0;
+
+      // Audio is deleted by default. When the user asks to keep it, the
+      // reassembled original is copied somewhere permanent BEFORE the working
+      // files are swept, so "keep" cannot lose a race with the cleanup.
+      let audioPath = "";
+      if (body.keepAudio) {
+        audioPath = `${user.id}/meeting-audio/${uploadId}.${ext}`;
+        await uploadWithRetry(admin, audioPath, input, mimeForExt(ext));
+      }
 
       const { chunks, ext: chunkExt } = await chunkAudio(input, ext);
       if (chunks.length === 0) {
@@ -264,7 +301,7 @@ export async function POST(req: Request) {
       const stale = (listed || []).filter((e) => e.id).map((e) => `${root}/${e.name}`);
       if (stale.length) await admin.storage.from("recordings").remove(stale);
 
-      return NextResponse.json({ totalChunks: chunks.length, chunkExt });
+      return NextResponse.json({ totalChunks: chunks.length, chunkExt, audioPath });
     }
 
     // One chunk, one request. The client drives the loop, so a three-hour

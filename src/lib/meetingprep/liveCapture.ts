@@ -64,10 +64,19 @@ export async function startLiveCapture(
   if (includeMeetingAudio) {
     // Chrome/Edge only hand over audio alongside a video track, so we ask for
     // video and immediately ignore it — we never read a frame.
+    // These hints do real work in Chrome and Edge: `systemAudio: "include"`
+    // makes the share-audio checkbox default to ticked (the small one that is
+    // easy to miss, and without which the recording is mic-only), and
+    // `displaySurface: "monitor"` preselects the whole-screen option, which is
+    // the only surface that carries desktop-app audio. Browsers that don't
+    // know these fields ignore them.
     display = await navigator.mediaDevices.getDisplayMedia({
-      video: true,
+      video: { displaySurface: "monitor" },
       audio: { echoCancellation: false, noiseSuppression: false },
-    });
+      systemAudio: "include",
+      selfBrowserSurface: "exclude",
+      surfaceSwitching: "include",
+    } as DisplayMediaStreamOptions);
     if (display.getAudioTracks().length === 0) {
       display.getTracks().forEach((t) => t.stop());
       display = null;

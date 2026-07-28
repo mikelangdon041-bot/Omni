@@ -30,6 +30,7 @@ export default function RecordMeetingPage() {
         date: new Date().toISOString(),
         // A recording is by definition a meeting that already happened.
         meeting_type: "other",
+        kol_id: result.kolId ?? null,
         // Names given for the voices carry onto the meeting, so the roster is
         // captured once instead of retyped in Setup.
         attendees: (result.attendees || []).map((name) => ({
@@ -43,6 +44,7 @@ export default function RecordMeetingPage() {
           // Renames applied before saving carry through, so redoing the notes
           // from the transcript later keeps them.
           nameMap: result.nameMap,
+          audioPath: result.audioPath,
           notesHtml: result.notesHtml,
           // Only the ones still ticked on the review screen arrive here.
           actions: result.actions.map((a) => ({

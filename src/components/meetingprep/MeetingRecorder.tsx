@@ -41,6 +41,10 @@ import { startLiveCapture, type LiveCapture } from "@/lib/meetingprep/liveCaptur
 import { tidyNotesHtml } from "@/lib/meetingprep/notes";
 import { renameInHtml, renameInText } from "@/lib/meetingprep/rename";
 import { transcribeUpload, type UploadProgress } from "@/lib/meetingprep/uploadCapture";
+import { createClient } from "@/lib/supabase/client";
+import { usePersistedFlag } from "@/lib/usePersistedFlag";
+
+const supabase = createClient();
 
 export interface CaptureAction {
   text: string;
@@ -60,6 +64,10 @@ export interface CaptureResult {
   attendees?: string[];
   /** Renames applied before saving, so a later redo keeps them. */
   nameMap?: Record<string, string>;
+  /** Territory KOL this meeting was linked to at capture time. */
+  kolId?: string;
+  /** Where the recording was kept, when the user chose to keep it. */
+  audioPath?: string;
 }
 
 type Phase =
@@ -146,9 +154,9 @@ export function MeetingRecorder({
   const [error, setError] = useState("");
   const [elapsed, setElapsed] = useState(0);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
-  const [includeMeetingAudio, setIncludeMeetingAudio] = useState(true);
+  const [includeMeetingAudio, setIncludeMeetingAudio] = usePersistedFlag("mp-include-meeting-audio", true);
   const [hint, setHint] = useState("");
-  const [consent, setConsent] = useState(false);
+  const [consent, setConsent] = usePersistedFlag("mp-consent", false);
   const [autoEnded, setAutoEnded] = useState(false);
   const [hasMeetingAudio, setHasMeetingAudio] = useState(false);
   const [transcript, setTranscript] = useState("");
@@ -156,6 +164,7 @@ export function MeetingRecorder({
   const [keepTranscript, setKeepTranscript] = useState(true);
   const [upload, setUpload] = useState<UploadProgress | null>(null);
   const [fileName, setFileName] = useState("");
+  const [audioPath, setAudioPath] = useState("");
   const [notesPct, setNotesPct] = useState(0);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasted, setPasted] = useState("");
@@ -173,6 +182,13 @@ export function MeetingRecorder({
   const [renameWhat, setRenameWhat] = useState("");
   const [renameWith, setRenameWith] = useState("");
   const [nameMap, setNameMap] = useState<Record<string, string>>({});
+  const [titleOverride, setTitleOverride] = useState("");
+  const [kolQuery, setKolQuery] = useState("");
+  const [kolId, setKolId] = useState("");
+  const [kolOptions, setKolOptions] = useState<{ id: string; label: string; detail: string }[]>([]);
+  // Capture settings are remembered. Re-ticking the same boxes before every
+  // meeting is exactly the kind of friction that stops people recording.
+  const [keepAudio, setKeepAudio] = usePersistedFlag("mp-keep-audio", false);
   const [emphasizeNotes, setEmphasizeNotes] = useState(true);
 
   const captureRef = useRef<LiveCapture | null>(null);
@@ -185,6 +201,27 @@ export function MeetingRecorder({
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = null;
   };
+
+  useEffect(() => {
+    let active = true;
+    void supabase
+      .from("kols")
+      .select("id, first_name, last_name, specialty, institution")
+      .order("last_name")
+      .then(({ data }) => {
+        if (!active) return;
+        setKolOptions(
+          (data || []).map((k) => ({
+            id: k.id as string,
+            label: `${k.first_name ?? ""} ${k.last_name ?? ""}`.trim(),
+            detail: [k.specialty, k.institution].filter(Boolean).join(" · "),
+          })).filter((k) => k.label),
+        );
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Leaving mid-recording must not orphan the mic/share.
   useEffect(() => {
@@ -278,10 +315,16 @@ export function MeetingRecorder({
     setUpload({ percent: 0, label: "Uploading" });
     setPhase("uploading");
     try {
-      const { text, speakers: found } = await transcribeUpload(file, setUpload);
+      const { text, speakers: found, audioPath: kept } = await transcribeUpload(
+        file,
+        setUpload,
+        undefined,
+        keepAudio,
+      );
       setUpload(null);
       setSpeakers(found);
       setSpeakerNames({});
+      setAudioPath(kept);
       if (!text.trim()) {
         setError("No speech was picked up in that file.");
         setPhase("error");
@@ -452,7 +495,7 @@ export function MeetingRecorder({
       const cutAt = json.smallTalk?.found && marker ? source.indexOf(marker) : -1;
 
       setResult({
-        title: json.title || hint.trim() || "Recorded meeting",
+        title: titleOverride.trim() || json.title || hint.trim() || "Recorded meeting",
         notesHtml: tidyNotesHtml(json.notes || ""),
         actions: (json.actions || []).map((text: string) => ({ text, selected: true })),
         transcript: source,
@@ -489,6 +532,8 @@ export function MeetingRecorder({
     await onSave({
       ...result,
       nameMap,
+      kolId: kolId || undefined,
+      audioPath: audioPath || undefined,
       actions: result.actions.filter((a) => a.selected),
       transcript: keepTranscript ? trimmed : "",
       attendees,
@@ -663,6 +708,69 @@ export function MeetingRecorder({
                 </div>
               </div>
             )}
+
+            <Input
+              label="Name this meeting (optional)"
+              value={titleOverride}
+              onChange={(e) => setTitleOverride(e.target.value)}
+              placeholder="Leave blank and I'll name it from what was said"
+            />
+
+            {/* Linking here rather than after saving: the KOL is fresh in mind
+                now, and the debrief can then be logged against them without a
+                second trip through Setup. */}
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted">
+                Link to a person (optional)
+              </label>
+              <input
+                value={kolQuery}
+                onChange={(e) => {
+                  setKolQuery(e.target.value);
+                  const hit = kolOptions.find(
+                    (k) => k.label.toLowerCase() === e.target.value.trim().toLowerCase(),
+                  );
+                  setKolId(hit?.id || "");
+                }}
+                list="omni-kol-list"
+                placeholder="Search your KOLs"
+                className="w-full rounded-md border border-border bg-canvas px-2 py-1.5 text-sm outline-none transition focus:border-[var(--accent)]"
+              />
+              <datalist id="omni-kol-list">
+                {kolOptions.map((k) => (
+                  <option key={k.id} value={k.label}>
+                    {k.detail}
+                  </option>
+                ))}
+              </datalist>
+              {kolQuery.trim() && !kolId && (
+                <p className="mt-1 text-[11px] text-muted">
+                  Pick one from the list to link it. Free text here is ignored.
+                </p>
+              )}
+              {kolId && (
+                <p className="mt-1 text-[11px] text-emerald-700">
+                  Linked. The debrief can be logged against them in Territory.
+                </p>
+              )}
+            </div>
+
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-lg bg-canvas p-3 text-xs">
+              <input
+                type="checkbox"
+                checked={keepAudio}
+                onChange={(e) => setKeepAudio(e.target.checked)}
+                className="mt-0.5 h-3.5 w-3.5 accent-[var(--accent)]"
+              />
+              <span>
+                <span className="font-medium">Keep the recording</span>
+                <span className="mt-0.5 block text-muted">
+                  Off by default, so audio is deleted once it has been
+                  transcribed. Tick this and it is stored with the meeting and
+                  can be played back or deleted later.
+                </span>
+              </span>
+            </label>
 
             <Input
               label="Anything I should know about this meeting? (optional)"
