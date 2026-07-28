@@ -93,6 +93,7 @@ export function DebriefTab({
   // Where in the notes the user last selected something, so the rename button
   // can appear next to it.
   const [pick, setPick] = useState<{ text: string; top: number; left: number } | null>(null);
+  const [emphasizeNotes, setEmphasizeNotes] = useState(true);
   const notesRef = useRef<HTMLDivElement>(null);
 
   const debrief = m.debrief || {};
@@ -146,14 +147,11 @@ export function DebriefTab({
     save({ debrief: { ...debrief, notes: { ...notes, [key]: value } } });
 
   async function analyze(transcriptOverride?: string) {
-    const source = transcriptOverride ?? debrief.transcript ?? "";
-    const combined = [
-      notesText && `The writer's own debrief notes:\n${notesText}`,
-      source.trim() && `Meeting transcript/notes:\n${source}`,
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-    if (!combined) return;
+    const source = (transcriptOverride ?? debrief.transcript ?? "").trim();
+    // Anything typed into the debrief questions is the writer's own notes —
+    // it goes in as such, so it gets the priority weighting, rather than
+    // being glued onto the front of the transcript as more transcript.
+    if (!source && !notesText) return;
     setBusy(true);
     try {
       const res = await fetch("/api/meeting/ai", {
@@ -164,8 +162,10 @@ export function DebriefTab({
         // one both come back as editable sections rather than one blob.
         body: JSON.stringify({
           action: "capture",
-          transcript: combined,
+          transcript: source || notesText,
           hint: meetingContextText(m),
+          ownNotes: source ? notesText : "",
+          emphasizeNotes,
         }),
       });
       const json = await res.json();
@@ -611,9 +611,32 @@ export function DebriefTab({
       >
         <div className="space-y-3">
           <p className="text-sm text-muted">
-            Re-runs the notes and follow-ups from the saved transcript. The
-            current sections and follow-ups are replaced.
+            Re-runs the notes and follow-ups from the saved transcript — no
+            need to upload anything again. It always uses the current version,
+            so this is how you pick up any improvement to how notes are
+            written. The existing notes and follow-ups are replaced; names you
+            renamed are reapplied.
           </p>
+
+          {notesText && (
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-lg bg-canvas p-3 text-xs">
+              <input
+                type="checkbox"
+                checked={emphasizeNotes}
+                onChange={(e) => setEmphasizeNotes(e.target.checked)}
+                className="mt-0.5 h-3.5 w-3.5 accent-[var(--accent)]"
+              />
+              <span>
+                <span className="font-medium">
+                  Treat my typed answers as the priority
+                </span>
+                <span className="mt-0.5 block text-muted">
+                  What you wrote in the questions above leads its topic and is
+                  never dropped. Untick to weigh it the same as the transcript.
+                </span>
+              </span>
+            </label>
+          )}
 
           {detected.length > 1 && (
             <div className="rounded-lg border border-border p-3">
