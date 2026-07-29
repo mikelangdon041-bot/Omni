@@ -15,6 +15,7 @@ import {
   EyeOff,
   FileText,
   History,
+  Image as ImageIcon,
   ListChecks,
   Mail,
   Palette,
@@ -33,6 +34,7 @@ import { AutoRichField } from "@/components/ui/AutoRichField";
 import { ProgressBar, useProgress } from "@/components/ui/Progress";
 import { WriterChat } from "@/components/writer/WriterChat";
 import { toEmailHtml } from "@/lib/writer/clipboard";
+import { wantsResearch } from "@/lib/writer/prompt";
 import { useConfirm, useToast } from "@/components/ui/Feedback";
 import { ChipGroup } from "@/components/writer/Chips";
 import { IntakeSection } from "@/components/writer/IntakeSection";
@@ -49,6 +51,8 @@ import {
   FIDELITY_OPTIONS,
   LENGTHS,
   TONE_CHIPS,
+  emptyContext,
+  type WriterAttachment,
   chipOptions,
   cleanTag,
   docTypeEmoji,
@@ -58,6 +62,31 @@ import {
   type WriterDoc,
   type WriterVersion,
 } from "@/lib/writer/types";
+
+// Field names as the person reading them would say them.
+const AUTOFILL_LABELS: Record<string, string> = {
+  recipient: "who it's to",
+  ask: "what should happen",
+  keyPoints: "key points",
+  background: "background",
+  tone: "tone",
+  audience: "audience",
+  actions: "what to change",
+  length: "length",
+  fidelity: "how much to change",
+  noGreeting: "skip the greeting",
+  research: "look it up",
+};
+
+/** Reset every field that was auto-filled, leaving anything you set yourself. */
+function clearAutoFilled(ctx: WriterContext): Partial<WriterContext> {
+  const blank = emptyContext() as unknown as Record<string, unknown>;
+  const out: Record<string, unknown> = { autoFilled: [] };
+  for (const field of ctx.autoFilled) {
+    if (field in blank && field !== "autoFilled") out[field] = blank[field];
+  }
+  return out as Partial<WriterContext>;
+}
 
 export default function WriterDocPage() {
   const { id } = useParams<{ id: string }>();
@@ -109,6 +138,17 @@ export default function WriterDocPage() {
   // The search-ready question extraction worked out of the brief, used when the
   // look-up runs. Kept in a ref: it is derived, not something you edit.
   const researchQuestion = useRef("");
+  // Object URLs for images attached in this session, so an attachment can be
+  // opened and eyeballed. Not persisted: after a reload the transcription is
+  // what remains, which is the part the AI actually uses.
+  const previewUrls = useRef<Record<string, string>>({});
+  // The preview URL is resolved when the attachment is opened, not while
+  // rendering: reading a ref during render is the kind of thing that works right
+  // up until it doesn't.
+  const [openAttachment, setOpenAttachment] = useState<{
+    att: WriterAttachment;
+    preview?: string;
+  } | null>(null);
 
   // What you typed in the one box, plus the optional extra note. Everything —
   // extraction, generation, the diff — reads from these two.
@@ -249,8 +289,14 @@ export default function WriterDocPage() {
         if (ex.researchQuestion && !researchQuestion.current)
           researchQuestion.current = String(ex.researchQuestion);
         const docPartial: Partial<WriterDoc> = {};
-        if (Object.keys(partial).length)
+        if (Object.keys(partial).length) {
+          // Flag every field the AI guessed at, so the picks read as "I filled
+          // this in, check it" rather than as something you chose.
+          partial.autoFilled = [
+            ...new Set([...cur.context.autoFilled, ...Object.keys(partial)]),
+          ].filter((k) => k !== "autoFilled");
           docPartial.context = { ...cur.context, ...partial };
+        }
         if (!cur.title.trim() && ex.title) {
           docPartial.title = String(ex.title);
           filled.push("title");
@@ -326,7 +372,7 @@ export default function WriterDocPage() {
     // Accumulated locally rather than re-read from the doc each pass: with two
     // files in flight the second read could land before React had re-rendered
     // the first one in, and quietly drop it.
-    let combined = docRef.current?.original || "";
+    let list = [...(docRef.current?.context.attachments || [])];
     try {
       for (const file of files) {
         const form = new FormData();
@@ -338,13 +384,22 @@ export default function WriterDocPage() {
         });
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || "Could not read that file");
-        if (!docRef.current) return;
-        combined = combined.trim() ? `${combined}<p></p>${json.html}` : json.html;
-        save({ original: combined });
-        toast(
-          "success",
-          file.name ? `Added ${file.name}` : "Read the screenshot into the box",
-        );
+        const current = docRef.current;
+        if (!current) return;
+        const isImage = (file.type || "").startsWith("image/");
+        const attachment: WriterAttachment = {
+          id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          name: file.name || (isImage ? "Screenshot" : "Attachment"),
+          kind: isImage ? "image" : "document",
+          text: htmlToPlain(String(json.html || "")),
+        };
+        // The picture itself is only held for this session, so "open it" can
+        // show the original as well as the transcription. Nothing to clean up
+        // on the server, and nothing bloating the saved row.
+        if (isImage) previewUrls.current[attachment.id] = URL.createObjectURL(file);
+        list = [...list, attachment];
+        save({ context: { ...current.context, attachments: list } });
+        toast("success", `Attached ${attachment.name}`);
       }
     } catch (e) {
       toast("error", (e as Error).message);
@@ -435,8 +490,12 @@ export default function WriterDocPage() {
     // A refine replaces what's on screen, so bank the current text first.
     if (refineGuidance) await snapshotCurrent("Your version before this refine");
     // Look things up before writing, so the findings are available as fact.
+    // Asking for it in the note counts as asking for it: the checkbox is a
+    // convenience, not the only way in, and waiting for extraction to tick it
+    // would lose the request if Generate is pressed straight after typing.
+    const askedInWords = wantsResearch(`${notesPlain}\n${inputPlain}`);
     const researchNotes =
-      ctx.research && !ctx.researchNotes.trim() && !refineGuidance
+      (ctx.research || askedInWords) && !ctx.researchNotes.trim() && !refineGuidance
         ? await runResearch()
         : ctx.researchNotes;
     setBusy(true);
@@ -594,6 +653,36 @@ export default function WriterDocPage() {
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
         {/* ---------------- Intake ---------------- */}
         <div className="space-y-3">
+          {/* Anything the AI guessed from your note waits for a nod here. It
+              still applies if you ignore it, but it never looks like a choice
+              you made — which is how a fresh piece ends up feeling as though it
+              remembered settings from the last one. */}
+          {ctx.autoFilled.length > 0 && (
+            <section className="rounded-xl border border-amber-300 bg-amber-50/70 p-3">
+              <p className="text-xs font-semibold text-amber-900">
+                I filled these in from what you wrote — worth a check
+              </p>
+              <p className="mt-0.5 text-[11px] leading-snug text-amber-800">
+                {ctx.autoFilled.map((f) => AUTOFILL_LABELS[f] || f).join(", ")}
+              </p>
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCtx({ autoFilled: [] })}
+                  className="rounded-lg bg-amber-900 px-2.5 py-1 text-[11px] font-semibold text-white transition hover:bg-amber-800"
+                >
+                  Looks right
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCtx(clearAutoFilled(ctx))}
+                  className="rounded-lg border border-amber-300 px-2.5 py-1 text-[11px] font-medium text-amber-900 transition hover:bg-amber-100"
+                >
+                  Clear them
+                </button>
+              </div>
+            </section>
+          )}
           {/* The brief — the one box that does the work */}
           <section className="overflow-hidden rounded-xl border border-[var(--accent)]/40 bg-surface shadow-sm">
             <div className="h-1 bg-gradient-to-r from-[var(--grad-from)] via-[var(--grad-via)] to-[var(--grad-to)]" />
@@ -694,10 +783,56 @@ export default function WriterDocPage() {
                     {uploading ? "Reading…" : "Upload a file"}
                   </button>
                   <span className="text-[10px] leading-snug text-muted">
-                    Or just paste a screenshot into the box, or drop a file on it.
-                    PDF, Word, text or image.
+                    Or paste a screenshot straight in, or drop a file on the box.
+                    It gets attached and read, not pasted into your text.
                   </span>
                 </div>
+
+                {/* Attachments. Files stay out of the writing box on purpose: a
+                    transcribed screenshot dropped inline is a wall of text you
+                    then have to type around, and an image dropped inline can't
+                    be typed past at all. */}
+                {ctx.attachments.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {ctx.attachments.map((att) => (
+                      <span
+                        key={att.id}
+                        className="flex items-center gap-1.5 rounded-lg border border-border bg-canvas py-1 pl-2 pr-1 text-[11px]"
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setOpenAttachment({
+                              att,
+                              preview: previewUrls.current[att.id],
+                            })
+                          }
+                          title="Open to check what I read"
+                          className="flex items-center gap-1.5 font-medium text-ink transition hover:text-[var(--accent)]"
+                        >
+                          {att.kind === "image" ? (
+                            <ImageIcon size={12} className="text-[var(--accent)]" />
+                          ) : (
+                            <FileText size={12} className="text-[var(--accent)]" />
+                          )}
+                          <span className="max-w-40 truncate">{att.name}</span>
+                        </button>
+                        <button
+                          type="button"
+                          title="Remove"
+                          onClick={() =>
+                            setCtx({
+                              attachments: ctx.attachments.filter((a) => a.id !== att.id),
+                            })
+                          }
+                          className="rounded p-0.5 text-muted transition hover:text-red-600"
+                        >
+                          <X size={11} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div>
@@ -724,7 +859,7 @@ export default function WriterDocPage() {
                 <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
                   How much should I change?
                 </p>
-                <div className="grid grid-cols-3 gap-1.5">
+                <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
                   {FIDELITY_OPTIONS.map((f) => {
                     const on = ctx.fidelity === f.key;
                     return (
@@ -1209,6 +1344,40 @@ export default function WriterDocPage() {
           )}
         </div>
       </div>
+
+      {/* An attachment, opened to check what was actually read out of it. The
+          transcription is the part that reaches the AI, so that's what this
+          shows; the original image comes along too while it's still in memory. */}
+      <Modal
+        open={!!openAttachment}
+        onClose={() => setOpenAttachment(null)}
+        title={openAttachment?.att.name || "Attachment"}
+        size="lg"
+      >
+        {openAttachment && (
+          <div className="space-y-3">
+            {openAttachment.preview && (
+              /* eslint-disable-next-line @next/next/no-img-element */
+              <img
+                src={openAttachment.preview}
+                alt={openAttachment.att.name}
+                className="max-h-72 w-auto rounded-lg border border-border"
+              />
+            )}
+            <div>
+              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                What I read from it{" "}
+                <span className="font-normal normal-case">
+                  (this is what gets used)
+                </span>
+              </p>
+              <p className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg bg-canvas p-3 text-xs leading-relaxed text-ink/85">
+                {openAttachment.att.text || "Nothing readable came out of this one."}
+              </p>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* Versions */}
       <Modal

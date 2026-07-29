@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { dropCached, getCached, setCached } from "@/lib/cache";
 import {
-  EMPTY_CONTEXT,
+  emptyContext,
   type WriterDoc,
   type WriterSettings,
   type WriterStyle,
@@ -17,7 +17,9 @@ function normalizeDoc(row: WriterDoc): WriterDoc {
   return {
     ...row,
     tags: row.tags || [],
-    context: { ...EMPTY_CONTEXT, ...(row.context || {}) },
+    // A fresh context underneath, so a doc that has never set (say) its own tone
+    // gets its own empty array rather than a reference to a shared one.
+    context: { ...emptyContext(), ...(row.context || {}) },
   };
 }
 

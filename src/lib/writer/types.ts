@@ -3,7 +3,20 @@
 export type DocType = "email" | "document" | "message" | "social" | "summary" | "other";
 export type DocMode = "create" | "edit";
 /** How much license the AI has with the user's draft. */
-export type Fidelity = "light" | "polish" | "rewrite";
+export type Fidelity = "light" | "polish" | "rewrite" | "draft";
+
+/**
+ * A file the user handed over: a screenshot of an email, a PDF, a Word doc.
+ * `text` is what the AI reads — the transcription made at upload time — which is
+ * also what you open the attachment to check. The file itself is not stored; the
+ * words in it are the part that matters to the writing.
+ */
+export interface WriterAttachment {
+  id: string;
+  name: string;
+  kind: "image" | "document";
+  text: string;
+}
 
 export interface WriterContext {
   brief: string; // free-text brief (HTML) — "here's an email, write a reply saying…"
@@ -20,6 +33,14 @@ export interface WriterContext {
   useSignature: boolean; // append the saved signature on copy/send (emails)
   research: boolean; // look things up on the web before writing
   researchNotes: string; // what the look-up found, with sources
+  attachments: WriterAttachment[]; // files handed over, read but kept out of the box
+  /**
+   * Fields the AI filled in from your note that you haven't confirmed yet. They
+   * apply, but they're flagged on screen until you say they're right — reading a
+   * tone back off your own words is a guess, and a guess you didn't make should
+   * not look identical to a choice you did.
+   */
+  autoFilled: string[];
   styleIds: string[];
 }
 
@@ -38,8 +59,27 @@ export const EMPTY_CONTEXT: WriterContext = {
   useSignature: true,
   research: false,
   researchNotes: "",
+  attachments: [],
+  autoFilled: [],
   styleIds: [],
 };
+
+/**
+ * A fresh context. Use this rather than EMPTY_CONTEXT when seeding a doc: the
+ * constant's arrays are a single shared instance, so handing it out directly
+ * means two pieces can end up pointing at the same one.
+ */
+export function emptyContext(): WriterContext {
+  return {
+    ...EMPTY_CONTEXT,
+    actions: [],
+    tone: [],
+    audience: [],
+    attachments: [],
+    autoFilled: [],
+    styleIds: [],
+  };
+}
 
 export interface WriterDoc {
   id: string;
@@ -120,7 +160,13 @@ export const FIDELITY_OPTIONS: { key: Fidelity; label: string; blurb: string }[]
   {
     key: "rewrite",
     label: "🚀 Rewrite",
-    blurb: "Free rein to restructure and rework. For rough sketches, or writing from scratch.",
+    blurb: "Free rein to restructure and rework the draft you gave me.",
+  },
+  {
+    key: "draft",
+    label: "📝 Write it",
+    blurb:
+      "You jotted the gist and the context; I write the actual piece. Nothing of yours to preserve, but nothing invented either.",
   },
 ];
 

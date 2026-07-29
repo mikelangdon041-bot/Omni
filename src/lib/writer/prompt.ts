@@ -35,6 +35,11 @@ export const FIDELITY_RULES: Record<string, string> = {
   rewrite: `MODE: REWRITE.
 - You have room to restructure, re-order and re-word to make this as good as it can be, while keeping every fact, name, number and commitment the user gave you.
 - Still never invent specifics they didn't provide.`,
+  draft: `MODE: WRITE IT FROM MY NOTES.
+- What they gave you is shorthand: fragments, bullets, half-sentences, a bit of context. It is a brief, not a draft. Nothing in it needs preserving word for word, and their telegraphic phrasing should NOT survive into the result.
+- Write the real piece. Full sentences, a proper opening and close, the points in an order that makes sense. This is expected to be longer than what they typed.
+- Every fact, name, number, date and commitment must come from what they gave you. Do not invent a detail to round out a sentence, and do not promise anything on their behalf that they didn't say. If a hard fact is genuinely missing and the piece needs it, leave [square brackets] for that one thing.
+- Their shorthand often mixes the message with notes to you about it ("keep it short", "she's annoyed"). Use the second kind to make choices; only the first kind belongs in the text.`,
 };
 
 // Length only lands when it is a measurable instruction. Asked for something
@@ -69,6 +74,18 @@ const LENGTHEN_HINT =
 // Asking for the pieces to be moved around runs straight into edit-only mode's
 // "do NOT reorder anything", and the mode was winning. Same fix as length: read
 // the request out of the note and lift the clause it contradicts.
+// Asking for a look-up in the note has to work on its own, without also finding
+// the checkbox. Extraction ticks that box a couple of seconds later, so anyone
+// who types and hits Generate immediately would otherwise get a piece written
+// without the search they asked for.
+const RESEARCH_HINT =
+  /\b(look (?:it |this |that |them )?up|look up|research|find out|search (?:for|online|the web)|google|what (?:do|are) others|how (?:do|are) others|what others say|best practice|current (?:guidance|recommendation|thinking|data|evidence)|latest (?:guidance|data|research|thinking)|cite|citation|source(?:s|d)?\b.*\bfor\b|what does the (?:data|evidence|literature|research) say|industry standard|benchmark)\b/i;
+
+/** Did the user ask, in their own words, for something to be looked up? */
+export function wantsResearch(text: string): boolean {
+  return RESEARCH_HINT.test(text || "");
+}
+
 const RESTRUCTURE_HINT =
   /\b(reorder|re-?order|restructure|reorganiz|reorganis|rearrange|move (?:things |it |them |stuff )?around|different order|better order|flow better|reflow|rework the (?:structure|order)|makes? (?:the )?most sense|logical order)\b/i;
 
@@ -96,6 +113,25 @@ const TYPE_NOTES: Record<string, string> = {
   summary: "This is a summary/abstract. Faithful, complete, no invention, as tight as possible.",
   other: "Follow the user's description of what this should be.",
 };
+
+// Files the user attached, already read into text at upload time. Framed as
+// source material rather than as their draft: a screenshot of an email they need
+// to answer is the thing to respond TO, not the thing to polish.
+function attachmentBlock(attachments: unknown): string {
+  const list = (Array.isArray(attachments) ? attachments : []) as {
+    name?: string;
+    kind?: string;
+    text?: string;
+  }[];
+  const usable = list.filter((f) => (f?.text || "").trim());
+  if (!usable.length) return "";
+  return `ATTACHED MATERIAL — files the user handed over, transcribed. Treat this as source material to work from (an email to answer, a document to draw on), not as their own draft to improve, unless they say otherwise. Pull names, dates and specifics from it:\n${usable
+    .map(
+      (f) =>
+        `--- ${f.kind === "image" ? "Screenshot" : "File"}: ${f.name || "attachment"} ---\n${String(f.text).slice(0, 20000)}`,
+    )
+    .join("\n\n")}`;
+}
 
 export function buildGeneratePrompt(a: GenerateArgs): { system: string; user: string } {
   const fidelity = FIDELITY_RULES[a.fidelity] ? a.fidelity : "light";
@@ -132,6 +168,7 @@ ${notes}`,
     // be used as fact — unlike anything the model would otherwise be inventing.
     ctx.researchNotes &&
       `RESEARCH — looked up on the web for this piece, with sources. You may state these as fact and reference them naturally; do not dump the list, cite a URL inline, or add a sources section unless the user asked for one:\n${ctx.researchNotes}`,
+    attachmentBlock(ctx.attachments),
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -174,9 +211,11 @@ What they want changed: ${a.guidance || "(none — light general polish)"}`
     actionList.includes("Restructure for clarity") ||
     actionList.includes("Make it skimmable");
 
+  // Rewrite and write-from-notes both change the shape by design, so neither
+  // gets a length-preservation clause bolted on.
   const fidelityBlock =
-    fidelity === "rewrite"
-      ? FIDELITY_RULES.rewrite
+    fidelity === "rewrite" || fidelity === "draft"
+      ? FIDELITY_RULES[fidelity]
       : `${FIDELITY_RULES[fidelity]}\n${
           lengthMoves
             ? "- EXCEPTION, length: the user explicitly asked for a length change, and that beats this mode's instinct to leave the length alone. Make the cut (or the expansion) in full. Do it by deleting or merging whole sentences, not by rewriting the sentences you keep."

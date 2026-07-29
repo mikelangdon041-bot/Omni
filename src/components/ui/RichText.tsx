@@ -297,18 +297,33 @@ export function RichText({
   return (
     <div
       onDragOver={(e) => {
-        if (!onFiles || !e.dataTransfer.types.includes("Files")) return;
+        // Claim every drop, not just OS file drops. An image dragged out of a
+        // web page or a Word document arrives as HTML with an <img src> and no
+        // File at all — and if this handler passes on it, the browser's default
+        // drops the picture straight into the contenteditable, where it renders
+        // full-size and there is no way to get a caret past it.
+        if (!onFiles) return;
         e.preventDefault();
         setDragging(true);
       }}
       onDragLeave={() => setDragging(false)}
       onDrop={(e) => {
         if (!onFiles) return;
-        const files = filesFrom(e.dataTransfer);
-        setDragging(false);
-        if (!files.length) return;
         e.preventDefault();
-        onFiles(files);
+        setDragging(false);
+        const files = filesFrom(e.dataTransfer);
+        if (files.length) {
+          onFiles(files);
+          return;
+        }
+        // No file behind it, so take the words and leave the markup: dropping
+        // rich content from a page should never bring an image with it.
+        const text = e.dataTransfer.getData("text/plain");
+        if (text) {
+          ref.current?.focus();
+          document.execCommand("insertText", false, text);
+          emit();
+        }
       }}
       className={`overflow-hidden rounded-lg border focus-within:border-[var(--accent)] focus-within:ring-2 focus-within:ring-[var(--accent)]/20 ${
         dragging
