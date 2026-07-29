@@ -559,6 +559,12 @@ fn mix_loop(
 
             encode_block(&mut encoder, &block, &mut mp3)?;
             file.write_all(&mp3)?;
+            // Flushed every tick, not just at the end. The recording is the
+            // only copy of the meeting, and a buffer that dies with the
+            // process would take the last several seconds of it along. MP3 is
+            // a stream of independent frames, so what reaches the disk stays
+            // playable and transcribable even if nothing else follows it.
+            file.flush()?;
             done = target;
             written.store(done, Ordering::Relaxed);
         }

@@ -71,6 +71,62 @@ pub struct Status {
     system_device_id: String,
     /// URL of the last finished meeting, so "Open it" works after the fact.
     last_meeting: String,
+    /// Recordings found on disk that never became meetings — the app was
+    /// killed, the machine restarted, or an upload failed. Offered back rather
+    /// than left in a folder nobody would think to look in.
+    orphans: Vec<Orphan>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct Orphan {
+    path: String,
+    /// "23 May, 14:05" — enough to recognise which meeting it was.
+    when: String,
+    /// Rounded minutes, so a stray two-second file is obviously not a meeting.
+    minutes: u64,
+}
+
+/// Anything left in the recordings folder is by definition unfinished: a
+/// recording is deleted the moment its meeting exists.
+fn find_orphans(app: &AppHandle) -> Vec<Orphan> {
+    let dir = app
+        .path()
+        .app_local_data_dir()
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join("recordings");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+
+    let mut out: Vec<(std::time::SystemTime, Orphan)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("mp3") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        // A file with nothing in it is a start that never got anywhere.
+        if meta.len() < 8_000 {
+            let _ = std::fs::remove_file(&path);
+            continue;
+        }
+        let modified = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        let when: chrono::DateTime<chrono::Local> = modified.into();
+        // 64 kbps mono, so bytes to seconds is a division. Near enough for
+        // "was this the hour-long one or the short one?".
+        let minutes = meta.len() / (8_000 * 60);
+        out.push((
+            modified,
+            Orphan {
+                path: path.to_string_lossy().to_string(),
+                when: when.format("%-d %b, %H:%M").to_string(),
+                minutes,
+            },
+        ));
+    }
+    // Newest first: the one you just lost is the one you want back.
+    out.sort_by(|a, b| b.0.cmp(&a.0));
+    out.into_iter().map(|(_, o)| o).collect()
 }
 
 pub struct AppState {
@@ -108,6 +164,7 @@ impl AppState {
             mic_device_id: settings.mic_device_id.clone(),
             system_device_id: settings.system_device_id.clone(),
             last_meeting: String::new(),
+            orphans: Vec::new(),
         };
         Self {
             recorder: Mutex::new(None),
@@ -275,7 +332,7 @@ async fn stop_recording(app: AppHandle) {
         s.clone()
     };
 
-    match upload_and_capture(&app, &settings, &recording).await {
+    match upload_and_capture(&app, &settings, &recording.path).await {
         Ok(captured) => {
             let url = format!("{}{}", settings.normalized_url(), captured.path);
             let _ = std::fs::remove_file(&recording.path);
@@ -306,7 +363,7 @@ async fn stop_recording(app: AppHandle) {
 async fn upload_and_capture(
     app: &AppHandle,
     settings: &settings::Settings,
-    recording: &audio::Recording,
+    audio: &std::path::Path,
 ) -> Result<omni::Captured, String> {
     let base = settings.normalized_url();
     let config = auth::fetch_config(&base).await.map_err(|e| e.to_string())?;
@@ -327,7 +384,7 @@ async fn upload_and_capture(
     };
 
     let (transcript, _speakers, audio_path) = client
-        .transcribe(&recording.path, settings.keep_audio, &progress)
+        .transcribe(audio, settings.keep_audio, &progress)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -589,6 +646,72 @@ fn toggle_recording(app: AppHandle) {
     toggle(&app);
 }
 
+// Send a recording that never made it — the app was killed mid-meeting, the
+// machine restarted, or the upload failed. Same pipeline as a normal stop, so
+// a recovered meeting is indistinguishable from one that went straight
+// through.
+#[tauri::command]
+async fn recover(app: AppHandle, path: String) -> Result<(), String> {
+    let file = std::path::PathBuf::from(&path);
+    if !file.is_file() {
+        return Err("That recording is no longer on disk.".into());
+    }
+    let settings = {
+        let state = app.state::<AppState>();
+        let s = state.settings.lock().unwrap();
+        s.clone()
+    };
+    set_status(&app, |s| {
+        s.phase = Phase::Working;
+        s.percent = 0;
+        s.message = "Sending the recovered recording".into();
+    });
+
+    match upload_and_capture(&app, &settings, &file).await {
+        Ok(captured) => {
+            let url = format!("{}{}", settings.normalized_url(), captured.path);
+            let _ = std::fs::remove_file(&file);
+            let title = captured.title.clone();
+            let orphans = find_orphans(&app);
+            let for_status = url.clone();
+            set_status(&app, move |s| {
+                s.phase = Phase::Done;
+                s.percent = 100;
+                s.message = title;
+                s.last_meeting = for_status;
+                s.orphans = orphans;
+            });
+            if settings.open_when_done {
+                let _ = tauri_plugin_opener::open_url(&url, None::<&str>);
+            }
+            Ok(())
+        }
+        Err(e) => {
+            // Left on disk deliberately: a failed recovery must not be the
+            // thing that finally loses the recording.
+            fail(&app, e.clone());
+            Err(e)
+        }
+    }
+}
+
+#[tauri::command]
+fn discard_orphan(app: AppHandle, path: String) {
+    let file = std::path::PathBuf::from(&path);
+    // Only ever inside our own recordings folder, so a bad path from the
+    // window cannot be turned into deleting something else.
+    let dir = app
+        .path()
+        .app_local_data_dir()
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join("recordings");
+    if file.starts_with(&dir) {
+        let _ = std::fs::remove_file(&file);
+    }
+    let orphans = find_orphans(&app);
+    set_status(&app, move |s| s.orphans = orphans);
+}
+
 #[tauri::command]
 fn open_url(url: String) {
     let _ = tauri_plugin_opener::open_url(&url, None::<&str>);
@@ -647,6 +770,8 @@ pub fn run() {
             sign_out,
             save_settings,
             toggle_recording,
+            recover,
+            discard_orphan,
             open_url,
             hide_window,
         ])
@@ -717,6 +842,13 @@ pub fn run() {
                 set_status(&handle, move |s| s.message = e);
             }
 
+            // A recording sitting in the folder means the last one never
+            // became a meeting. Surface it now: on disk and unmentioned is the
+            // same as lost.
+            let orphans = find_orphans(&handle);
+            let recovered = !orphans.is_empty();
+            set_status(&handle, move |s| s.orphans = orphans);
+
             let snapshot = {
                 let state = handle.state::<AppState>();
                 let s = state.status.lock().unwrap();
@@ -729,8 +861,18 @@ pub fn run() {
             // unless Windows started it at login, where putting a window in
             // front of whatever someone is doing is not a welcome.
             let launched_by_windows = std::env::args().any(|a| a == "--autostart");
-            if snapshot.phase == Phase::Setup && !launched_by_windows {
+            if (snapshot.phase == Phase::Setup && !launched_by_windows) || recovered {
+                // A recovered recording opens the window even at login: it is
+                // the one thing worth interrupting for, because until it is
+                // sent it is a meeting nobody has notes for.
                 show_window(&handle);
+            }
+            if recovered {
+                notify(
+                    &handle,
+                    "A recording was left behind",
+                    "Omni Recorder has a recording that never became a meeting. Open it to send it.",
+                );
             }
             Ok(())
         })

@@ -22,8 +22,15 @@ const show = (id, on) => {
 /// added on top of the content; measuring them beats guessing, because it is
 /// the difference between a snug window and one with a scrollbar in it.
 async function fitWindow() {
-  const view = [...document.querySelectorAll("section")].find((s) => !s.hidden);
-  if (!view) return;
+  // Everything on screen, not just the active section: the unfinished-recording
+  // banner sits outside them all, and measuring only sections cropped it off.
+  const shown = [...document.body.children].filter(
+    (el) => !el.hidden && el.tagName !== "SCRIPT" && el.getBoundingClientRect().height > 0,
+  );
+  if (!shown.length) return;
+  const tops = shown.map((el) => el.getBoundingClientRect().top);
+  const bottoms = shown.map((el) => el.getBoundingClientRect().bottom);
+  const content = Math.max(...bottoms) - Math.min(...tops);
   const { getCurrentWindow, LogicalSize } = window.__TAURI__.window;
   const win = getCurrentWindow();
   try {
@@ -34,7 +41,7 @@ async function fitWindow() {
     ]);
     const chrome = (outer.height - inner.height) / scale;
     // Body padding, top and bottom, plus the frame.
-    const height = Math.ceil(view.getBoundingClientRect().height) + 44 + chrome;
+    const height = Math.ceil(content) + 44 + chrome;
     await win.setSize(new LogicalSize(440, Math.min(820, Math.max(240, height))));
   } catch {
     // Sizing is a nicety; a window that will not resize is still usable.
@@ -56,6 +63,24 @@ function render() {
   if (!status) return;
 
   const signedIn = status.signed_in && status.omni_url;
+
+  // A recording that outlived the run that made it, offered back rather than
+  // left in a folder nobody would think to look in. Shown above both views on
+  // purpose: a crash can also cost the session, and a stranded recording that
+  // only appears once you happen to sign in is stranded twice.
+  const orphan = (status.orphans || [])[0];
+  const busy = status.phase === "recording" || status.phase === "working";
+  show("recovered", Boolean(orphan) && !busy);
+  if (orphan) {
+    const length = orphan.minutes >= 1 ? `about ${orphan.minutes} min` : "under a minute";
+    const more =
+      status.orphans.length > 1 ? ` ${status.orphans.length - 1} more after this.` : "";
+    $("recovered-note").textContent = signedIn
+      ? `From ${orphan.when}, ${length}. It never became a meeting.${more}`
+      : `From ${orphan.when}, ${length}. Sign in and it can still be sent.${more}`;
+    $("recover-send").disabled = !signedIn;
+  }
+
   show("setup", !signedIn);
   show("settings", signedIn && showingSettings);
   show("main", signedIn && !showingSettings);
@@ -201,6 +226,20 @@ $("signin").addEventListener("submit", async (e) => {
 });
 
 $("record").addEventListener("click", () => invoke("toggle_recording"));
+
+$("recover-send").addEventListener("click", () => {
+  const orphan = (status.orphans || [])[0];
+  if (orphan) void invoke("recover", { path: orphan.path }).catch(() => {});
+});
+
+$("recover-discard").addEventListener("click", () => {
+  const orphan = (status.orphans || [])[0];
+  // No confirm: the recording is the only copy, so this button says "Delete
+  // it" and means it, but it is deliberately the quieter of the two.
+  if (orphan && window.confirm("Delete this recording? It cannot be recovered.")) {
+    void invoke("discard_orphan", { path: orphan.path });
+  }
+});
 $("open-meeting").addEventListener("click", () => invoke("open_url", { url: status.last_meeting }));
 $("settings-open").addEventListener("click", openSettings);
 $("settings-close").addEventListener("click", () => {

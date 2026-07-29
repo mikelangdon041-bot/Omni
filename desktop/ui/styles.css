@@ -215,6 +215,27 @@ button {
   flex: 1;
 }
 
+.recovered {
+  padding: 13px 14px;
+  margin-bottom: 12px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 12px;
+}
+
+.recovered-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.recovered-note {
+  margin: 3px 0 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .stage {
   padding: 20px;
   background: var(--surface);

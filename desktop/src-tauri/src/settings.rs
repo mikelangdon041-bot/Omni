@@ -88,9 +88,14 @@ pub fn load() -> Settings {
     };
     // A missing or corrupt file is not worth surfacing: defaults are a working
     // state, and the user is about to be asked to sign in anyway.
+    //
+    // The BOM strip is not paranoia. Anything that rewrites this file with a
+    // Windows text editor or PowerShell's `Out-File -Encoding utf8` prepends
+    // one, serde rejects the whole document, and the symptom is silently being
+    // signed out with every setting back to default.
     fs::read_to_string(p)
         .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .and_then(|raw| serde_json::from_str(raw.trim_start_matches('\u{feff}')).ok())
         .unwrap_or_default()
 }
 

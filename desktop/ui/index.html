@@ -7,6 +7,18 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
+      <!-- A recording that never became a meeting: the app was killed, the
+           machine restarted, or the upload failed. Nothing is deleted until
+           its meeting exists, so it is still here to send. -->
+      <div class="recovered" id="recovered" hidden>
+        <p class="recovered-title">Unfinished recording</p>
+        <p class="recovered-note" id="recovered-note"></p>
+        <div class="row">
+          <button class="primary" id="recover-send">Send it to Omni</button>
+          <button class="ghost" id="recover-discard">Delete it</button>
+        </div>
+      </div>
+
     <!-- Sign in. Shown on first run and whenever the session is gone. -->
     <section id="setup" hidden>
       <h1>Omni Recorder</h1>
