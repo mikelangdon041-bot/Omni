@@ -56,6 +56,16 @@ const LENGTH_FACTORS: Record<string, number> = {
   longer: 1.4,
 };
 
+// Asking for a shorter piece in the note box has to work on its own, without
+// also hunting for the Length chip. Extraction ticks that chip a couple of
+// seconds later, but the user may well hit Generate first, and until then the
+// editing mode's "keep the length" line would quietly win. So the note is read
+// for a length request here too, with no model call involved.
+const SHORTEN_HINT =
+  /\b(shorter|shorten|cut (?:it |this )?(?:down|back)?|trim|tighten|condense|concise|brevity|too long|wordy|halve|shrink|slim)\b/i;
+const LENGTHEN_HINT =
+  /\b(longer|expand|flesh(?:ed)? (?:it )?out|more detail|elaborate|too short|beef(?:ed)? up)\b/i;
+
 function wordCount(s: string): number {
   return s.split(/\s+/).filter(Boolean).length;
 }
@@ -116,9 +126,17 @@ export function buildGeneratePrompt(a: GenerateArgs): { system: string; user: st
     ? `Here is the current draft you produced earlier. Revise it according to the new guidance while keeping everything that wasn't asked to change.\n\nCurrent draft:\n${a.previous}\n\nNew guidance: ${a.guidance || "(none — light general polish)"}`
     : `Here is everything the user put in the box. Work out what it is and deliver what they want.\n\nWhat the user wrote:\n${a.input || notes}`;
 
+  // The picker if it was touched, otherwise whatever the note asks for in
+  // plain words.
+  let lengthKey = String(ctx.length || "");
+  if (!LENGTH_RULES[lengthKey]) {
+    const asked = `${notes} ${a.guidance}`;
+    if (SHORTEN_HINT.test(asked)) lengthKey = "shorter";
+    else if (LENGTHEN_HINT.test(asked)) lengthKey = "longer";
+  }
   // Measured against whatever is actually being shortened: the current draft on
   // a refine pass, otherwise what the user put in the box.
-  const lengthRule = lengthRuleFor(String(ctx.length || ""), a.previous || a.input || notes);
+  const lengthRule = lengthRuleFor(lengthKey, a.previous || a.input || notes);
 
   // The editing mode and the length control can pull in opposite directions:
   // "keep it as it is" versus "cut it in half". Left unresolved the mode wins
@@ -136,7 +154,7 @@ export function buildGeneratePrompt(a: GenerateArgs): { system: string; user: st
       : `${FIDELITY_RULES[fidelity]}\n${
           lengthMoves
             ? "- EXCEPTION, length: the user explicitly asked for a length change, and that beats this mode's instinct to leave the length alone. Make the cut (or the expansion) in full. Do it by deleting or merging whole sentences, not by rewriting the sentences you keep."
-            : "- Keep the length where it is: the result should land within about 10% of the word count you were given."
+            : "- Keep the length where it is: the result should land within about 10% of the word count you were given. This one yields to the user's own instructions in the intake: if they asked you to cut it down or flesh it out in their own words, do that instead, in full, and ignore this line."
         }`;
 
   const system = `You are an elite writing partner. You produce polished, natural writing that sounds like a real person, never like AI filler.

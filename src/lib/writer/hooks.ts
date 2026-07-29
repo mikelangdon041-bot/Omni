@@ -119,6 +119,11 @@ export function useWriterDoc(id: string, userId: string | null) {
   const [versions, setVersions] = useState<WriterVersion[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Edits typed but not yet written to the database. Declared up here because
+  // the initial fetch below has to know about them.
+  const pendingRef = useRef<Partial<WriterDoc>>({});
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     // Instant paint from cache (warmed by the docs list, or by a previous
     // visit to this doc), then refresh — including versions — in the
@@ -143,7 +148,13 @@ export function useWriterDoc(id: string, userId: string | null) {
           .limit(100),
       ]);
       if (!active) return;
-      const row = d ? normalizeDoc(d as WriterDoc) : null;
+      // Anything typed while this request was in flight is newer than what came
+      // back, so it wins. Without this the page paints from cache, you start
+      // typing in a box, and the response quietly reverts it — then the next
+      // keystroke saves the reverted text back over what you wrote.
+      const row = d
+        ? { ...normalizeDoc(d as WriterDoc), ...pendingRef.current }
+        : null;
       setDoc(row);
       setVersions((v as WriterVersion[]) || []);
       setLoading(false);
@@ -161,9 +172,6 @@ export function useWriterDoc(id: string, userId: string | null) {
 
   // Autosave: optimistic local update immediately, debounced merged write to
   // the database (typing in rich-text fields would otherwise write per key).
-  const pendingRef = useRef<Partial<WriterDoc>>({});
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const flush = useCallback(async () => {
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = null;
@@ -182,9 +190,15 @@ export function useWriterDoc(id: string, userId: string | null) {
     [flush],
   );
 
-  // Push any unsaved keystrokes when the page is left.
+  // Push any unsaved keystrokes when the page is left — on navigation, and also
+  // when the tab is hidden or closed, which never reaches the unmount path.
   useEffect(() => {
+    const onHide = () => {
+      if (document.visibilityState === "hidden") void flush();
+    };
+    document.addEventListener("visibilitychange", onHide);
     return () => {
+      document.removeEventListener("visibilitychange", onHide);
       void flush();
     };
   }, [flush]);

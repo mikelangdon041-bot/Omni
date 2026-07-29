@@ -124,12 +124,14 @@ export default function WriterDocPage() {
     return pasted.split(/\s+/).filter(Boolean).length >= 25 ? pasted : "";
   }, [doc, versions]);
 
-  // Auto-extract: once you've typed a real brief and paused, ask the AI to
-  // file recipient / ask / key points / tone / … into their fields — only
-  // ever filling fields you've left empty.
+  // Auto-extract: once you've typed something real and paused, read both boxes
+  // and fill in the intake — recipient, goal, key points, tone, and the chips
+  // for what you asked for (grammar, length, edit level, greeting). Only ever
+  // fills what you left alone. The floor is low because a note as short as
+  // "no hi, cut it down" is already a full instruction.
   useEffect(() => {
     if (!doc || busy) return;
-    if (intakePlain.length < 60 || intakePlain === lastExtracted.current) return;
+    if (intakePlain.length < 35 || intakePlain === lastExtracted.current) return;
     const timer = setTimeout(async () => {
       const d = docRef.current;
       if (!d) return;
@@ -265,6 +267,9 @@ export default function WriterDocPage() {
 
   // Emails carry the saved signature unless this piece opts out.
   const signatureOn = isEmail && ctx.useSignature && !!settings?.signature?.trim();
+  // Anything that can open with "Hi Sarah," can be told not to. Only a
+  // summary/abstract has no salutation to skip in the first place.
+  const canGreet = doc.doc_type !== "summary";
 
   const hasIntake =
     !!inputPlain.trim() ||
@@ -626,7 +631,7 @@ export default function WriterDocPage() {
                 </p>
               </div>
 
-              {(isEmail || doc.doc_type === "message") && (
+              {canGreet && (
                 <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border px-2.5 py-2 text-xs text-ink transition hover:border-[var(--accent)]/50">
                   <input
                     type="checkbox"
