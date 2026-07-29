@@ -66,6 +66,12 @@ const SHORTEN_HINT =
 const LENGTHEN_HINT =
   /\b(longer|expand|flesh(?:ed)? (?:it )?out|more detail|elaborate|too short|beef(?:ed)? up)\b/i;
 
+// Asking for the pieces to be moved around runs straight into edit-only mode's
+// "do NOT reorder anything", and the mode was winning. Same fix as length: read
+// the request out of the note and lift the clause it contradicts.
+const RESTRUCTURE_HINT =
+  /\b(reorder|re-?order|restructure|reorganiz|reorganis|rearrange|move (?:things |it |them |stuff )?around|different order|better order|flow better|reflow|rework the (?:structure|order)|makes? (?:the )?most sense|logical order)\b/i;
+
 function wordCount(s: string): number {
   return s.split(/\s+/).filter(Boolean).length;
 }
@@ -109,7 +115,11 @@ export function buildGeneratePrompt(a: GenerateArgs): { system: string; user: st
     // box has to be enough on its own, without also hunting for the matching
     // chips further down the page.
     notes &&
-      `THE USER'S OWN INSTRUCTIONS — these are direct orders from them and outrank every other preference below. If they asked for one specific change, make that change and leave everything else alone:\n${notes}`,
+      `THE USER'S OWN INSTRUCTIONS — these are direct orders from them and outrank every other preference below. If they asked for one specific change, make that change and leave everything else alone.
+
+Read this the way a colleague reads a note over your shoulder: it is them talking TO you about the piece, not text to be dropped INTO the piece. When they say "I want to get across that X", work X into the writing in the piece's own voice and at the right place. Never quote their instruction back, never paste their phrasing verbatim, and never write a sentence that sounds like it is describing the note ("As mentioned, I want to convey…"). If part of the note is only context for you, use it to make better choices and leave it out of the text entirely.
+
+${notes}`,
     list(ctx.actions) &&
       `Fixes the user explicitly ticked. Every one of these must be visibly done in the result: ${list(ctx.actions)}`,
     list(ctx.tone) && `Tone: ${list(ctx.tone)}`,
@@ -118,12 +128,23 @@ export function buildGeneratePrompt(a: GenerateArgs): { system: string; user: st
     ctx.ask && `What the writer is asking for / wants to happen: ${ctx.ask}`,
     ctx.keyPoints && `Key points that MUST be included:\n${ctx.keyPoints}`,
     ctx.background && `Background / context:\n${ctx.background}`,
+    // Findings from a web look-up run just before this call. Sourced, so it can
+    // be used as fact — unlike anything the model would otherwise be inventing.
+    ctx.researchNotes &&
+      `RESEARCH — looked up on the web for this piece, with sources. You may state these as fact and reference them naturally; do not dump the list, cite a URL inline, or add a sources section unless the user asked for one:\n${ctx.researchNotes}`,
   ]
     .filter(Boolean)
     .join("\n\n");
 
   const task = a.previous
-    ? `Here is the current draft you produced earlier. Revise it according to the new guidance while keeping everything that wasn't asked to change.\n\nCurrent draft:\n${a.previous}\n\nNew guidance: ${a.guidance || "(none — light general polish)"}`
+    ? `Here is the current draft, including any edits the user has made to it by hand. Revise THIS text, keeping everything they didn't ask you to change.
+
+The guidance below is the user talking to you about the draft, not copy to insert. Interpret it and fold it in: if they say "I want the idea that we're already piloting this", write that idea into the flow of the piece in its own voice, in the place it belongs. Do not quote their words back, do not paste their phrasing verbatim, and do not add a sentence that reads like a note to yourself. If the guidance is only context, let it inform your choices and keep it out of the text.
+
+Current draft:
+${a.previous}
+
+What they want changed: ${a.guidance || "(none — light general polish)"}`
     : `Here is everything the user put in the box. Work out what it is and deliver what they want.\n\nWhat the user wrote:\n${a.input || notes}`;
 
   // The picker if it was touched, otherwise whatever the note asks for in
@@ -148,6 +169,11 @@ export function buildGeneratePrompt(a: GenerateArgs): { system: string; user: st
     !!lengthRule ||
     actionList.includes("Tighten / shorten") ||
     actionList.includes("Expand with more detail");
+  const wantsRestructure =
+    RESTRUCTURE_HINT.test(`${notes} ${a.guidance}`) ||
+    actionList.includes("Restructure for clarity") ||
+    actionList.includes("Make it skimmable");
+
   const fidelityBlock =
     fidelity === "rewrite"
       ? FIDELITY_RULES.rewrite
@@ -155,6 +181,10 @@ export function buildGeneratePrompt(a: GenerateArgs): { system: string; user: st
           lengthMoves
             ? "- EXCEPTION, length: the user explicitly asked for a length change, and that beats this mode's instinct to leave the length alone. Make the cut (or the expansion) in full. Do it by deleting or merging whole sentences, not by rewriting the sentences you keep."
             : "- Keep the length where it is: the result should land within about 10% of the word count you were given. This one yields to the user's own instructions in the intake: if they asked you to cut it down or flesh it out in their own words, do that instead, in full, and ignore this line."
+        }${
+          wantsRestructure
+            ? '\n- EXCEPTION, order: the user asked you to move things around, so the "do not reorder" line above does not apply to this piece. Re-sequence the paragraphs and points into the order that actually makes sense: lead with the point, group what belongs together, put the ask where it lands. Keep reusing their own sentences as you move them. This is a re-sequencing, not a rewrite.'
+            : ""
         }`;
 
   const system = `You are an elite writing partner. You produce polished, natural writing that sounds like a real person, never like AI filler.

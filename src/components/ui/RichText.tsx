@@ -338,15 +338,25 @@ export function RichText({
           onInput={onInput}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
+          spellCheck
           onContextMenu={(e) => {
             // Right-click is where people look for "make this a link", so the
-            // browser's own menu is replaced with one that offers it. Only
-            // over this editor; everywhere else keeps the native menu.
+            // browser's own menu is replaced with one that offers it — but only
+            // when there is a link to act on.
+            //
+            // Right-clicking a single word with nothing selected is how you get
+            // spelling suggestions for the red squiggle under it, and that menu
+            // is the browser's to draw: there is no API to read the suggestions
+            // and no way to reopen it once preventDefault has run. So a plain
+            // caret keeps the native menu, and ours appears for a selection (a
+            // phrase to turn into a link) or inside an existing link.
             const el = ref.current;
             const selection = window.getSelection();
             if (!el || !selection?.rangeCount) return;
             const range = selection.getRangeAt(0);
             if (!el.contains(range.commonAncestorContainer)) return;
+            const onLink = !!anchorAt(range.commonAncestorContainer, el);
+            if (range.collapsed && !onLink) return;
             e.preventDefault();
             savedRange.current = range.cloneRange();
             const box = el.getBoundingClientRect();
@@ -354,7 +364,7 @@ export function RichText({
             setMenu({
               top: e.clientY - box.top,
               left: e.clientX - box.left,
-              onLink: !!anchorAt(range.commonAncestorContainer, el),
+              onLink,
             });
           }}
           onCompositionStart={() => (composing.current = true)}

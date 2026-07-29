@@ -30,6 +30,9 @@ import { Input, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { RichText, RichTextView } from "@/components/ui/RichText";
 import { AutoRichField } from "@/components/ui/AutoRichField";
+import { ProgressBar, useProgress } from "@/components/ui/Progress";
+import { WriterChat } from "@/components/writer/WriterChat";
+import { toEmailHtml } from "@/lib/writer/clipboard";
 import { useConfirm, useToast } from "@/components/ui/Feedback";
 import { ChipGroup } from "@/components/writer/Chips";
 import { IntakeSection } from "@/components/writer/IntakeSection";
@@ -62,16 +65,30 @@ export default function WriterDocPage() {
   const toast = useToast();
   const confirm = useConfirm();
   const { userId } = useUserId();
+  const { settings, save: saveSettings } = useWriterSettings(userId);
   const { doc, versions, loading, save, flush, addVersion, remove } = useWriterDoc(
     id,
     userId,
+    settings?.version_retention_days,
   );
-  const { settings, save: saveSettings } = useWriterSettings(userId);
   const { styles } = useWriterStyles(userId);
 
   const [busy, setBusy] = useState(false);
+  const [researching, setResearching] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [editingSig, setEditingSig] = useState(false);
+  // Refine dials: the same chips as the intake, but pointed at the version
+  // that came out rather than at the draft that went in.
+  const [refineActions, setRefineActions] = useState<string[]>([]);
+  const [refineTone, setRefineTone] = useState<string[]>([]);
+  const [refineLength, setRefineLength] = useState("as_is");
+
+  // Nothing here reports real progress (the AI calls return in one shot), so the
+  // bars are time-based estimates. Writing takes longer than a look-up, and a
+  // look-up runs several searches, so they get different expectations.
+  const writeProgress = useProgress(busy, 25000);
+  const researchProgress = useProgress(researching, 30000);
+  const uploadProgress = useProgress(uploading, 12000);
   const [tagDraft, setTagDraft] = useState("");
   const [guidance, setGuidance] = useState("");
   const [variantResults, setVariantResults] = useState<
@@ -89,6 +106,9 @@ export default function WriterDocPage() {
   const lastExtracted = useRef("");
   const extractInit = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  // The search-ready question extraction worked out of the brief, used when the
+  // look-up runs. Kept in a ref: it is derived, not something you edit.
+  const researchQuestion = useRef("");
 
   // What you typed in the one box, plus the optional extra note. Everything —
   // extraction, generation, the diff — reads from these two.
@@ -220,6 +240,14 @@ export default function WriterDocPage() {
           partial.noGreeting = true;
           filled.push("no greeting");
         }
+        // "Find out how others are doing this" is a request the writer can now
+        // actually honour, so asking for it in the note turns the look-up on.
+        if (!cur.context.research && ex.research === true) {
+          partial.research = true;
+          filled.push("look it up");
+        }
+        if (ex.researchQuestion && !researchQuestion.current)
+          researchQuestion.current = String(ex.researchQuestion);
         const docPartial: Partial<WriterDoc> = {};
         if (Object.keys(partial).length)
           docPartial.context = { ...cur.context, ...partial };
@@ -267,6 +295,17 @@ export default function WriterDocPage() {
 
   // Emails carry the saved signature unless this piece opts out.
   const signatureOn = isEmail && ctx.useSignature && !!settings?.signature?.trim();
+
+  // Refine can run on chips alone, with no typed instruction.
+  const refineHasPicks =
+    refineActions.length > 0 || refineTone.length > 0 || refineLength !== "as_is";
+  const refinePicksSummary = [
+    refineActions.length && refineActions.join("; "),
+    refineTone.length && `tone: ${refineTone.join("; ")}`,
+    refineLength !== "as_is" && `make it ${refineLength.replace("_", " ")}`,
+  ]
+    .filter(Boolean)
+    .join(". ");
   // Anything that can open with "Hi Sarah," can be told not to. Only a
   // summary/abstract has no salutation to skip in the first place.
   const canGreet = doc.doc_type !== "summary";
@@ -335,8 +374,71 @@ export default function WriterDocPage() {
     router.replace("/writing-studio");
   }
 
+  /**
+   * Keep whatever is currently in the output pane as a restorable version, but
+   * only when it isn't already saved as one. That covers the case the version
+   * list otherwise loses: you edit the AI's text by hand, then regenerate or
+   * restore something older, and your edits are gone with nothing to go back to.
+   */
+  async function snapshotCurrent(label: string) {
+    const current = docRef.current;
+    if (!current?.content.trim()) return;
+    const plain = htmlToPlain(current.content);
+    if (versions.some((v) => htmlToPlain(v.content) === plain)) return;
+    await addVersion({
+      doc_id: current.id,
+      content: current.content,
+      subject: current.subject,
+      instructions: label,
+      variant_label: "",
+    });
+  }
+
+  // Go and look it up. Returns the findings so generate can use them on the same
+  // click, and saves them so they're visible and removable afterwards.
+  async function runResearch(): Promise<string> {
+    const current = docRef.current;
+    if (!current) return "";
+    const question =
+      researchQuestion.current.trim() ||
+      [notesPlain, inputPlain].filter(Boolean).join("\n\n").slice(0, 2000);
+    if (!question.trim()) return "";
+    setResearching(true);
+    try {
+      const res = await fetch("/api/writer/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          action: "research",
+          docType: current.doc_type,
+          question,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Could not look that up");
+      const notes = String(json.notes || "");
+      const latest = docRef.current;
+      if (latest) save({ context: { ...latest.context, researchNotes: notes } });
+      toast("success", "Looked it up");
+      return notes;
+    } catch (e) {
+      toast("error", (e as Error).message);
+      return "";
+    } finally {
+      setResearching(false);
+    }
+  }
+
   async function generate(refineGuidance?: string) {
     if (!doc) return;
+    // A refine replaces what's on screen, so bank the current text first.
+    if (refineGuidance) await snapshotCurrent("Your version before this refine");
+    // Look things up before writing, so the findings are available as fact.
+    const researchNotes =
+      ctx.research && !ctx.researchNotes.trim() && !refineGuidance
+        ? await runResearch()
+        : ctx.researchNotes;
     setBusy(true);
     try {
       await flush();
@@ -363,6 +465,16 @@ export default function WriterDocPage() {
             ...ctx,
             brief: notesPlain,
             background: htmlToPlain(ctx.background),
+            researchNotes,
+            // On a refine, the chips in the refine panel are what the user is
+            // asking for now; the intake's chips described the original draft.
+            ...(refining
+              ? {
+                  actions: refineActions,
+                  tone: refineTone.length ? refineTone : ctx.tone,
+                  length: refineLength,
+                }
+              : {}),
           },
           styles: styleTexts,
           signature: signatureOn ? htmlToPlain(settings?.signature || "") : "",
@@ -409,16 +521,21 @@ export default function WriterDocPage() {
     });
   }
 
-  function restoreVersion(v: WriterVersion) {
+  async function restoreVersion(v: WriterVersion) {
+    // Bank what's on screen before replacing it, so restoring is never a
+    // one-way door.
+    await snapshotCurrent("Your version before restoring");
     save({ content: v.content, subject: v.subject || doc?.subject || "" });
     setVariantResults([]);
     setShowVersions(false);
-    toast("success", "Version restored");
+    toast("success", "Version restored — the one you had is saved too");
   }
 
   async function copyOut() {
     if (!doc) return;
-    const html = `${doc.content}${signatureOn ? `<br>${settings!.signature}` : ""}`;
+    // Paragraph spacing has to be inline for Outlook and Gmail to keep it, and
+    // the plain-text flavor needs real blank lines between paragraphs.
+    const html = toEmailHtml(doc.content, signatureOn ? settings!.signature : "");
     const plain =
       htmlToPlain(doc.content) +
       (signatureOn ? `\n\n${htmlToPlain(settings!.signature)}` : "");
@@ -631,6 +748,25 @@ export default function WriterDocPage() {
                 </p>
               </div>
 
+              {/* Look-ups. The AI has no facts of its own it's allowed to use,
+                  so "find out how others do this" needs a real search. */}
+              <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-border px-2.5 py-2 text-xs text-ink transition hover:border-[var(--accent)]/50">
+                <input
+                  type="checkbox"
+                  checked={ctx.research}
+                  onChange={(e) => setCtx({ research: e.target.checked })}
+                  className="mt-0.5 h-3.5 w-3.5 accent-[var(--accent)]"
+                />
+                <span>
+                  🔎 Look it up first
+                  <span className="ml-1 text-muted">
+                    (searches the web and uses what it finds, with sources — for
+                    &ldquo;how are others doing this&rdquo; or &ldquo;what&apos;s
+                    the current guidance&rdquo;)
+                  </span>
+                </span>
+              </label>
+
               {canGreet && (
                 <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border px-2.5 py-2 text-xs text-ink transition hover:border-[var(--accent)]/50">
                   <input
@@ -650,20 +786,73 @@ export default function WriterDocPage() {
 
               <Button
                 className="w-full !bg-gradient-to-r !from-[var(--grad-from)] !via-[var(--grad-via)] !to-[var(--grad-to)] !text-white shadow-md transition hover:opacity-90"
-                disabled={busy || !hasIntake}
+                disabled={busy || researching || !hasIntake}
                 onClick={() => generate()}
               >
                 <Sparkles size={16} />
-                {busy
-                  ? "Writing…"
-                  : doc.content.trim()
-                    ? "Regenerate"
-                    : (settings?.variant_count ?? 1) > 1
-                      ? `Generate ${settings?.variant_count} variants`
-                      : "Generate"}
+                {researching
+                  ? `Looking it up… ${researchProgress}%`
+                  : busy
+                    ? `Writing… ${writeProgress}%`
+                    : doc.content.trim()
+                      ? "Regenerate"
+                      : (settings?.variant_count ?? 1) > 1
+                        ? `Generate ${settings?.variant_count} variants`
+                        : "Generate"}
               </Button>
+
+              {(busy || researching || uploading) && (
+                <ProgressBar
+                  pct={researching ? researchProgress : busy ? writeProgress : uploadProgress}
+                  label={
+                    researching
+                      ? "Searching the web and reading what it finds"
+                      : busy
+                        ? "Writing your piece"
+                        : "Reading what you gave me"
+                  }
+                />
+              )}
             </div>
           </section>
+
+          {/* What the look-up found. Visible and deletable: it goes into the
+              prompt as fact, so you get to see what that fact is. */}
+          {ctx.researchNotes.trim() && (
+            <section className="rounded-xl border border-border bg-surface p-3.5 shadow-sm">
+              <div className="mb-1.5 flex items-center gap-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                  🔎 What I looked up
+                </span>
+                <span className="flex-1" />
+                <button
+                  type="button"
+                  onClick={() => void runResearch()}
+                  disabled={researching}
+                  className="rounded px-1.5 py-0.5 text-[11px] font-medium text-[var(--accent)] transition hover:bg-[var(--accent-soft)] disabled:opacity-50"
+                >
+                  {researching ? "Searching…" : "Search again"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCtx({ researchNotes: "" })}
+                  className="rounded px-1.5 py-0.5 text-[11px] font-medium text-muted transition hover:text-red-600"
+                >
+                  Clear
+                </button>
+              </div>
+              <p className="whitespace-pre-wrap text-xs leading-relaxed text-ink/85">
+                {ctx.researchNotes}
+              </p>
+            </section>
+          )}
+
+          <WriterChat
+            docType={doc.doc_type}
+            draft={inputPlain}
+            output={htmlToPlain(doc.content)}
+            notes={notesPlain}
+          />
 
           {/* Optional dials, folded away */}
           <IntakeSection
@@ -806,11 +995,16 @@ export default function WriterDocPage() {
                   </span>
                   <div className="flex items-center gap-1">
                     <button
-                      title="Version history"
+                      title={`Version history (${versions.length} saved)`}
                       onClick={() => setShowVersions(true)}
-                      className="grid h-7 w-7 place-items-center rounded text-muted transition hover:bg-canvas hover:text-ink"
+                      className="flex h-7 items-center gap-1 rounded px-1.5 text-muted transition hover:bg-canvas hover:text-ink"
                     >
                       <History size={14} />
+                      {versions.length > 0 && (
+                        <span className="text-[11px] font-semibold tabular-nums">
+                          {versions.length}
+                        </span>
+                      )}
                     </button>
                     {(settings?.show_diff ?? true) && (
                       <button
@@ -931,18 +1125,84 @@ export default function WriterDocPage() {
           {/* Refine loop */}
           {doc.content.trim() && (
             <section className="rounded-xl border border-[var(--accent)]/30 bg-gradient-to-br from-[var(--accent-soft)]/40 to-transparent p-4">
-              <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--accent)]">
+              <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--accent)]">
                 <Wand2 size={13} /> Not quite right? Tell me what to change
               </p>
+              <p className="mb-2 mt-1 text-[11px] leading-snug text-muted">
+                This works on the version above, including any edits you&apos;ve
+                made to it by hand. The one you have now is saved first, so you can
+                always go back to it.
+              </p>
+
+              {/* The same dials as the intake, pointed at the output. Wanting
+                  "this one shorter, and more persuasive" was previously only
+                  expressible in prose. */}
+              <div className="mb-2 space-y-2 rounded-lg bg-surface/70 p-2.5">
+                <ChipGroup
+                  label="Change about this version"
+                  options={chipOptions(ACTION_CHIPS)}
+                  selected={refineActions}
+                  onToggle={(key) =>
+                    setRefineActions((prev) =>
+                      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
+                    )
+                  }
+                  hue="teal"
+                />
+                <ChipGroup
+                  label="Length"
+                  options={LENGTHS}
+                  selected={[refineLength]}
+                  single
+                  onToggle={setRefineLength}
+                  hue="amber"
+                />
+                <ChipGroup
+                  label="Tone"
+                  options={chipOptions(TONE_CHIPS)}
+                  selected={refineTone}
+                  onToggle={(key) =>
+                    setRefineTone((prev) =>
+                      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
+                    )
+                  }
+                  hue="sky"
+                />
+              </div>
+
               <Textarea
                 value={guidance}
                 onChange={(e) => setGuidance(e.target.value)}
-                placeholder='e.g. "Second paragraph is too apologetic — own the decision" or "make the ask land earlier"'
+                placeholder={'e.g. "Second paragraph is too apologetic, own the decision" or "get across that we\'re already piloting this" — I\'ll fold the idea in, not paste your words'}
                 className="min-h-16 bg-surface"
               />
-              <div className="mt-2 flex justify-end">
-                <Button size="sm" disabled={busy || !guidance.trim()} onClick={() => generate(guidance)}>
-                  <Sparkles size={14} /> {busy ? "Refining…" : "Refine"}
+              {busy && (
+                <ProgressBar
+                  pct={writeProgress}
+                  label="Reworking this version"
+                  className="mt-2"
+                />
+              )}
+              <div className="mt-2 flex items-center justify-end gap-2">
+                {refineHasPicks && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRefineActions([]);
+                      setRefineTone([]);
+                      setRefineLength("as_is");
+                    }}
+                    className="rounded px-2 py-1 text-[11px] font-medium text-muted transition hover:text-ink"
+                  >
+                    Clear picks
+                  </button>
+                )}
+                <Button
+                  size="sm"
+                  disabled={busy || (!guidance.trim() && !refineHasPicks)}
+                  onClick={() => generate(guidance || refinePicksSummary)}
+                >
+                  <Sparkles size={14} /> {busy ? `Refining… ${writeProgress}%` : "Refine"}
                 </Button>
               </div>
             </section>
@@ -960,7 +1220,15 @@ export default function WriterDocPage() {
         {versions.length === 0 ? (
           <p className="text-sm text-muted">No versions yet — generate something first.</p>
         ) : (
-          <ul className="space-y-3">
+          <>
+            <p className="mb-3 text-xs text-muted">
+              Every generate and refine is saved here, plus a copy of whatever you
+              had on screen before a refine or a restore.{" "}
+              {(settings?.version_retention_days ?? 10) > 0
+                ? `Versions older than ${settings?.version_retention_days ?? 10} days are deleted automatically — change that in Settings.`
+                : "They're kept indefinitely — change that in Settings."}
+            </p>
+            <ul className="space-y-3">
             {versions.map((v) => (
               <li key={v.id} className="rounded-lg border border-border p-3">
                 <div className="mb-1 flex items-center gap-2 text-xs text-muted">
@@ -978,7 +1246,11 @@ export default function WriterDocPage() {
                     </span>
                   )}
                   <span className="flex-1 truncate italic">{v.instructions}</span>
-                  <Button size="sm" variant="secondary" onClick={() => restoreVersion(v)}>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => void restoreVersion(v)}
+                  >
                     Restore
                   </Button>
                 </div>
@@ -987,7 +1259,8 @@ export default function WriterDocPage() {
                 </p>
               </li>
             ))}
-          </ul>
+            </ul>
+          </>
         )}
       </Modal>
     </>

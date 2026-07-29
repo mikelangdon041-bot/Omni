@@ -18,6 +18,8 @@ export interface WriterContext {
   recipient: string; // name / role (emails, messages)
   noGreeting: boolean; // skip "Hi Sarah," and open on the first real sentence
   useSignature: boolean; // append the saved signature on copy/send (emails)
+  research: boolean; // look things up on the web before writing
+  researchNotes: string; // what the look-up found, with sources
   styleIds: string[];
 }
 
@@ -34,6 +36,8 @@ export const EMPTY_CONTEXT: WriterContext = {
   recipient: "",
   noGreeting: false,
   useSignature: true,
+  research: false,
+  researchNotes: "",
   styleIds: [],
 };
 
@@ -78,7 +82,17 @@ export interface WriterSettings {
   signature: string;
   show_diff: boolean;
   variant_count: number;
+  /** Versions older than this are deleted automatically. 0 = keep forever. */
+  version_retention_days: number;
 }
+
+export const RETENTION_OPTIONS = [
+  { key: 0, label: "Keep forever" },
+  { key: 7, label: "7 days" },
+  { key: 10, label: "10 days" },
+  { key: 30, label: "30 days" },
+  { key: 90, label: "90 days" },
+];
 
 export const DOC_TYPES: { key: DocType; emoji: string; label: string; blurb: string }[] = [
   { key: "email", emoji: "✉️", label: "Email", blurb: "Subject line, recipient, signature — the works." },
@@ -219,11 +233,15 @@ export function cleanTag(raw: string): string {
 }
 
 // Plain text from stored HTML (for mailto bodies, diffs, clipboard fallback).
+// A closing paragraph is a blank line, not a single newline: collapsing the two
+// ran every paragraph together when the text was pasted into an email as plain
+// text. List items stay one line apiece.
 export function htmlToPlain(html: string): string {
   if (!html) return "";
   return html
     .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/(p|div|li|h[1-6])>/gi, "\n")
+    .replace(/<\/li>/gi, "\n")
+    .replace(/<\/(p|div|h[1-6])>/gi, "\n\n")
     .replace(/<li[^>]*>/gi, "• ")
     .replace(/<[^>]+>/g, "")
     .replace(/&nbsp;/g, " ")

@@ -90,6 +90,137 @@ Be specific and quote short examples from the samples. Under 250 words. Return o
       return NextResponse.json({ profile: firstText(res) });
     }
 
+    // Ask-me-anything about the piece you're working on. Read-only on purpose:
+    // it answers, suggests and critiques but never edits the draft, so the
+    // Generate/Refine buttons stay the only things that change your text.
+    if (action === "chat") {
+      const turns: { role: string; content: string }[] = Array.isArray(body?.turns)
+        ? body.turns.slice(-12)
+        : [];
+      if (!turns.length)
+        return NextResponse.json({ error: "Nothing to answer" }, { status: 400 });
+      const docType = String(body?.docType || "email");
+      const draft = String(body?.draft || "").slice(0, 20000);
+      const output = String(body?.output || "").slice(0, 20000);
+      const notes = String(body?.notes || "").slice(0, 8000);
+
+      const context = [
+        draft && `What they put in the draft box:\n${draft}`,
+        output && `The current version in the output pane:\n${output}`,
+        notes && `Their note about it:\n${notes}`,
+      ]
+        .filter(Boolean)
+        .join("\n\n---\n\n");
+
+      const res = await anthropic().messages.create({
+        model: WRITER_MODEL,
+        max_tokens: 4000,
+        system: `You are the writing partner sitting beside someone working on a ${docType} in a writing tool. They can see their draft and the current version on screen; you can see both too (below). Answer their questions about it.
+
+How to answer:
+- Be short. Two or three sentences for most questions, and a tight list when they ask for options.
+- Be concrete and specific to THEIR text. Quote the line you mean. "Your second paragraph buries the ask" beats "consider improving clarity".
+- Have an opinion. If they ask whether something works, say yes or no and why, then what you'd do.
+- You cannot edit their draft from here, and you should not hand back a full rewritten version. Point at what to change, or tell them what to type into the refine box. If they want the change made, tell them to hit Refine with that instruction.
+- Never use an em dash, an en dash, or a double hyphen. Use a comma, a period, a colon, or parentheses.
+- No preamble, no "great question", no restating what they asked.
+- If something isn't in what you can see, say so instead of guessing.
+
+${context ? `What they are working on:\n\n${context}` : "They have not written anything yet."}`,
+        messages: turns.map((t) => ({
+          role: t.role === "assistant" ? ("assistant" as const) : ("user" as const),
+          content: String(t.content || "").slice(0, 8000),
+        })),
+      });
+
+      if (res.stop_reason === "refusal")
+        return NextResponse.json(
+          { error: "The model declined that one — try rephrasing." },
+          { status: 502 },
+        );
+      return NextResponse.json({ reply: stripEmDashes(firstText(res)) });
+    }
+
+    // "Look it up" — the one thing the writer genuinely could not do before.
+    // Runs as its own call rather than inside `generate`: the generate call is
+    // pinned to a JSON schema, and a search loop wants plain text and its own
+    // progress bar. The findings come back as sourced notes that generate then
+    // treats as fact.
+    if (action === "research") {
+      const question = String(body?.question || "").slice(0, 4000);
+      const docType = String(body?.docType || "email");
+      if (!question.trim())
+        return NextResponse.json({ error: "Nothing to look up" }, { status: 400 });
+
+      const searchTools = [
+        { type: "web_search_20260209" as const, name: "web_search" as const, max_uses: 8 },
+      ];
+      const researchSystem = `You research a question for someone about to write a ${docType}. Search the web, then hand back what they can actually use.
+
+Rules:
+- Search before answering. Never answer from memory alone: the point of this step is current, checkable information.
+- Do NOT narrate the searching. No "let me look that up", no "I'll check another source", no commentary on what the tools returned. Only the findings are shown to the user.
+- Return plain text, no markdown headings, under 250 words. Short labelled lines or a tight list.
+- Lead with the findings that change what they should write. If the question is "how do others do this", give the concrete patterns you found, with who does it that way.
+- Attribute every substantive claim to its source inline, as a name plus the year or date where there is one (e.g. "Mayo Clinic guidance, 2025"). No bare URLs, no footnotes.
+- Where sources disagree, say so in a line rather than picking a winner.
+- If the search turns up nothing solid, say exactly that. Never fill the gap with plausible-sounding invention.`;
+
+      let res = await anthropic().messages.create({
+        model: WRITER_MODEL,
+        max_tokens: 8000,
+        tools: searchTools,
+        system: researchSystem,
+        messages: [{ role: "user", content: question }],
+      });
+
+      // A server-side tool loop can stop for breath partway through; re-send to
+      // let it finish. The system prompt has to come along on the resume, or the
+      // second half of the answer is written without any of the rules above.
+      for (let i = 0; i < 3 && res.stop_reason === "pause_turn"; i++) {
+        res = await anthropic().messages.create({
+          model: WRITER_MODEL,
+          max_tokens: 8000,
+          tools: searchTools,
+          system: researchSystem,
+          messages: [
+            { role: "user", content: question },
+            { role: "assistant", content: res.content },
+          ],
+        });
+      }
+
+      if (res.stop_reason === "refusal")
+        return NextResponse.json(
+          { error: "The model declined that search — try rephrasing it." },
+          { status: 502 },
+        );
+
+      // Only the text after the last tool block is the answer. The text blocks
+      // in between are the model working out loud ("those came back empty, let
+      // me retry"), which is not what anyone asked to read. Matching on "not
+      // text" rather than on tool-block names on purpose: this tool version
+      // filters results through code execution, so a search turn comes back as
+      // an interleaving of server_tool_use, web_search_tool_result AND
+      // code_execution_tool_result, and naming them individually missed one.
+      const lastToolAt = res.content.reduce(
+        (found, block, i) => (block.type === "text" ? found : i),
+        -1,
+      );
+      const notes = res.content
+        .slice(lastToolAt + 1)
+        .filter((b) => b.type === "text")
+        .map((b) => ("text" in b ? b.text || "" : ""))
+        .join("\n")
+        .trim();
+      if (!notes)
+        return NextResponse.json(
+          { error: "The search came back empty — try a more specific question." },
+          { status: 502 },
+        );
+      return NextResponse.json({ notes: stripEmDashes(notes) });
+    }
+
     if (action === "extract") {
       const brief = String(body?.brief || "").slice(0, 30000);
       const docType = String(body?.docType || "email");
@@ -125,6 +256,8 @@ Be specific and quote short examples from the samples. Under 250 words. Return o
             enum: FIDELITY_OPTIONS.map((f) => f.key),
           },
           noGreeting: { type: "boolean" as const },
+          research: { type: "boolean" as const },
+          researchQuestion: { type: "string" as const },
         },
         required: [
           "title",
@@ -138,6 +271,8 @@ Be specific and quote short examples from the samples. Under 250 words. Return o
           "length",
           "fidelity",
           "noGreeting",
+          "research",
+          "researchQuestion",
         ],
         additionalProperties: false,
       };
@@ -161,6 +296,8 @@ Rules:
 - length: "shorter", "much_shorter" or "longer" ONLY if they asked about length ("cut it down" → shorter, "way too long, halve it" → much_shorter, "flesh it out" → longer). Otherwise "as_is".
 - fidelity: how much license they are giving you. "light" if they want a proofread or only the specific fixes they named (this is the safe default). "polish" if they want it improved but still theirs. "rewrite" only if they asked for a rewrite, or if there is no draft of theirs to preserve because they are describing something to write from scratch.
 - noGreeting: true only if they said not to open with a greeting ("no hi", "skip the pleasantries", "get straight to it"). Otherwise false.
+- research: true only if they asked for something to be looked up or checked that you would otherwise have to invent — "find out how others are doing this", "look up the guidance", "get the rationale", "what's the current recommendation", "check what the data says". False when they only want their own material written better.
+- researchQuestion: if research is true, the one question a researcher should go and answer, written as a standalone search-ready question with the specifics filled in from their material (e.g. "How are pharma field teams structuring KOL advisory boards for rare disease launches in 2026?"). Empty string when research is false.
 Return only the JSON.`,
         messages: [{ role: "user", content: `Brief:\n\n${brief}` }],
       });

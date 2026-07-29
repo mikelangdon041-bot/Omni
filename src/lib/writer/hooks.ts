@@ -114,7 +114,23 @@ export function useWriterDocs(userId: string | null) {
   return { docs, loading, add, remove, removeMany, refresh };
 }
 
-export function useWriterDoc(id: string, userId: string | null) {
+/**
+ * Drop versions past their retention window. Runs when a doc is opened rather
+ * than on a schedule: the rows only matter to the person looking at that piece,
+ * so the moment they open it is the moment stale history is worth clearing, and
+ * it needs no cron and no service key.
+ */
+async function pruneVersions(docId: string, retentionDays: number) {
+  if (!retentionDays || retentionDays <= 0) return; // 0 = keep forever
+  const cutoff = new Date(Date.now() - retentionDays * 86400000).toISOString();
+  await supabase
+    .from("writer_versions")
+    .delete()
+    .eq("doc_id", docId)
+    .lt("created_at", cutoff);
+}
+
+export function useWriterDoc(id: string, userId: string | null, retentionDays?: number) {
   const [doc, setDoc] = useState<WriterDoc | null>(null);
   const [versions, setVersions] = useState<WriterVersion[]>([]);
   const [loading, setLoading] = useState(true);
@@ -138,6 +154,8 @@ export function useWriterDoc(id: string, userId: string | null) {
       setLoading(true);
     }
     void (async () => {
+      // Prune first so the list that paints is the list that survives.
+      if (retentionDays) await pruneVersions(id, retentionDays);
       const [{ data: d }, { data: v }] = await Promise.all([
         supabase.from("writer_docs").select("*").eq("id", id).maybeSingle(),
         supabase
@@ -163,7 +181,7 @@ export function useWriterDoc(id: string, userId: string | null) {
     return () => {
       active = false;
     };
-  }, [id, userId]);
+  }, [id, userId, retentionDays]);
 
   // Any edit (autosave, AI generate/refine) refreshes the instant-paint cache.
   useEffect(() => {
@@ -282,6 +300,7 @@ const DEFAULT_SETTINGS: Omit<WriterSettings, "user_id"> = {
   signature: "",
   show_diff: true,
   variant_count: 1,
+  version_retention_days: 10,
 };
 
 export function useWriterSettings(userId: string | null) {
@@ -298,7 +317,9 @@ export function useWriterSettings(userId: string | null) {
       .then(({ data }) => {
         if (!active) return;
         setSettings(
-          (data as WriterSettings) || { user_id: userId, ...DEFAULT_SETTINGS },
+          data
+            ? { ...DEFAULT_SETTINGS, ...(data as WriterSettings) }
+            : { user_id: userId, ...DEFAULT_SETTINGS },
         );
       });
     return () => {

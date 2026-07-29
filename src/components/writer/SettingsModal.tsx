@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 import { AutoRichField } from "@/components/ui/AutoRichField";
 import { useToast, useConfirm } from "@/components/ui/Feedback";
-import type { WriterSettings, WriterStyle } from "@/lib/writer/types";
+import { RETENTION_OPTIONS, type WriterSettings, type WriterStyle } from "@/lib/writer/types";
 
 export function SettingsModal({
   open,
@@ -110,6 +110,24 @@ export function SettingsModal({
             <option value="2">2 variants</option>
             <option value="3">3 variants</option>
           </Select>
+          <Select
+            label="Keep old versions for"
+            value={String(settings?.version_retention_days ?? 10)}
+            onChange={(e) =>
+              void saveSettings({ version_retention_days: Number(e.target.value) })
+            }
+          >
+            {RETENTION_OPTIONS.map((o) => (
+              <option key={o.key} value={String(o.key)}>
+                {o.label}
+              </option>
+            ))}
+          </Select>
+          <p className="text-xs text-muted sm:col-span-2">
+            Every generate and refine is saved so you can go back to it. Versions
+            older than this are deleted automatically the next time you open the
+            piece.
+          </p>
         </section>
 
         {/* Styles */}
