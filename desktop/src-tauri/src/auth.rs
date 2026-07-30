@@ -98,23 +98,50 @@ fn entry(username: &str) -> Result<Entry> {
     Entry::new(SERVICE, username).context("Could not open the Windows credential store")
 }
 
+/// Why a token request failed, which decides whether the stored credential is
+/// worth keeping.
+///
+/// These are not the same thing at all. A server that says "this token is no
+/// good" means the session is over. A server we could not reach says nothing
+/// about the token — the laptop is on a train, the wifi dropped, the VPN is
+/// reconnecting — and throwing the credential away for that would sign you out
+/// for being offline, which is exactly when you least want to be handed a
+/// login screen.
+enum TokenError {
+    /// Refused outright. It will not work later either.
+    Rejected(String),
+    /// Could not ask. The credential may well still be fine.
+    Unavailable(String),
+}
+
+impl TokenError {
+    fn message(&self) -> &str {
+        match self {
+            TokenError::Rejected(m) | TokenError::Unavailable(m) => m,
+        }
+    }
+}
+
 async fn token_request(
     config: &DesktopConfig,
     grant: &str,
     body: serde_json::Value,
-) -> Result<TokenResponse> {
+) -> std::result::Result<TokenResponse, TokenError> {
     let url = format!("{}/auth/v1/token?grant_type={grant}", config.supabase_url);
-    let res = client()?
+    let http = client().map_err(|e| TokenError::Unavailable(e.to_string()))?;
+    let res = http
         .post(&url)
         .header("apikey", &config.supabase_anon_key)
         .header("Authorization", format!("Bearer {}", config.supabase_anon_key))
         .json(&body)
         .send()
         .await
-        .context("Could not reach the sign-in service")?;
+        .map_err(|_| {
+            TokenError::Unavailable("Could not reach Omni. Check your connection.".into())
+        })?;
 
-    if !res.status().is_success() {
-        let status = res.status();
+    let status = res.status();
+    if !status.is_success() {
         let text = res.text().await.unwrap_or_default();
         let detail = serde_json::from_str::<AuthError>(&text)
             .ok()
@@ -126,10 +153,18 @@ async fn token_request(
                     format!("Sign-in failed ({status})")
                 }
             });
-        return Err(anyhow!(detail));
+        // Only the client-error range is the server actually refusing us.
+        // A 500, a 502 from a cold deployment or a 429 are all temporary.
+        return Err(if status.is_client_error() {
+            TokenError::Rejected(detail)
+        } else {
+            TokenError::Unavailable(detail)
+        });
     }
 
-    res.json().await.context("The sign-in service sent an unexpected reply")
+    res.json()
+        .await
+        .map_err(|_| TokenError::Unavailable("Omni sent an unexpected reply".into()))
 }
 
 /// Exchange a username and password for a session, and keep the refresh token.
@@ -144,7 +179,8 @@ pub async fn sign_in(config: &DesktopConfig, username: &str, password: &str) -> 
         "password",
         serde_json::json!({ "email": email, "password": password }),
     )
-    .await?;
+    .await
+    .map_err(|e| anyhow!("{}", e.message()))?;
 
     entry(&username)?
         .set_password(&tokens.refresh_token)
@@ -222,17 +258,22 @@ pub async fn access_token(config: &DesktopConfig, username: &str) -> Result<Stri
     .await
     {
         Ok(tokens) => tokens,
-        Err(e) => {
-            // A refresh token the server will not take is never going to work
-            // again: it was revoked, rotated out from under us, or the account
-            // is gone. Dropping it is what puts the app back on the sign-in
-            // screen, rather than leaving it apparently signed in and failing
-            // at the end of every recording.
+        Err(TokenError::Rejected(message)) => {
+            // A refresh token the server refuses is never going to work again:
+            // revoked, rotated out from under us, or the account is gone.
+            // Dropping it is what puts the app back on the sign-in screen,
+            // rather than leaving it apparently signed in and failing at the
+            // end of every recording.
             if let Ok(entry) = entry(&username) {
                 let _ = entry.delete_credential();
             }
             *CACHE.lock().unwrap() = None;
-            return Err(anyhow!("{e}. Sign in to Omni Recorder again."));
+            return Err(anyhow!("{message}. Sign in to Omni Recorder again."));
+        }
+        Err(TokenError::Unavailable(message)) => {
+            // Keep the credential. Being offline is not being signed out, and
+            // the recording this was for is still on disk waiting to be sent.
+            return Err(anyhow!("{message}"));
         }
     };
 
