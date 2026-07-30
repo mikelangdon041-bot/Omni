@@ -784,7 +784,18 @@ pub fn run() {
                 .join("settings.json");
             settings::set_path(config_path);
 
-            let loaded = settings::load();
+            let mut loaded = settings::load();
+            // The username lives in settings.json, and the refresh token is
+            // filed under it, so losing that one file used to sign you out
+            // with the credential still sitting there untouched. If the file
+            // is gone or was never written, ask the credential store who was
+            // signed in last and put it back.
+            if loaded.username.trim().is_empty() {
+                if let Some(user) = auth::last_user() {
+                    loaded.username = user;
+                    let _ = settings::save(&loaded);
+                }
+            }
             let hotkey = loaded.hotkey.clone();
             let start_at_login = loaded.start_at_login;
             app.manage(AppState::new(loaded));

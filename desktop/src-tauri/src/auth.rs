@@ -19,6 +19,16 @@ use std::time::{Duration, Instant};
 
 const SERVICE: &str = "Omni Recorder";
 
+/// Where the last signed-in username is kept, under a fixed name.
+///
+/// The refresh token is stored per user, so finding it needs the username, and
+/// the username lived only in settings.json. Losing that one file therefore
+/// signed you out even though the credential was sitting untouched in the
+/// credential store, because nothing knew whose credential to ask for. Keeping
+/// the name next to the token means the session survives anything that happens
+/// to the config file.
+const LAST_USER: &str = "__last_user__";
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct DesktopConfig {
     #[serde(rename = "supabaseUrl")]
@@ -139,14 +149,33 @@ pub async fn sign_in(config: &DesktopConfig, username: &str, password: &str) -> 
     entry(&username)?
         .set_password(&tokens.refresh_token)
         .context("Could not save the sign-in to the Windows credential store")?;
+    // Best effort: without it the session still works, it is just fragile to
+    // losing settings.json.
+    if let Ok(marker) = entry(LAST_USER) {
+        let _ = marker.set_password(&username);
+    }
     cache(tokens.access_token, tokens.expires_in);
     Ok(())
+}
+
+/// Who was signed in last, for when the config file cannot say.
+pub fn last_user() -> Option<String> {
+    entry(LAST_USER)
+        .ok()?
+        .get_password()
+        .ok()
+        .map(|u| u.trim().to_lowercase())
+        .filter(|u| !u.is_empty())
 }
 
 pub fn sign_out(username: &str) {
     *CACHE.lock().unwrap() = None;
     if let Ok(e) = entry(&username.trim().to_lowercase()) {
         let _ = e.delete_credential();
+    }
+    // Signing out is meant to be forgotten, so the name goes with the token.
+    if let Ok(marker) = entry(LAST_USER) {
+        let _ = marker.delete_credential();
     }
 }
 
