@@ -75,6 +75,7 @@ export function RichText({
   placeholder = "Start typing… (saves automatically)",
   minHeight = "min-h-28",
   onFiles,
+  autoFocus = false,
 }: {
   value: string;
   onChange: (html: string) => void;
@@ -82,6 +83,8 @@ export function RichText({
   minHeight?: string;
   /** Handle images pasted or files dropped into the editor. */
   onFiles?: (files: File[]) => void;
+  /** Put the caret in here on mount and scroll it into view. */
+  autoFocus?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const composing = useRef(false);
@@ -112,6 +115,29 @@ export function RichText({
       last.current = value;
     }
   }, [value]);
+
+  // Land with the caret already in the box. contenteditable needs the caret
+  // placed explicitly — focus() alone can leave it at the top of the document
+  // in some browsers — and the scroll keeps the editor in view when it sits
+  // below the fold.
+  useEffect(() => {
+    if (!autoFocus) return;
+    const el = ref.current;
+    if (!el) return;
+    const t = setTimeout(() => {
+      el.focus({ preventScroll: true });
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 0);
+    return () => clearTimeout(t);
+    // Mount only — refocusing on every value change would fight the caret.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function emit() {
     const html = ref.current?.innerHTML || "";

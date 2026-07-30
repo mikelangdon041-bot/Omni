@@ -43,6 +43,13 @@ export default function MeetingPage() {
     const t = new URLSearchParams(window.location.search).get("tab") || "";
     return (TABS as readonly string[]).includes(t) ? (t as Tab) : null;
   });
+  // Arrived here straight from "New meeting" — no modal asked for a title, so
+  // land with the caret already in the Explain box.
+  const [isNew] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("new") === "1",
+  );
   // Remembers which tab you were on for THIS meeting specifically.
   const [tab, setTab] = usePersistedState<Tab>(`mp-tab:${id}`, "Setup", TABS, linkedTab);
 
@@ -188,6 +195,8 @@ export default function MeetingPage() {
             void (hasBrief ? generateWithPreview() : generateDirect());
           }}
           onViewBrief={() => setTab("Brief")}
+          focusExplain={isNew}
+          progress={generator.progress}
         />
       )}
       {tab === "Brief" && (
@@ -202,6 +211,8 @@ export default function MeetingPage() {
           goSetup={() => setTab("Setup")}
           customSections={settings?.custom_sections || []}
           saveCustomSections={(custom_sections) => void saveSettings({ custom_sections })}
+          progress={generator.progress}
+          stage={generator.stage}
         />
       )}
       {tab === "Grill me" && <GrillTab m={meeting} save={save} flush={flush} />}

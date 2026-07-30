@@ -10,13 +10,12 @@ import {
   FileAudio,
   Plus,
   Settings2,
-  Sparkles,
   Trash2,
 } from "lucide-react";
 import { ModuleHero } from "@/components/ui/ModuleHero";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/Button";
-import { Input, Select, Textarea } from "@/components/ui/Input";
+import { Input, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { useConfirm } from "@/components/ui/Feedback";
 import {
@@ -25,10 +24,8 @@ import {
   useUserId,
 } from "@/lib/meetingprep/hooks";
 import {
-  MEETING_TYPES,
   meetingTypeLabel,
   type CustomSection,
-  type MeetingType,
   type MpMeeting,
 } from "@/lib/meetingprep/types";
 
@@ -39,7 +36,6 @@ export default function MeetingPrepPage() {
   const { meetings, loading, add, remove } = useMpMeetings(userId);
   const { settings, save: saveSettings } = useMpSettings(userId);
   const [showSettings, setShowSettings] = useState(false);
-  const [showNew, setShowNew] = useState(false);
   const [creating, setCreating] = useState(false);
 
   const { upcoming, past } = useMemo(() => {
@@ -58,16 +54,16 @@ export default function MeetingPrepPage() {
     return { upcoming, past };
   }, [meetings]);
 
-  // The meeting row is only created once the user confirms the modal — no
-  // ghost "Untitled meeting" flashing into the list.
-  async function createMeeting(partial: Partial<MpMeeting>) {
+  // "New meeting" doesn't stop to ask for a title, type, or date: the row is
+  // created empty and you land on the page with the caret in the Explain box.
+  // Everything the old modal collected either gets typed in the fields there
+  // or is picked out of what you write by "Fill in the details".
+  async function createMeeting() {
+    if (creating) return;
     setCreating(true);
-    const m = await add(partial);
+    const m = await add({});
     setCreating(false);
-    if (m) {
-      setShowNew(false);
-      router.push(`/meeting-prep/${m.id}`);
-    }
+    if (m) router.push(`/meeting-prep/${m.id}?new=1`);
   }
 
   const briefed = meetings.filter((m) => (m.brief?.sections || []).length > 0).length;
@@ -95,9 +91,10 @@ export default function MeetingPrepPage() {
             <Button
               variant="secondary"
               className="!border-white/40 !bg-white/15 !text-white hover:!bg-white/25"
-              onClick={() => setShowNew(true)}
+              disabled={creating}
+              onClick={() => void createMeeting()}
             >
-              <Plus size={16} /> New meeting
+              <Plus size={16} /> {creating ? "Opening…" : "New meeting"}
             </Button>
             <Button
               className="!bg-white !text-[var(--accent)] hover:!bg-white/90"
@@ -116,8 +113,8 @@ export default function MeetingPrepPage() {
           title="No meetings yet"
           hint="Prepping for one that hasn't happened yet? Create it and I'll build your brief. Already have a recording of one? Use the panel above and I'll do the rest."
           action={
-            <Button onClick={() => setShowNew(true)}>
-              <Plus size={16} /> New meeting
+            <Button disabled={creating} onClick={() => void createMeeting()}>
+              <Plus size={16} /> {creating ? "Opening…" : "New meeting"}
             </Button>
           }
         />
@@ -159,13 +156,6 @@ export default function MeetingPrepPage() {
         </div>
       )}
 
-      <NewMeetingModal
-        open={showNew}
-        creating={creating}
-        onClose={() => setShowNew(false)}
-        onCreate={createMeeting}
-      />
-
       <CustomSectionsModal
         open={showSettings}
         onClose={() => setShowSettings(false)}
@@ -173,79 +163,6 @@ export default function MeetingPrepPage() {
         onSave={(custom_sections) => void saveSettings({ custom_sections })}
       />
     </>
-  );
-}
-
-// Collect the essentials up front so the meeting is born with a real name —
-// the row is only inserted when the user confirms.
-function NewMeetingModal({
-  open,
-  creating,
-  onClose,
-  onCreate,
-}: {
-  open: boolean;
-  creating: boolean;
-  onClose: () => void;
-  onCreate: (partial: Partial<MpMeeting>) => void;
-}) {
-  const [title, setTitle] = useState("");
-  const [type, setType] = useState<MeetingType>("kol_1on1");
-  const [date, setDate] = useState("");
-
-  return (
-    <Modal open={open} onClose={onClose} title="New meeting">
-      <div className="space-y-3">
-        <Input
-          label="What's the meeting?"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder='e.g. "Q3 review with Dr. Chen"'
-          autoFocus
-        />
-        <div className="grid grid-cols-2 gap-3">
-          <Select
-            label="Type"
-            value={type}
-            onChange={(e) => setType(e.target.value as MeetingType)}
-          >
-            {MEETING_TYPES.map((t) => (
-              <option key={t.key} value={t.key}>
-                {t.label}
-              </option>
-            ))}
-          </Select>
-          <Input
-            label="Date & time (optional)"
-            type="datetime-local"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-          />
-        </div>
-        <p className="flex items-start gap-1.5 rounded-lg bg-[var(--accent-soft)]/50 px-3 py-2 text-xs text-muted">
-          <Sparkles size={13} className="mt-0.5 shrink-0 text-[var(--accent)]" />
-          Next you&apos;ll add attendees, objectives, and background — then I&apos;ll
-          build your full brief.
-        </p>
-        <div className="flex justify-end gap-2 pt-1">
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            disabled={!title.trim() || creating}
-            onClick={() =>
-              onCreate({
-                title: title.trim(),
-                meeting_type: type,
-                date: date ? new Date(date).toISOString() : null,
-              })
-            }
-          >
-            <Plus size={15} /> {creating ? "Creating…" : "Create meeting"}
-          </Button>
-        </div>
-      </div>
-    </Modal>
   );
 }
 

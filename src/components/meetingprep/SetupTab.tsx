@@ -18,7 +18,6 @@ import {
   Sparkles,
   Trash2,
   Users,
-  Wand2,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input, Select } from "@/components/ui/Input";
@@ -31,7 +30,6 @@ import { KolLink } from "./KolLink";
 import { ConferencePeopleButton } from "./ConferencePeople";
 import {
   MEETING_TYPES,
-  meetingTypeLabel,
   type Attendee,
   type MeetingFormat,
   type MeetingType,
@@ -45,15 +43,6 @@ function toLocalInput(iso: string | null): string {
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
   return d.toISOString().slice(0, 16);
 }
-
-const esc = (s: string) =>
-  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const textToHtml = (s: string) =>
-  s
-    .split(/\n+/)
-    .filter((l) => l.trim())
-    .map((l) => `<p>${esc(l.trim())}</p>`)
-    .join("");
 
 // Accent-tinted card header used across the setup cards.
 function CardTitle({
@@ -82,6 +71,8 @@ export function SetupTab({
   hasBrief,
   onGenerate,
   onViewBrief,
+  focusExplain = false,
+  progress = 0,
 }: {
   m: MpMeeting;
   save: (p: Partial<MpMeeting>) => void;
@@ -89,11 +80,14 @@ export function SetupTab({
   busy: string | null;
   briefStale: boolean;
   hasBrief: boolean;
+  /** 0–100 while a brief is being built. */
+  progress?: number;
   onGenerate: () => void;
   onViewBrief: () => void;
+  /** A brand-new meeting: start with the caret in Explain. */
+  focusExplain?: boolean;
 }) {
   const toast = useToast();
-  const [autofilling, setAutofilling] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState(false);
 
   const attendees: Attendee[] = m.attendees?.length
@@ -113,122 +107,6 @@ export function SetupTab({
     );
     save({ attendees: [...real, a] });
   };
-
-  // Read Explain (plus Background/documents, if used) and fill in the
-  // structured fields — attendees mentioned, objectives, title, date…
-  async function autofill() {
-    setAutofilling(true);
-    try {
-      const res = await fetch("/api/meeting/ai", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({
-          action: "autofill",
-          meeting: {
-            title: m.title,
-            meetingType: meetingTypeLabel(m.meeting_type),
-            date: m.date,
-            durationMin: m.duration_min,
-            format: m.format,
-            location: m.location,
-            attendees: m.attendees,
-            explain: m.explain,
-            objectives: m.objectives,
-            background: m.background,
-            concerns: m.concerns,
-            priorTranscript: m.prior_transcript,
-            documents: documents.map((d) => ({ name: d.name, note: d.note, text: d.text })),
-          },
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Auto-fill failed");
-
-      const p: Partial<MpMeeting> = {};
-      let changes = 0;
-
-      if (json.title && !m.title.trim()) {
-        p.title = json.title;
-        changes++;
-      }
-      if (json.location && !m.location.trim()) {
-        p.location = json.location;
-        changes++;
-      }
-      if (json.durationMin && m.duration_min === 30 && json.durationMin !== 30) {
-        p.duration_min = json.durationMin;
-        changes++;
-      }
-      if (json.date && !m.date) {
-        const t = Date.parse(json.date);
-        if (!isNaN(t)) {
-          p.date = new Date(t).toISOString();
-          changes++;
-        }
-      }
-      if (json.objectives && !htmlToPlain(m.objectives).trim()) {
-        p.objectives = textToHtml(json.objectives);
-        changes++;
-      }
-      if (json.concerns && !htmlToPlain(m.concerns).trim()) {
-        p.concerns = textToHtml(json.concerns);
-        changes++;
-      }
-
-      // Merge extracted attendees: new people are appended; known people get
-      // their blank fields filled in.
-      const extracted: Attendee[] = (json.attendees || []).filter((a: Attendee) =>
-        (a.name || "").trim(),
-      );
-      if (extracted.length) {
-        const next = attendees.map((a) => ({ ...a }));
-        for (const e of extracted) {
-          const hit = next.find(
-            (a) => a.name.trim().toLowerCase() === e.name.trim().toLowerCase(),
-          );
-          if (hit) {
-            let filled = false;
-            if (!hit.role.trim() && e.role) {
-              hit.role = e.role;
-              filled = true;
-            }
-            if (!hit.org.trim() && e.org) {
-              hit.org = e.org;
-              filled = true;
-            }
-            if (!hit.notes.trim() && e.notes) {
-              hit.notes = e.notes;
-              filled = true;
-            }
-            if (filled) changes++;
-          } else {
-            const blank = next.find(
-              (a) => !a.name.trim() && !a.role.trim() && !a.org.trim() && !a.notes.trim(),
-            );
-            if (blank) Object.assign(blank, e);
-            else next.push(e);
-            changes++;
-          }
-        }
-        p.attendees = next;
-      }
-
-      if (changes) {
-        save(p);
-        toast(
-          "success",
-          `Filled in ${changes} thing${changes === 1 ? "" : "s"} below from what you wrote`,
-        );
-      } else {
-        toast("info", "Nothing new found to fill in — the fields already cover it.");
-      }
-    } catch (e) {
-      toast("error", (e as Error).message);
-    } finally {
-      setAutofilling(false);
-    }
-  }
 
   async function uploadDoc(file: File | null) {
     if (!file) return;
@@ -263,11 +141,33 @@ export function SetupTab({
   const specificsFilled = [m.objectives, m.background, m.concerns].filter((v) =>
     htmlToPlain(v).trim(),
   ).length;
-  const canAutofill = Boolean(htmlToPlain(m.explain).trim() || htmlToPlain(m.background).trim());
   const attendeesFilled = attendees.filter((a) => a.name.trim()).length;
 
   return (
     <div className="grid gap-5 lg:grid-cols-2">
+      {/* Explain — the fast path, and the first thing you land on. Creating a
+          meeting drops you straight in here with the caret already blinking;
+          the title, attendees, and objectives are either typed below or read
+          out of this automatically when the brief is generated. */}
+      <section className="space-y-3 rounded-xl border border-[var(--accent)]/30 bg-gradient-to-br from-[var(--accent-soft)]/40 to-transparent p-4 shadow-sm">
+        <CardTitle icon={MessageCircle}>Explain</CardTitle>
+        <p className="text-xs leading-snug text-muted">
+          The fast way: just type out what&apos;s going on, in your own words —
+          who&apos;s involved, what you want, any backstory or worries.
+          That&apos;s all you have to do. When you generate the brief I read
+          this first and fill in the title, attendees, objectives, and concerns
+          below for you. Want to be more precise about any one of them? Fill it
+          in yourself down there and I&apos;ll leave it exactly as you wrote it.
+        </p>
+        <RichText
+          value={m.explain}
+          onChange={(html) => save({ explain: html })}
+          placeholder='e.g. "Meeting with Dr. Chen and her VP, Melissa, about renewing the research grant. I want to leave with a signed LOI. They were burned by a late shipment last year so tread carefully there."'
+          minHeight="min-h-32"
+          autoFocus={focusExplain}
+        />
+      </section>
+
       <section className="space-y-4 rounded-xl border border-border bg-surface p-4 shadow-sm">
         <CardTitle icon={CalendarClock}>The meeting</CardTitle>
         <Input
@@ -321,37 +221,6 @@ export function SetupTab({
           placeholder="Office, restaurant, Teams…"
         />
         <KolLink userId={userId} kolId={m.kol_id} onLink={(id) => save({ kol_id: id })} />
-      </section>
-
-      {/* Explain — the fast path. Right after the meeting basics, before
-          anything else, so this is the first thing you fill in. */}
-      <section className="space-y-3 rounded-xl border border-[var(--accent)]/30 bg-gradient-to-br from-[var(--accent-soft)]/40 to-transparent p-4 shadow-sm">
-        <CardTitle icon={MessageCircle}>Explain</CardTitle>
-        <p className="text-xs leading-snug text-muted">
-          The fast way: just type out what&apos;s going on, in your own words —
-          who&apos;s involved, what you want, any backstory or worries. Press{" "}
-          <b className="text-ink">Fill in the details</b> and I&apos;ll pick out
-          attendees, objectives, and concerns and drop them into the specific
-          boxes below. You can also answer those directly instead — or as well,
-          for extra sharpness on any one of them — and anything you leave blank
-          there, I&apos;ll pull from what you write here when I build the brief
-          either way.
-        </p>
-        <RichText
-          value={m.explain}
-          onChange={(html) => save({ explain: html })}
-          placeholder='e.g. "Meeting with Dr. Chen and her VP, Melissa, about renewing the research grant. I want to leave with a signed LOI. They were burned by a late shipment last year so tread carefully there."'
-          minHeight="min-h-32"
-        />
-        <div className="flex justify-end">
-          <Button
-            size="sm"
-            disabled={autofilling || !canAutofill}
-            onClick={() => void autofill()}
-          >
-            <Wand2 size={14} /> {autofilling ? "Reading…" : "Fill in the details"}
-          </Button>
-        </div>
       </section>
 
       <IntakeSection
@@ -415,9 +284,9 @@ export function SetupTab({
           <Plus size={14} /> Add attendee
         </Button>
         <p className="text-[11px] leading-snug text-muted">
-          Tip: you don&apos;t have to fill this by hand — mention people in the
-          Explain box above and press <b>Fill in the details</b>; anyone you say
-          will be there gets added here automatically.
+          Tip: you don&apos;t have to fill this by hand — just mention people in
+          the Explain box above. Anyone you say will be there gets added here
+          when the brief is generated.
         </p>
       </IntakeSection>
 
@@ -559,7 +428,7 @@ export function SetupTab({
           </p>
           <p className="mt-0.5 text-xs text-muted">
             {!hasBrief
-              ? "I'll write the full brief from everything above — you can edit, refine, or redo any section afterwards."
+              ? "I'll read what you wrote, fill in the details below, and write the full brief — you can edit, refine, or redo any section afterwards."
               : briefStale
                 ? "Regenerate it so it reflects your latest changes, or open it as-is."
                 : "Open it on the Brief tab — refine it there or redo any section."}
@@ -575,7 +444,7 @@ export function SetupTab({
             <Button disabled={busy === "all"} onClick={onGenerate}>
               <Sparkles size={15} />
               {busy === "all"
-                ? "Building your brief…"
+                ? `Building your brief… ${progress}%`
                 : hasBrief
                   ? "Update the brief"
                   : "Generate my brief"}

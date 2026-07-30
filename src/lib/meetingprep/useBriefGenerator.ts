@@ -12,6 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useToast } from "@/components/ui/Feedback";
+import { canAutofill, runAutofill } from "./autofill";
 import {
   DEFAULT_BRIEF_SECTIONS,
   meetingTypeLabel,
@@ -52,6 +53,9 @@ export function useBriefGenerator({
   const toast = useToast();
   // null | "all" | <sectionKey being redone/added>
   const [busy, setBusy] = useState<string | null>(null);
+  // 0–100 for the loader, plus what's happening right now.
+  const [progress, setProgress] = useState(0);
+  const [stage, setStage] = useState("");
 
   // Always read the freshest meeting: the user may keep editing while a
   // generation is in flight.
@@ -59,6 +63,38 @@ export function useBriefGenerator({
   useEffect(() => {
     mRef.current = meeting;
   }, [meeting]);
+
+  // The API answers in one shot — there is no token stream to count — so the
+  // bar advances on a decaying ramp toward each step's ceiling and only
+  // *reaches* a number when that step genuinely finishes. It never goes
+  // backwards and never sits at 100 before the brief is actually in hand.
+  const ticker = useRef<ReturnType<typeof setInterval> | null>(null);
+  const ceiling = useRef(95);
+
+  const stopRamp = useCallback(() => {
+    if (ticker.current) clearInterval(ticker.current);
+    ticker.current = null;
+  }, []);
+
+  const rampTo = useCallback(
+    (target: number, label: string) => {
+      ceiling.current = target;
+      setStage(label);
+      stopRamp();
+      ticker.current = setInterval(() => {
+        setProgress((p) => {
+          const cap = ceiling.current;
+          if (p >= cap) return p;
+          // Fast at first, crawling as it nears the ceiling.
+          return Math.min(cap, p + Math.max(0.3, (cap - p) * 0.06));
+        });
+      }, 350);
+    },
+    [stopRamp],
+  );
+
+  // Clean up if the page unmounts mid-generation.
+  useEffect(() => stopRamp, [stopRamp]);
 
   const generate = useCallback(
     async (opts: GenerateOpts = {}): Promise<GenerateResult | null> => {
@@ -86,8 +122,33 @@ export function useBriefGenerator({
           : undefined;
 
       setBusy(opts.extra ? opts.extra.key : opts.onlyKey || "all");
+      const wholeBrief = !opts.extra && !opts.onlyKey;
+      setProgress(0);
+      if (wholeBrief) rampTo(30, "Reading what you wrote");
       try {
         await flush();
+
+        // Step 1 — pull the structured details out of Explain. This is no
+        // longer something the user has to press: a whole-brief generation
+        // always does it first, so the attendees, objectives, and concerns the
+        // brief is built from are the ones described in prose. Only blank
+        // fields are written, so nothing typed by hand is disturbed.
+        let source = m;
+        if (wholeBrief && canAutofill(m)) {
+          try {
+            const { patch, changes } = await runAutofill(m);
+            if (changes) {
+              source = { ...m, ...patch };
+              save(patch);
+              await flush();
+            }
+          } catch {
+            // A brief built straight from the prose is still a good brief —
+            // never lose the generation over the pre-pass.
+          }
+        }
+        if (wholeBrief) rampTo(95, "Writing your brief");
+
         const res = await fetch("/api/meeting/ai", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -95,19 +156,19 @@ export function useBriefGenerator({
           body: JSON.stringify({
             action: "brief",
             meeting: {
-              title: m.title,
-              meetingType: meetingTypeLabel(m.meeting_type),
-              date: m.date,
-              durationMin: m.duration_min,
-              format: m.format,
-              location: m.location,
-              attendees: m.attendees,
-              explain: m.explain,
-              objectives: m.objectives,
-              background: m.background,
-              concerns: m.concerns,
-              priorTranscript: m.prior_transcript,
-              documents: (m.documents || []).map((d) => ({
+              title: source.title,
+              meetingType: meetingTypeLabel(source.meeting_type),
+              date: source.date,
+              durationMin: source.duration_min,
+              format: source.format,
+              location: source.location,
+              attendees: source.attendees,
+              explain: source.explain,
+              objectives: source.objectives,
+              background: source.background,
+              concerns: source.concerns,
+              priorTranscript: source.prior_transcript,
+              documents: (source.documents || []).map((d) => ({
                 name: d.name,
                 note: d.note,
                 text: d.text,
@@ -118,7 +179,7 @@ export function useBriefGenerator({
               : opts.onlyKey
                 ? blueprint.filter((s) => s.key === opts.onlyKey)
                 : blueprint,
-            kolId: m.kol_id || "",
+            kolId: source.kol_id || "",
             guidance: opts.guidance || "",
             previousSections,
             onlyKey: opts.onlyKey || "",
@@ -128,15 +189,21 @@ export function useBriefGenerator({
         if (!res.ok) throw new Error(json.error || "Brief generation failed");
         const incoming: BriefSection[] = json.sections || [];
         if (!incoming.length) throw new Error("The model returned nothing usable — try again.");
+        stopRamp();
+        setStage("Done");
+        setProgress(100);
         return { incoming, opts };
       } catch (e) {
         toast("error", (e as Error).message);
+        stopRamp();
+        setProgress(0);
+        setStage("");
         return null;
       } finally {
         setBusy(null);
       }
     },
-    [customSections, flush, toast],
+    [customSections, flush, rampTo, save, stopRamp, toast],
   );
 
   // Writes a previously-fetched proposal to the meeting. Called only after
@@ -144,6 +211,8 @@ export function useBriefGenerator({
   const applyGenerated = useCallback(
     (incoming: BriefSection[], opts: GenerateOpts) => {
       const latest = mRef.current;
+      setProgress(0);
+      setStage("");
       if (!latest) return;
       // Snapshot each freshly-written section's content so the UI can later
       // tell it apart from a hand-edited (dirty) one.
@@ -184,5 +253,12 @@ export function useBriefGenerator({
       m.brief.sourceFingerprint !== setupFingerprint(m),
   );
 
-  return { busy, generate, applyGenerated, briefStale };
+  return {
+    busy,
+    generate,
+    applyGenerated,
+    briefStale,
+    progress: Math.round(progress),
+    stage,
+  };
 }

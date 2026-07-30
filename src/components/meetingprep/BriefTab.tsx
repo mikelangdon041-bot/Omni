@@ -67,6 +67,49 @@ const SECTION_ICONS: Record<string, React.ComponentType<{ size?: number | string
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+// Percent loader for brief generation. A determinate ring rather than an
+// endless spinner: the wait is long enough that "is this still going?" is a
+// real question, and the number answers it.
+function ProgressRing({ percent }: { percent: number }) {
+  const p = Math.max(0, Math.min(100, percent));
+  const r = 26;
+  const circumference = 2 * Math.PI * r;
+  return (
+    <span className="relative grid h-16 w-16 place-items-center">
+      <svg className="h-16 w-16 -rotate-90" viewBox="0 0 64 64" aria-hidden>
+        <circle
+          cx="32"
+          cy="32"
+          r={r}
+          fill="none"
+          strokeWidth="5"
+          className="stroke-[var(--accent-soft)]"
+        />
+        <circle
+          cx="32"
+          cy="32"
+          r={r}
+          fill="none"
+          strokeWidth="5"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={circumference * (1 - p / 100)}
+          className="stroke-[var(--accent)] transition-[stroke-dashoffset] duration-500 ease-out"
+        />
+      </svg>
+      <span
+        className="absolute text-sm font-semibold tabular-nums text-[var(--accent)]"
+        role="progressbar"
+        aria-valuenow={Math.round(p)}
+        aria-valuemin={0}
+        aria-valuemax={100}
+      >
+        {Math.round(p)}%
+      </span>
+    </span>
+  );
+}
+
 export function BriefTab({
   m,
   save,
@@ -78,12 +121,18 @@ export function BriefTab({
   goSetup,
   customSections,
   saveCustomSections,
+  progress = 0,
+  stage = "",
 }: {
   m: MpMeeting;
   save: (p: Partial<MpMeeting>) => void;
   userId: string | null;
   busy: string | null;
   briefStale: boolean;
+  /** 0–100 while the whole brief is being built. */
+  progress?: number;
+  /** What that generation is doing right now. */
+  stage?: string;
   /** Only for the very first generation — applies straight away. */
   generateDirect: (opts?: GenerateOpts) => Promise<void>;
   /** Everything else — shows a preview the user must apply. */
@@ -172,14 +221,15 @@ export function BriefTab({
       <div className="grid place-items-center rounded-xl border border-dashed border-border bg-surface px-6 py-16 text-center">
         {busy === "all" ? (
           <>
-            <span className="mb-3 grid h-12 w-12 place-items-center rounded-full bg-[var(--accent-soft)]">
-              <RefreshCw size={20} className="animate-spin text-[var(--accent)]" />
-            </span>
-            <p className="text-sm font-medium text-ink">Building your brief…</p>
+            <ProgressRing percent={progress} />
+            <p className="mt-3 text-sm font-medium text-ink">
+              {stage || "Building your brief…"}
+            </p>
             <p className="mt-1 max-w-md text-sm text-muted">
-              Reading your setup, attendees, and documents. This takes about half
-              a minute — feel free to look around, I&apos;ll keep working in the
-              background.
+              I&apos;m reading what you wrote, filling in the details on Setup,
+              then writing the brief from your attendees and documents. It takes
+              about half a minute — feel free to look around, I&apos;ll keep
+              working in the background.
             </p>
           </>
         ) : (
@@ -221,7 +271,7 @@ export function BriefTab({
             onClick={() => void generateWithPreview()}
           >
             <RefreshCw size={14} className={busy === "all" ? "animate-spin" : ""} />
-            {busy === "all" ? "Updating…" : "Update the brief"}
+            {busy === "all" ? `Updating… ${progress}%` : "Update the brief"}
           </Button>
         </div>
       )}
