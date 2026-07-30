@@ -1577,21 +1577,6 @@ export default function WriterDocPage() {
             </div>
           </section>
 
-          {/* Sits under the result, because that's where the questions are:
-              is this too long, does the ask land, what am I missing. It was
-              below the intake column before, which on a wide screen put it off
-              the bottom of the page. */}
-          <WriterChat
-            docType={doc.doc_type}
-            draft={inputPlain}
-            output={htmlToPlain(doc.content)}
-            notes={notesPlain}
-            applying={busy || researching}
-            // Its own suggestion, handed to the same refine pass the box below
-            // uses. Nothing to retype, nothing to paraphrase away.
-            onApply={(instruction) => generate(instruction)}
-          />
-
           {/* What changed */}
           {diffOn && diffBase && doc.content.trim() && (
             <section className="rounded-xl border border-border bg-surface p-4 shadow-sm">
@@ -1695,6 +1680,19 @@ export default function WriterDocPage() {
           )}
         </div>
       </div>
+
+      {/* Floats bottom-right over everything, so it's in the same place at any
+          scroll position instead of competing for room in a column. */}
+      <WriterChat
+        docType={doc.doc_type}
+        draft={inputPlain}
+        output={htmlToPlain(doc.content)}
+        notes={notesPlain}
+        applying={busy || researching}
+        // Its own suggestion, handed to the same refine pass the box uses.
+        // Nothing to retype, nothing to paraphrase away.
+        onApply={(instruction) => generate(instruction)}
+      />
 
       {/* An attachment, opened to check what was actually read out of it. The
           transcription is the part that reaches the AI, so that's what this

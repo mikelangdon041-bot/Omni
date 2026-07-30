@@ -210,26 +210,31 @@ export function WriterChat({
     }
   }
 
+  // A floating widget rather than a panel in the page. In a column it competed
+  // with the intake and the output for the same vertical space and lost, ending
+  // up below the fold where nobody found it. Down here it's in the same place
+  // on every piece, at every scroll position.
   if (!open)
     return (
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="flex w-full items-center gap-2 rounded-xl border border-border bg-surface px-3.5 py-2.5 text-left shadow-sm transition hover:border-[var(--accent)]/50"
+        title="Ask about this piece"
+        className="fixed bottom-5 right-5 z-40 flex items-center gap-2 rounded-full bg-gradient-to-r from-[var(--grad-from)] to-[var(--grad-to)] py-3 pl-4 pr-5 text-white shadow-lg transition hover:opacity-90 hover:shadow-xl"
       >
-        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-teal-100 text-teal-600">
-          <MessageCircle size={15} />
-        </span>
-        <span className="flex-1 text-sm font-semibold">Ask about this piece</span>
-        <span className="text-[11px] text-muted">
-          {turns.length ? `${turns.length} messages` : "Questions, second opinions"}
-        </span>
+        <MessageCircle size={18} />
+        <span className="text-sm font-semibold">Ask</span>
+        {turns.length > 0 && (
+          <span className="grid h-5 min-w-5 place-items-center rounded-full bg-white/25 px-1 text-[10px] font-bold tabular-nums">
+            {turns.filter((t) => t.role === "assistant").length}
+          </span>
+        )}
       </button>
     );
 
   return (
-    <section className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
-      <div className="flex items-center gap-2.5 border-b border-border px-3.5 py-2.5">
+    <section className="fixed bottom-5 right-5 z-40 flex max-h-[min(70vh,600px)] w-[min(24rem,calc(100vw-2.5rem))] flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl">
+      <div className="flex items-center gap-2.5 border-b border-border bg-canvas/60 px-3.5 py-2.5">
         <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-teal-100 text-teal-600">
           <MessageCircle size={15} />
         </span>
@@ -242,21 +247,22 @@ export function WriterChat({
               setTurns([]);
               setError("");
             }}
-            className="grid h-7 w-7 place-items-center rounded text-muted transition hover:bg-canvas hover:text-red-600"
+            className="grid h-7 w-7 place-items-center rounded text-muted transition hover:bg-surface hover:text-red-600"
           >
             <Trash2 size={13} />
           </button>
         )}
         <button
           type="button"
+          title="Close"
           onClick={() => setOpen(false)}
-          className="rounded px-1.5 py-0.5 text-[11px] font-medium text-muted transition hover:text-ink"
+          className="grid h-7 w-7 place-items-center rounded text-muted transition hover:bg-surface hover:text-ink"
         >
-          Hide
+          <X size={15} />
         </button>
       </div>
 
-      <div className="max-h-80 space-y-3 overflow-y-auto px-3.5 py-3">
+      <div className="flex-1 space-y-3 overflow-y-auto px-3.5 py-3">
         {turns.length === 0 && (
           <div className="space-y-2">
             <p className="text-[11px] leading-snug text-muted">
@@ -355,7 +361,7 @@ export function WriterChat({
       </div>
 
       <div
-        className="border-t border-border px-3 py-2"
+        className="shrink-0 border-t border-border bg-canvas/40 px-3 py-2"
         onDragOver={(e) => {
           if (e.dataTransfer.types.includes("Files")) e.preventDefault();
         }}
