@@ -102,7 +102,17 @@ export default function WriterDocPage() {
   const confirm = useConfirm();
   const { userId } = useUserId();
   const { settings, save: saveSettings } = useWriterSettings(userId);
-  const { doc, versions, loading, save, flush, addVersion, remove } = useWriterDoc(
+  const {
+    doc,
+    versions,
+    loading,
+    save,
+    flush,
+    addVersion,
+    removeVersion,
+    clearVersions,
+    remove,
+  } = useWriterDoc(
     id,
     userId,
     settings?.version_retention_days,
@@ -724,7 +734,51 @@ export default function WriterDocPage() {
     save({ content: v.content, subject: v.subject || doc?.subject || "" });
     setVariantResults([]);
     setShowVersions(false);
-    toast("success", "Version restored — the one you had is saved too");
+    // Bring back the state around the version, not just its text: the
+    // instruction that produced it goes back into the refine box, unsent. You
+    // can see what was asked for, adjust it, and run it again — or clear it.
+    const restorable =
+      v.instructions &&
+      v.instructions !== "Generated from intake" &&
+      !v.instructions.startsWith("Your version before");
+    setGuidance(restorable ? v.instructions : "");
+    setRefineActions([]);
+    setRefineTone([]);
+    setRefineLength("as_is");
+    toast(
+      "success",
+      restorable
+        ? "Restored, with what you asked for back in the refine box"
+        : "Version restored — the one you had is saved too",
+    );
+  }
+
+  async function deleteVersion(v: WriterVersion) {
+    if (
+      !(await confirm({
+        title: "Delete this version?",
+        message: "It won't be restorable afterwards.",
+        confirmLabel: "Delete",
+        danger: true,
+      }))
+    )
+      return;
+    await removeVersion(v.id);
+  }
+
+  async function deleteAllVersions() {
+    if (
+      !(await confirm({
+        title: `Delete all ${versions.length} versions?`,
+        message:
+          "The piece itself stays exactly as it is. Only the history goes, and it can't be undone.",
+        confirmLabel: "Delete all",
+        danger: true,
+      }))
+    )
+      return;
+    await clearVersions();
+    toast("success", "History cleared");
   }
 
   async function copyOut() {
@@ -1687,13 +1741,24 @@ export default function WriterDocPage() {
           <p className="text-sm text-muted">No versions yet — generate something first.</p>
         ) : (
           <>
-            <p className="mb-3 text-xs text-muted">
-              Every generate and refine is saved here, plus a copy of whatever you
-              had on screen before a refine or a restore.{" "}
+            <div className="mb-3 flex items-start gap-2">
+              <p className="flex-1 text-xs text-muted">
+                Every generate and refine is saved here, plus a copy of whatever
+                you had on screen before a refine or a restore. Restoring brings
+                back the text and puts what you asked for back in the refine box,
+                unsent.{" "}
               {(settings?.version_retention_days ?? 10) > 0
                 ? `Versions older than ${settings?.version_retention_days ?? 10} days are deleted automatically — change that in Settings.`
                 : "They're kept indefinitely — change that in Settings."}
-            </p>
+              </p>
+              <button
+                type="button"
+                onClick={() => void deleteAllVersions()}
+                className="shrink-0 rounded-lg border border-border px-2 py-1 text-[11px] font-medium text-muted transition hover:border-red-300 hover:text-red-600"
+              >
+                Delete all
+              </button>
+            </div>
             <ul className="space-y-3">
             {versions.map((v) => (
               <li key={v.id} className="rounded-lg border border-border p-3">
@@ -1711,7 +1776,7 @@ export default function WriterDocPage() {
                       Variant {v.variant_label}
                     </span>
                   )}
-                  <span className="flex-1 truncate italic">{v.instructions}</span>
+                  <span className="flex-1" />
                   <Button
                     size="sm"
                     variant="secondary"
@@ -1719,7 +1784,26 @@ export default function WriterDocPage() {
                   >
                     Restore
                   </Button>
+                  <button
+                    title="Delete this version"
+                    onClick={() => void deleteVersion(v)}
+                    className="rounded p-1 text-muted transition hover:text-red-600"
+                  >
+                    <Trash2 size={13} />
+                  </button>
                 </div>
+                {/* The instruction in full, not truncated: it's what you'd read
+                    to work out which version this was, and it comes back into
+                    the refine box when you restore. */}
+                {v.instructions && (
+                  <p className="mb-1 text-[11px] italic leading-snug text-muted">
+                    {v.instructions === "Generated from intake"
+                      ? "Written from your draft and options"
+                      : v.instructions.startsWith("Your version before")
+                        ? v.instructions
+                        : `You asked: ${v.instructions}`}
+                  </p>
+                )}
                 <p className="line-clamp-3 text-xs leading-relaxed text-ink/80">
                   {htmlToPlain(v.content)}
                 </p>

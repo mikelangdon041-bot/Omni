@@ -288,6 +288,16 @@ export function useWriterDoc(id: string, userId: string | null, retentionDays?: 
     }
   }, [id, userId]);
 
+  const removeVersion = useCallback(async (versionId: string) => {
+    setVersions((prev) => prev.filter((v) => v.id !== versionId));
+    await supabase.from("writer_versions").delete().eq("id", versionId);
+  }, []);
+
+  const clearVersions = useCallback(async () => {
+    setVersions([]);
+    await supabase.from("writer_versions").delete().eq("doc_id", id);
+  }, [id]);
+
   const addVersion = useCallback(
     async (v: Omit<WriterVersion, "id" | "created_at">) => {
       const { data } = await supabase
@@ -301,7 +311,17 @@ export function useWriterDoc(id: string, userId: string | null, retentionDays?: 
     [],
   );
 
-  return { doc, versions, loading, save, flush, addVersion, remove };
+  return {
+    doc,
+    versions,
+    loading,
+    save,
+    flush,
+    addVersion,
+    removeVersion,
+    clearVersions,
+    remove,
+  };
 }
 
 export function useWriterStyles(userId: string | null) {
