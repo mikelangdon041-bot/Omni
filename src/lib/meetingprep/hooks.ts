@@ -83,6 +83,35 @@ export function useMpMeetings(userId: string | null) {
   return { meetings, loading, add, remove, refresh };
 }
 
+/**
+ * Start a meeting from material that lives in another app — today, a piece in
+ * Writing Studio whose chat was asked to get the person ready for the
+ * conversation rather than to change the writing. Everything lands in `explain`,
+ * the plain-language fast path the setup tab is built around, so "Fill in the
+ * details" picks the attendees, objectives and concerns out of it exactly as it
+ * would from something typed there by hand. Standalone rather than part of
+ * useMpMeetings so a page that only ever creates one doesn't have to load the
+ * caller's whole meeting list to do it.
+ */
+export async function createMeetingFromMaterial(
+  userId: string,
+  input: { title: string; explain: string },
+): Promise<MpMeeting | null> {
+  const { data } = await supabase
+    .from("mp_meetings")
+    .insert({
+      user_id: userId,
+      title: input.title.slice(0, 200),
+      explain: input.explain,
+    })
+    .select("*")
+    .single();
+  if (!data) return null;
+  // The list cache would otherwise paint without the new meeting on the way in.
+  dropCached(`meetings:${userId}`);
+  return data as MpMeeting;
+}
+
 export type SaveState = "idle" | "pending" | "saving" | "saved";
 
 // One meeting with debounced autosave (same pattern as Writing Studio docs).
@@ -230,9 +259,22 @@ export function useMpSettings(userId: string | null) {
           ? { ...prev, ...partial }
           : { user_id: userId, custom_sections: [], ...partial },
       );
-      await supabase
+      const { error } = await supabase
         .from("mp_settings")
         .upsert({ user_id: userId, ...partial }, { onConflict: "user_id" });
+      // section_order arrived after the table did (migration 0028). Until that
+      // migration is run, saving it comes back "column does not exist" and
+      // would take the custom sections down with it — so retry without it
+      // rather than lose the whole save.
+      if (error && "section_order" in partial) {
+        const { section_order: _dropped, ...rest } = partial;
+        void _dropped;
+        if (Object.keys(rest).length) {
+          await supabase
+            .from("mp_settings")
+            .upsert({ user_id: userId, ...rest }, { onConflict: "user_id" });
+        }
+      }
     },
     [userId],
   );

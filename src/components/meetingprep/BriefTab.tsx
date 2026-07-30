@@ -41,6 +41,7 @@ import { htmlToPlain } from "@/lib/writer/types";
 import type { GenerateOpts } from "@/lib/meetingprep/useBriefGenerator";
 import {
   meetingContextText,
+  orderSections,
   type CustomSection,
   type IdeaSuggestion,
   type MpMeeting,
@@ -123,6 +124,7 @@ export function BriefTab({
   saveCustomSections,
   progress = 0,
   stage = "",
+  sectionOrder,
 }: {
   m: MpMeeting;
   save: (p: Partial<MpMeeting>) => void;
@@ -133,6 +135,8 @@ export function BriefTab({
   progress?: number;
   /** What that generation is doing right now. */
   stage?: string;
+  /** The user's arrangement of the brief's boxes, from My brief. */
+  sectionOrder?: string[];
   /** Only for the very first generation — applies straight away. */
   generateDirect: (opts?: GenerateOpts) => Promise<void>;
   /** Everything else — shows a preview the user must apply. */
@@ -147,7 +151,11 @@ export function BriefTab({
   const [guidance, setGuidance] = useState("");
   const [pushedTasks, setPushedTasks] = useState(false);
 
-  const sections = m.brief?.sections || [];
+  // Stored order vs. displayed order. Edits and appends work on the stored
+  // array so nothing is silently rewritten; only what's rendered follows the
+  // arrangement the user chose in "My brief".
+  const storedSections = m.brief?.sections || [];
+  const sections = orderSections(storedSections, sectionOrder);
   const hasBrief = sections.length > 0;
   const collapsedKeys = new Set(m.brief?.collapsed || []);
 
@@ -191,7 +199,7 @@ export function BriefTab({
     save({
       brief: {
         ...m.brief,
-        sections: sections.map((s) => (s.key === key ? { ...s, content } : s)),
+        sections: storedSections.map((s) => (s.key === key ? { ...s, content } : s)),
       },
     });
 
@@ -199,13 +207,13 @@ export function BriefTab({
   // (creating the section on first use).
   function addIdeaToBrief(idea: IdeaSuggestion) {
     const html = `<p><b>${esc(idea.title)}.</b> ${esc(idea.detail)}</p>`;
-    const existing = sections.find((s) => s.key === IDEAS_SECTION_KEY);
+    const existing = storedSections.find((s) => s.key === IDEAS_SECTION_KEY);
     const nextSections = existing
-      ? sections.map((s) =>
+      ? storedSections.map((s) =>
           s.key === IDEAS_SECTION_KEY ? { ...s, content: s.content + html } : s,
         )
       : [
-          ...sections,
+          ...storedSections,
           { key: IDEAS_SECTION_KEY, title: "More angles & ideas", content: html },
         ];
     save({

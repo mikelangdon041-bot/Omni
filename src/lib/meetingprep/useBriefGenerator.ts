@@ -16,6 +16,7 @@ import { canAutofill, runAutofill } from "./autofill";
 import {
   DEFAULT_BRIEF_SECTIONS,
   meetingTypeLabel,
+  orderSections,
   setupFingerprint,
   type BriefSection,
   type CustomSection,
@@ -44,11 +45,14 @@ export function useBriefGenerator({
   save,
   flush,
   customSections,
+  sectionOrder,
 }: {
   meeting: MpMeeting | null;
   save: (p: Partial<MpMeeting>) => void;
   flush: () => Promise<void>;
   customSections: CustomSection[];
+  /** The user's saved order for the brief's boxes, if they set one. */
+  sectionOrder?: string[];
 }) {
   const toast = useToast();
   // null | "all" | <sectionKey being redone/added>
@@ -103,7 +107,7 @@ export function useBriefGenerator({
       const sections = m.brief?.sections || [];
 
       // Standard sections + saved profile sections + any one-off sections
-      // already present in this brief.
+      // already present in this brief, arranged the way the user ordered them.
       const blueprint = [...DEFAULT_BRIEF_SECTIONS, ...customSections];
       const known = new Set(blueprint.map((s) => s.key));
       for (const s of sections) {
@@ -111,6 +115,7 @@ export function useBriefGenerator({
           blueprint.push({ key: s.key, title: s.title, prompt: `Section "${s.title}" as before.` });
         }
       }
+      const ordered = orderSections(blueprint, sectionOrder);
 
       // A section redo only sends THAT section's own current content as
       // context — never the rest of the brief — so the model can't touch
@@ -177,8 +182,8 @@ export function useBriefGenerator({
             sections: opts.extra
               ? [opts.extra]
               : opts.onlyKey
-                ? blueprint.filter((s) => s.key === opts.onlyKey)
-                : blueprint,
+                ? ordered.filter((s) => s.key === opts.onlyKey)
+                : ordered,
             kolId: source.kol_id || "",
             guidance: opts.guidance || "",
             previousSections,
@@ -203,7 +208,7 @@ export function useBriefGenerator({
         setBusy(null);
       }
     },
-    [customSections, flush, rampTo, save, stopRamp, toast],
+    [customSections, flush, rampTo, save, sectionOrder, stopRamp, toast],
   );
 
   // Writes a previously-fetched proposal to the meeting. Called only after

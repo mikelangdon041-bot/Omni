@@ -122,6 +122,47 @@ body {
   margin-bottom: 0;
 }
 
+/* Nested lists read as a tree.
+
+   A brief is scanned standing up on the way into a room: the top-level bullet
+   is the point, and what hangs off it is the detail. Indentation alone doesn't
+   carry that — at two levels deep it's a guess which parent a line belongs to.
+   A hairline down the left of each nested list draws the branch, and the
+   markers step down (disc → circle → square) so depth is legible even where
+   the guide is short. Applies in the editor and the read-only view, so a
+   brief looks the same while you're editing it as when you're reading it. */
+.omni-rt ul ul,
+.omni-rt ol ul,
+.omni-rt ul ol,
+.omni-rt ol ol,
+.omni-rt-view ul ul,
+.omni-rt-view ol ul,
+.omni-rt-view ul ol,
+.omni-rt-view ol ol {
+  margin: 0.25rem 0 0.4rem;
+  padding-left: 1rem;
+  margin-left: 0.15rem;
+  border-left: 1px solid var(--color-border);
+}
+.omni-rt ul ul,
+.omni-rt-view ul ul {
+  list-style: circle;
+}
+.omni-rt ul ul ul,
+.omni-rt-view ul ul ul {
+  list-style: square;
+}
+/* Breathing room between top-level points; children stay tight to their
+   parent so a branch reads as one block. */
+.omni-rt > ul > li,
+.omni-rt-view > ul > li {
+  margin: 0.3rem 0;
+}
+.omni-rt li::marker,
+.omni-rt-view li::marker {
+  color: var(--color-muted);
+}
+
 /* Document preview (converted DOCX/TXT resumes): restore the paragraph,
    heading and list spacing that Tailwind's preflight strips, so line breaks
    and paragraphs read the way they do in the original file. */

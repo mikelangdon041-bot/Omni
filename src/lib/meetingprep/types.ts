@@ -176,6 +176,29 @@ export interface CustomSection {
 export interface MpSettings {
   user_id: string;
   custom_sections: CustomSection[];
+  // The order the brief's boxes appear in, as section keys — the user's own
+  // arrangement from "My brief". Keys missing from it (a new default section,
+  // a one-off section added to a single brief) keep their natural position at
+  // the end, so an order saved today still makes sense after the blueprint
+  // changes. Empty/absent means the default order.
+  section_order?: string[];
+}
+
+/**
+ * Applies the user's saved order to a list of sections. Anything the order
+ * doesn't mention keeps its original relative position, appended after the
+ * ones it does.
+ */
+export function orderSections<T extends { key: string }>(
+  items: T[],
+  order: string[] | undefined,
+): T[] {
+  if (!order?.length) return items;
+  const rank = new Map(order.map((k, i) => [k, i]));
+  const known = items.filter((s) => rank.has(s.key));
+  const rest = items.filter((s) => !rank.has(s.key));
+  known.sort((a, b) => (rank.get(a.key) ?? 0) - (rank.get(b.key) ?? 0));
+  return [...known, ...rest];
 }
 
 export const MEETING_TYPES: { key: MeetingType; label: string }[] = [
@@ -248,7 +271,18 @@ export function setupFingerprint(m: MpMeeting): string {
 
 // The default brief blueprint — every brief carries these sections, in this
 // order, plus whatever custom sections the user saved to their profile.
+//
+// "How the meeting should go" leads, because that is the thing you actually
+// want in front of you: the shape of the meeting, start to finish. Everything
+// after it is depth on one part of that run-of-show. The user can reorder all
+// of this in My brief → Order of the brief.
 export const DEFAULT_BRIEF_SECTIONS: { key: string; title: string; prompt: string }[] = [
+  {
+    key: "agenda",
+    title: "How the meeting should go",
+    prompt:
+      "The run of show, start to finish, as a nested outline. Each top-level item is one phase of the meeting with a rough timing in parentheses (e.g. \"Opening and rapport (0-5 min)\"), sequenced so the meeting reaches the objective, and fitting the stated duration. Nested under each phase: what to actually cover or say in it, and what a good outcome of that phase looks like before moving on. This is the section the writer reads walking in — make it the shape of the whole meeting, not a list of topics.",
+  },
   {
     key: "objective",
     title: "Objective & what success looks like",
@@ -260,12 +294,6 @@ export const DEFAULT_BRIEF_SECTIONS: { key: string; title: string; prompt: strin
     title: "Who's in the room",
     prompt:
       "One short block per attendee: who they are, what they care about, and one tailored talking point or connection to make with them.",
-  },
-  {
-    key: "agenda",
-    title: "Proposed agenda",
-    prompt:
-      "A realistic agenda with rough timings that fits the meeting duration, sequenced to reach the objective.",
   },
   {
     key: "talking_points",

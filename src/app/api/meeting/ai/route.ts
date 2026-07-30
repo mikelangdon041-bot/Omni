@@ -130,6 +130,18 @@ async function kolBlockFor(
 const NO_FORMATTING_RULE =
   "Plain prose. No bold, no markdown, no headers, no emoji. Use <b> only mid-sentence for a genuinely critical word or number, never to label a whole line or start a bullet. Write like a person handing over notes, not like an AI assistant's answer.";
 
+// How a brief section's `content` is structured. A brief is read standing up,
+// on the way into a room — it has to be scannable as an outline, so anything
+// with more than one part comes back as a nested list rather than a wall of
+// paragraphs. The app renders these as an indented tree.
+const BRIEF_HTML_RULE = `Each section's content is an HTML fragment using ONLY these tags: <p>, <ul>, <li>, <b>, <i>. No headings, no <div>, no <br>, no markdown, no bullet characters typed into the text (the <li> is the bullet).
+
+Structure it as a tree, not a wall of text:
+- A section with several points is a <ul> of <li>. One <li> = one point, stated in a complete sentence.
+- Detail that elaborates a point goes in a <ul> nested INSIDE that point's own <li>, never as a sibling. Two levels is the norm; three is the maximum; never more.
+- Keep parent items short enough to scan on their own — the parent is the headline, the children carry the specifics (what to say, numbers, names, the reason).
+- Use a <p> only for a genuinely single-thought section that has nothing to nest.`;
+
 const BRIEF_SCHEMA = {
   type: "object" as const,
   properties: {
@@ -271,6 +283,8 @@ export async function POST(req: Request) {
         system: `You are a sharp, experienced chief of staff writing a pre-meeting brief for someone about to walk into the room. Produce sections a real person would hand another person, not an AI-generated report.
 
 ${NO_FORMATTING_RULE}
+
+${BRIEF_HTML_RULE}
 
 Hard rules:
 - Ground everything in the provided meeting context. NEVER invent facts, names, data, or commitments not present. When context is thin for a section, give genuinely useful general guidance for this type of meeting instead of fabricating specifics — say less rather than make things up.

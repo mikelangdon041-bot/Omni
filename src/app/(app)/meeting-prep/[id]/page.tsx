@@ -58,6 +58,7 @@ export default function MeetingPage() {
     save,
     flush,
     customSections: settings?.custom_sections || [],
+    sectionOrder: settings?.section_order,
   });
 
   // Nothing an AI regenerate writes lands on the brief until the user has
@@ -213,6 +214,7 @@ export default function MeetingPage() {
           saveCustomSections={(custom_sections) => void saveSettings({ custom_sections })}
           progress={generator.progress}
           stage={generator.stage}
+          sectionOrder={settings?.section_order}
         />
       )}
       {tab === "Grill me" && <GrillTab m={meeting} save={save} flush={flush} />}

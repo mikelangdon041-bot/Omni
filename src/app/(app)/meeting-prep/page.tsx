@@ -7,6 +7,8 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   CalendarClock,
+  ChevronDown,
+  ChevronUp,
   FileAudio,
   Plus,
   Settings2,
@@ -24,7 +26,9 @@ import {
   useUserId,
 } from "@/lib/meetingprep/hooks";
 import {
+  DEFAULT_BRIEF_SECTIONS,
   meetingTypeLabel,
+  orderSections,
   type CustomSection,
   type MpMeeting,
 } from "@/lib/meetingprep/types";
@@ -156,11 +160,13 @@ export default function MeetingPrepPage() {
         </div>
       )}
 
-      <CustomSectionsModal
+      <BriefSettingsModal
         open={showSettings}
         onClose={() => setShowSettings(false)}
         sections={settings?.custom_sections || []}
         onSave={(custom_sections) => void saveSettings({ custom_sections })}
+        order={settings?.section_order || []}
+        onSaveOrder={(section_order) => void saveSettings({ section_order })}
       />
     </>
   );
@@ -263,26 +269,102 @@ function MeetingList({
   );
 }
 
-// Manage the custom sections appended to every future brief.
-function CustomSectionsModal({
+// "My brief": the order the boxes come in, plus the custom sections appended
+// to every future brief.
+function BriefSettingsModal({
   open,
   onClose,
   sections,
   onSave,
+  order,
+  onSaveOrder,
 }: {
   open: boolean;
   onClose: () => void;
   sections: CustomSection[];
   onSave: (s: CustomSection[]) => void;
+  order: string[];
+  onSaveOrder: (o: string[]) => void;
 }) {
   const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState("");
 
+  // Everything that can appear in a brief, in the order it currently would.
+  const all = orderSections(
+    [
+      ...DEFAULT_BRIEF_SECTIONS.map((s) => ({ key: s.key, title: s.title, custom: false })),
+      ...sections.map((s) => ({ key: s.key, title: s.title, custom: true })),
+    ],
+    order,
+  );
+
+  function move(index: number, delta: number) {
+    const next = [...all];
+    const target = index + delta;
+    if (target < 0 || target >= next.length) return;
+    [next[index], next[target]] = [next[target], next[index]];
+    onSaveOrder(next.map((s) => s.key));
+  }
+
   return (
-    <Modal open={open} onClose={onClose} title="My brief — custom sections">
+    <Modal open={open} onClose={onClose} title="My brief">
+      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+        Order of the brief
+      </p>
       <p className="mb-3 text-sm text-muted">
-        Sections you add here appear in <b>every</b> brief from now on, after the
-        standard ones.
+        Top to bottom, the order the boxes appear in — in every brief, including
+        the ones you&apos;ve already generated. Put what you read first at the
+        top.
+      </p>
+      <ul className="mb-5 space-y-1.5">
+        {all.map((s, i) => (
+          <li
+            key={s.key}
+            className="flex items-center gap-2 rounded-lg border border-border bg-canvas/40 py-1.5 pl-3 pr-1.5"
+          >
+            <span className="w-5 shrink-0 text-xs font-semibold tabular-nums text-muted">
+              {i + 1}
+            </span>
+            <p className="min-w-0 flex-1 truncate text-sm">
+              {s.title}
+              {s.custom && (
+                <span className="ml-1.5 rounded bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--accent)]">
+                  Yours
+                </span>
+              )}
+            </p>
+            <button
+              className="rounded p-1 text-muted transition hover:text-ink disabled:opacity-25"
+              aria-label={`Move "${s.title}" up`}
+              disabled={i === 0}
+              onClick={() => move(i, -1)}
+            >
+              <ChevronUp size={15} />
+            </button>
+            <button
+              className="rounded p-1 text-muted transition hover:text-ink disabled:opacity-25"
+              aria-label={`Move "${s.title}" down`}
+              disabled={i === all.length - 1}
+              onClick={() => move(i, 1)}
+            >
+              <ChevronDown size={15} />
+            </button>
+          </li>
+        ))}
+      </ul>
+      {order.length > 0 && (
+        <div className="mb-5 flex justify-end">
+          <Button size="sm" variant="ghost" onClick={() => onSaveOrder([])}>
+            Reset to the default order
+          </Button>
+        </div>
+      )}
+
+      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+        Custom sections
+      </p>
+      <p className="mb-3 text-sm text-muted">
+        Sections you add here appear in <b>every</b> brief from now on.
       </p>
       {sections.length > 0 && (
         <ul className="mb-4 space-y-2">
