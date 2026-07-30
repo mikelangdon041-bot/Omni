@@ -90,9 +90,10 @@ Be specific and quote short examples from the samples. Under 250 words. Return o
       return NextResponse.json({ profile: firstText(res) });
     }
 
-    // Ask-me-anything about the piece you're working on. Read-only on purpose:
-    // it answers, suggests and critiques but never edits the draft, so the
-    // Generate/Refine buttons stay the only things that change your text.
+    // Ask-me-anything about the piece you're working on. Answering never edits
+    // anything; when the answer proposes a specific change it also returns that
+    // change as an instruction, which the button on the answer feeds to the
+    // ordinary refine pass.
     if (action === "chat") {
       const turns: { role: string; content: string }[] = Array.isArray(body?.turns)
         ? body.turns.slice(-12)
@@ -142,7 +143,7 @@ How to answer:
 - Be short. Two or three sentences for most questions, and a tight list when they ask for options.
 - Be concrete and specific to THEIR text. Quote the line you mean. "Your second paragraph buries the ask" beats "consider improving clarity".
 - Have an opinion. If they ask whether something works, say yes or no and why, then what you'd do.
-- You cannot edit their draft from here, and you should not hand back a full rewritten version. Point at what to change, or tell them what to type into the refine box. If they want the change made, tell them to hit Refine with that instruction.
+- Don't hand back a full rewritten version of the piece. Say what to change and why; the "instruction" field is how the change actually gets made, and there is a button on your answer that applies it, so never tell them to retype anything or to go and use the refine box.
 - Never use an em dash, an en dash, or a double hyphen. Use a comma, a period, a colon, or parentheses.
 - No preamble, no "great question", no restating what they asked.
 - If something isn't in what you can see, say so instead of guessing.
@@ -401,7 +402,28 @@ Return only the JSON.`,
 
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "AI request failed";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: readableError(err) }, { status: 500 });
   }
+}
+
+/**
+ * A sentence someone can act on. The SDK's own message is the HTTP status
+ * followed by the raw JSON body, which lands in a toast as
+ * `400 {"type":"error","error":{...}}` — technically accurate and no use to
+ * anyone looking at it.
+ */
+function readableError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err ?? "");
+  // The SDK message starts with the status code; matching it loose would let a
+  // digit inside a request id decide the wording.
+  const status = Number(raw.match(/^(\d{3})/)?.[1] ?? 0);
+  if (/content filtering|blocked by/i.test(raw))
+    return "That one was declined by the safety filter. Try rephrasing it, or removing the part it's likely reacting to.";
+  if (status === 429 || /rate_limit_error/.test(raw))
+    return "Too many requests at once — give it a moment and try again.";
+  if (status === 529 || status >= 500 || /overloaded_error/.test(raw))
+    return "The model is busy right now. Try that again in a moment.";
+  if (status === 413 || /request_too_large|too many tokens|context window/i.test(raw))
+    return "There's too much text here to process in one go — try trimming it.";
+  return "That didn't go through. Try again.";
 }

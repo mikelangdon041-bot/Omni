@@ -156,37 +156,48 @@ export async function POST(req: Request) {
       }
 
       // Enough extractable text means it's a real text PDF — use it as-is.
-      if (text.trim().length >= 40) return NextResponse.json({ html: textToHtml(text) });
+      // Deliberately a low bar: reading the text out locally is free, exact, and
+      // never refused, so anything usable should go this way rather than to the
+      // model.
+      if (text.trim().length >= 20) return NextResponse.json({ html: textToHtml(text) });
 
       // Otherwise it's a scan or an image-only export — let Claude read it.
-      const res = await anthropic().messages.create({
-        model: WRITER_MODEL,
-        max_tokens: 16000,
-        system: TRANSCRIBE_SYSTEM,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "document",
-                source: {
-                  type: "base64",
-                  media_type: "application/pdf",
-                  data: buffer.toString("base64"),
+      try {
+        const res = await anthropic().messages.create({
+          model: WRITER_MODEL,
+          max_tokens: 16000,
+          system: TRANSCRIBE_SYSTEM,
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "document",
+                  source: {
+                    type: "base64",
+                    media_type: "application/pdf",
+                    data: buffer.toString("base64"),
+                  },
                 },
-              },
-              { type: "text", text: "Transcribe everything readable in this document." },
-            ],
-          },
-        ],
-      });
-      const html = cleanModelHtml(firstText(res));
-      if (!html || html === "<p></p>")
-        return NextResponse.json(
-          { error: "I couldn't find any text in that PDF." },
-          { status: 422 },
-        );
-      return NextResponse.json({ html });
+                { type: "text", text: "Transcribe everything readable in this document." },
+              ],
+            },
+          ],
+        });
+        const html = cleanModelHtml(firstText(res));
+        if (!html || html === "<p></p>")
+          return NextResponse.json(
+            { error: "I couldn't find any text in that PDF." },
+            { status: 422 },
+          );
+        return NextResponse.json({ html });
+      } catch (err) {
+        // The transcription can be declined outright (a safety classifier, a
+        // malformed PDF). Whatever little text came out locally beats losing the
+        // file entirely, so fall back to it before giving up.
+        if (text.trim()) return NextResponse.json({ html: textToHtml(text) });
+        throw err;
+      }
     }
 
     // .txt / .md / .csv / anything else readable as text.
@@ -198,7 +209,28 @@ export async function POST(req: Request) {
       );
     return NextResponse.json({ html });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Could not read that file";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: readableError(err) }, { status: 500 });
   }
+}
+
+/**
+ * A sentence someone can act on, instead of the SDK's message — which is the
+ * HTTP status followed by the raw JSON body, and ends up in a toast looking like
+ * `400 {"type":"error","error":{...}}`.
+ */
+function readableError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err ?? "");
+  // The SDK message starts with the status code; matching it loose would let a
+  // digit inside a request id decide the wording.
+  const status = Number(raw.match(/^(\d{3})/)?.[1] ?? 0);
+  if (/content filtering|blocked by/i.test(raw))
+    return "The reader declined that file. If it's a scan, try a clearer copy, or paste the text in instead.";
+  if (status === 413 || /request_too_large|too many tokens/i.test(raw))
+    return "That file is too big to read in one go — try splitting it.";
+  if (status === 429 || /rate_limit_error/.test(raw))
+    return "Too many files at once. Give it a moment and try again.";
+  if (status >= 500 || /overloaded_error/.test(raw))
+    return "The reader is busy right now — try that one again.";
+  // Anything unrecognised: keep it short and never leak a JSON body.
+  return "I couldn't read that file.";
 }

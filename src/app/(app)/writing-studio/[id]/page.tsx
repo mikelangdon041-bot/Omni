@@ -316,7 +316,8 @@ export default function WriterDocPage() {
             FIDELITY_OPTIONS.find((f) => f.key === ex.fidelity)!.label.replace(/^\S+\s/, ""),
           );
         }
-        if (!cur.context.noGreeting && ex.noGreeting === true) {
+        const greets = cur.doc_type === "email" || cur.doc_type === "message";
+        if (greets && !cur.context.noGreeting && ex.noGreeting === true) {
           partial.noGreeting = true;
           filled.push("no greeting");
         }
@@ -406,7 +407,11 @@ export default function WriterDocPage() {
     .join(". ");
   // Anything that can open with "Hi Sarah," can be told not to. Only a
   // summary/abstract has no salutation to skip in the first place.
-  const canGreet = doc.doc_type !== "summary";
+  // Only things addressed to a person open with a greeting. A memo, a post, a
+  // summary or a generic draft don't, so offering to skip one there is an
+  // option that does nothing — noise in the one column that has to stay
+  // scannable.
+  const canGreet = isEmail || doc.doc_type === "message";
 
   const hasIntake =
     !!inputPlain.trim() ||
@@ -425,17 +430,29 @@ export default function WriterDocPage() {
     // files in flight the second read could land before React had re-rendered
     // the first one in, and quietly drop it.
     let list = [...(docRef.current?.context.attachments || [])];
+    // Each file stands on its own: one that can't be read must not take the
+    // other two down with it, which is what happened when a single throw
+    // abandoned the loop.
+    const failed: string[] = [];
+    let added = 0;
     try {
       for (const file of files) {
-        const form = new FormData();
-        form.append("file", file);
-        const res = await fetch("/api/writer/ingest", {
-          method: "POST",
-          credentials: "same-origin",
-          body: form,
-        });
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error || "Could not read that file");
+        const label = file.name || "that file";
+        let json: { html?: string; error?: string };
+        try {
+          const form = new FormData();
+          form.append("file", file);
+          const res = await fetch("/api/writer/ingest", {
+            method: "POST",
+            credentials: "same-origin",
+            body: form,
+          });
+          json = await res.json();
+          if (!res.ok) throw new Error(json.error || "Could not read it");
+        } catch (e) {
+          failed.push(`${label}: ${(e as Error).message}`);
+          continue;
+        }
         const current = docRef.current;
         if (!current) return;
         const isImage = (file.type || "").startsWith("image/");
@@ -450,9 +467,18 @@ export default function WriterDocPage() {
         // on the server, and nothing bloating the saved row.
         if (isImage) previewUrls.current[attachment.id] = URL.createObjectURL(file);
         list = [...list, attachment];
+        added += 1;
         save({ context: { ...current.context, attachments: list } });
-        toast("success", `Attached ${attachment.name}`);
       }
+
+      if (added)
+        toast(
+          "success",
+          added === 1 ? `Attached ${list[list.length - 1].name}` : `Attached ${added} files`,
+        );
+      // Name what didn't work and why, rather than a single generic failure for
+      // a batch where most of it succeeded.
+      for (const message of failed) toast("error", message);
     } catch (e) {
       toast("error", (e as Error).message);
     } finally {
@@ -638,7 +664,12 @@ export default function WriterDocPage() {
           previous: refining ? cur.content : "",
           guidance: refineGuidance || "",
           fidelity: curCtx.fidelity,
-          noGreeting: curCtx.noGreeting,
+          // Only meaningful where something is addressed to a person; sending it
+          // for a memo is an instruction about a salutation that isn't there.
+          noGreeting:
+            cur.doc_type === "email" || cur.doc_type === "message"
+              ? curCtx.noGreeting
+              : false,
           context: {
             ...curCtx,
             brief: notesNow,
