@@ -248,6 +248,33 @@ export function chipOptions(values: string[]): { key: string; label: string }[] 
   }));
 }
 
+// What the user says they're writing, when it contradicts the type they picked
+// at creation. The type is not cosmetic: it decides whether there's a subject
+// line and a signature, and it tells the model what shape to write. Picking
+// "Document" and then typing "I want to send an email" is a conflict worth
+// catching rather than resolving silently in either direction.
+const TYPE_PHRASES: { type: DocType; re: RegExp }[] = [
+  { type: "email", re: /\bemail\b/i },
+  { type: "message", re: /\b(slack|teams|text message|dm|instant message)\b/i },
+  { type: "social", re: /\b(linkedin|social post|tweet|post on)\b/i },
+  { type: "summary", re: /\b(summary|abstract|recap|digest)\b/i },
+  { type: "document", re: /\b(memo|document|report|white ?paper|one[- ]pager)\b/i },
+];
+
+// Only counts when they're saying what they intend to write, not merely
+// mentioning the word ("reply to the email below" is about the source, not the
+// output; "I want to write an email" is about the output).
+const INTENT = /\b(writ(?:e|ing)|draft(?:ing)?|send(?:ing)?|need|want|this is|it's|make me)\b/i;
+
+export function detectDocType(text: string): DocType | null {
+  if (!text) return null;
+  for (const sentence of text.split(/[.\n!?]/)) {
+    if (!INTENT.test(sentence)) continue;
+    for (const { type, re } of TYPE_PHRASES) if (re.test(sentence)) return type;
+  }
+  return null;
+}
+
 export function docTypeLabel(t: DocType): string {
   return DOC_TYPES.find((d) => d.key === t)?.label || "Writing";
 }

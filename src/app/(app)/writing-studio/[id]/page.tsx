@@ -10,6 +10,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   Check,
+  ChevronDown,
   Copy,
   Eye,
   EyeOff,
@@ -48,7 +49,9 @@ import {
 import {
   ACTION_CHIPS,
   AUDIENCE_CHIPS,
+  DOC_TYPES,
   FIDELITY_OPTIONS,
+  detectDocType,
   LENGTHS,
   TONE_CHIPS,
   emptyContext,
@@ -111,6 +114,9 @@ export default function WriterDocPage() {
   const [refineActions, setRefineActions] = useState<string[]>([]);
   const [refineTone, setRefineTone] = useState<string[]>([]);
   const [refineLength, setRefineLength] = useState("as_is");
+  const [typeMenu, setTypeMenu] = useState(false);
+  // Dismissed once, don't nag again for the same suggestion.
+  const [dismissedType, setDismissedType] = useState<string | null>(null);
 
   // Nothing here reports real progress (the AI calls return in one shot), so the
   // bars are time-based estimates. Writing takes longer than a look-up, and a
@@ -341,6 +347,10 @@ export default function WriterDocPage() {
 
   // Emails carry the saved signature unless this piece opts out.
   const signatureOn = isEmail && ctx.useSignature && !!settings?.signature?.trim();
+
+  // What they've said they're writing, when it isn't what the piece is set to.
+  const detected = detectDocType(`${notesPlain}\n${inputPlain}`);
+  const suggestedType = detected && detected !== doc.doc_type ? detected : null;
 
   // Has the version on screen been edited by hand since it was generated? If so,
   // Regenerate is almost certainly not what's wanted: it writes afresh from the
@@ -651,9 +661,51 @@ export default function WriterDocPage() {
     <>
       <div className="mb-4 flex items-center gap-3">
         <BackButton label="Writing Studio" />
-        <span className="rounded-full bg-gradient-to-r from-[var(--grad-from)] to-[var(--grad-to)] px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white shadow-sm">
-          {docTypeEmoji(doc.doc_type)} {docTypeLabel(doc.doc_type)}
-        </span>
+        {/* The type is changeable here, not just at creation. It decides
+            whether there's a subject line and a signature and what shape the AI
+            writes, so being locked into the choice you made before you'd
+            written anything is the wrong trade. */}
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setTypeMenu((v) => !v)}
+            title="Change what this is"
+            className="flex items-center gap-1 rounded-full bg-gradient-to-r from-[var(--grad-from)] to-[var(--grad-to)] px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white shadow-sm transition hover:opacity-90"
+          >
+            {docTypeEmoji(doc.doc_type)} {docTypeLabel(doc.doc_type)}
+            <ChevronDown size={11} />
+          </button>
+          {typeMenu && (
+            <>
+              <button
+                type="button"
+                aria-label="Close"
+                className="fixed inset-0 z-20 cursor-default"
+                onClick={() => setTypeMenu(false)}
+              />
+              <div className="absolute left-0 top-7 z-30 w-56 overflow-hidden rounded-lg border border-border bg-surface py-1 shadow-lg">
+                {DOC_TYPES.map((t) => (
+                  <button
+                    key={t.key}
+                    type="button"
+                    onClick={() => {
+                      setTypeMenu(false);
+                      if (t.key !== doc.doc_type) save({ doc_type: t.key });
+                    }}
+                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition hover:bg-canvas ${
+                      t.key === doc.doc_type
+                        ? "font-semibold text-[var(--accent)]"
+                        : "text-ink"
+                    }`}
+                  >
+                    <span>{t.emoji}</span>
+                    <span>{t.label}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
         <span className="hidden text-xs text-muted sm:inline">
           Saves as you type
         </span>
@@ -672,6 +724,34 @@ export default function WriterDocPage() {
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
         {/* ---------------- Intake ---------------- */}
         <div className="space-y-3">
+          {/* You said one thing and picked another. Rather than guess which
+              wins — and quietly write an email into a piece with no subject
+              line — ask, because switching also brings the right fields with
+              it. */}
+          {suggestedType && suggestedType !== dismissedType && (
+            <section className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--accent)]/40 bg-[var(--accent-soft)]/40 p-3">
+              <p className="flex-1 text-xs text-ink">
+                You said <span className="font-semibold">{docTypeLabel(suggestedType)}</span>,
+                but this piece is set to{" "}
+                <span className="font-semibold">{docTypeLabel(doc.doc_type)}</span>.
+                That changes the fields you get and how it&apos;s written.
+              </p>
+              <button
+                type="button"
+                onClick={() => save({ doc_type: suggestedType })}
+                className="rounded-lg bg-[var(--accent)] px-2.5 py-1 text-[11px] font-semibold text-white transition hover:opacity-90"
+              >
+                Switch to {docTypeLabel(suggestedType)}
+              </button>
+              <button
+                type="button"
+                onClick={() => setDismissedType(suggestedType)}
+                className="rounded-lg px-2 py-1 text-[11px] font-medium text-muted transition hover:text-ink"
+              >
+                Keep {docTypeLabel(doc.doc_type)}
+              </button>
+            </section>
+          )}
           {/* Anything the AI guessed from your note waits for a nod here. It
               still applies if you ignore it, but it never looks like a choice
               you made — which is how a fresh piece ends up feeling as though it

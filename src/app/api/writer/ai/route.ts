@@ -125,6 +125,7 @@ How to answer:
 - Never use an em dash, an en dash, or a double hyphen. Use a comma, a period, a colon, or parentheses.
 - No preamble, no "great question", no restating what they asked.
 - If something isn't in what you can see, say so instead of guessing.
+- They can attach screenshots and files to a question. Those arrive transcribed inline in their message under a "--- Attached: name ---" line. Treat that as something they are showing you to explain the question, not as part of the piece they are writing, unless they say to use it.
 
 ${context ? `What they are working on:\n\n${context}` : "They have not written anything yet."}`,
         messages: turns.map((t) => ({
