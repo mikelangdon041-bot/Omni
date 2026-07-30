@@ -117,6 +117,56 @@ export function useWriterDocs(userId: string | null) {
 }
 
 /**
+ * Create a piece and link it to an existing one, both ways. Used for "I also
+ * want the memo behind this email": the new piece starts from the same raw
+ * material rather than from the finished text, so it is written for its own
+ * shape instead of being a reformat of the other one.
+ */
+export async function createLinkedDoc(
+  userId: string,
+  sourceId: string,
+  partial: Partial<WriterDoc>,
+): Promise<WriterDoc | null> {
+  const { data } = await supabase
+    .from("writer_docs")
+    .insert({ ...partial, user_id: userId })
+    .select("*")
+    .single();
+  if (!data) return null;
+  const created = normalizeDoc(data as WriterDoc);
+
+  // Point the original at the new one too, so the link works from either end.
+  const { data: source } = await supabase
+    .from("writer_docs")
+    .select("context")
+    .eq("id", sourceId)
+    .maybeSingle();
+  const sourceCtx = { ...emptyContext(), ...((source?.context as object) || {}) };
+  await supabase
+    .from("writer_docs")
+    .update({
+      context: {
+        ...sourceCtx,
+        siblings: [...new Set([...sourceCtx.siblings, created.id])],
+      },
+    })
+    .eq("id", sourceId);
+
+  if (userId) dropCached(`docs:${userId}`);
+  return created;
+}
+
+/** Titles and types of linked pieces, for the companion strip. */
+export async function fetchSiblings(ids: string[]) {
+  if (!ids.length) return [];
+  const { data } = await supabase
+    .from("writer_docs")
+    .select("id,title,doc_type,subject")
+    .in("id", ids);
+  return (data as { id: string; title: string; doc_type: string; subject: string }[]) || [];
+}
+
+/**
  * Drop versions past their retention window. Runs when a doc is opened rather
  * than on a schedule: the rows only matter to the person looking at that piece,
  * so the moment they open it is the moment stale history is worth clearing, and
@@ -300,7 +350,7 @@ export function useWriterStyles(userId: string | null) {
 
 const DEFAULT_SETTINGS: Omit<WriterSettings, "user_id"> = {
   signature: "",
-  show_diff: true,
+  show_diff: false,
   variant_count: 1,
   version_retention_days: 10,
 };

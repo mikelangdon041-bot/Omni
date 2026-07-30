@@ -112,10 +112,31 @@ Be specific and quote short examples from the samples. Under 250 words. Return o
         .filter(Boolean)
         .join("\n\n---\n\n");
 
+      // Two fields, not one: the answer to read, and the same change written as
+      // an instruction the refine pass can take verbatim. Having the model
+      // phrase its own suggestion is the point — retyping "make it punchier, and
+      // move the ask up" by hand is where the intent gets lost.
+      const CHAT_SCHEMA = {
+        type: "object" as const,
+        properties: {
+          reply: { type: "string" as const },
+          instruction: { type: "string" as const },
+        },
+        required: ["reply", "instruction"],
+        additionalProperties: false,
+      };
+
       const res = await anthropic().messages.create({
         model: WRITER_MODEL,
         max_tokens: 4000,
+        output_config: { format: { type: "json_schema", schema: CHAT_SCHEMA } },
         system: `You are the writing partner sitting beside someone working on a ${docType} in a writing tool. They can see their draft and the current version on screen; you can see both too (below). Answer their questions about it.
+
+Return JSON: {"reply": "...", "instruction": "..."}.
+- "reply" is what they read. Everything below is about this field.
+- "instruction" is the change you just proposed, rewritten as a direct order to a writing assistant that already has the piece in front of it — "Move the ask into the first paragraph and cut the closing sentence." Self-contained, imperative, no preamble, no explanation, no quoting of the whole piece. It gets applied verbatim, so it has to be complete on its own.
+- If you did not propose a specific change to the text — you answered a question, gave an opinion, said it's fine as is, or need more from them — "instruction" is an empty string. Do not invent a change to fill it.
+- If they asked you to choose between options and you picked one, "instruction" is the change that makes their piece match the option you picked.
 
 How to answer:
 - Be short. Two or three sentences for most questions, and a tight list when they ask for options.
@@ -139,7 +160,11 @@ ${context ? `What they are working on:\n\n${context}` : "They have not written a
           { error: "The model declined that one — try rephrasing." },
           { status: 502 },
         );
-      return NextResponse.json({ reply: stripEmDashes(firstText(res)) });
+      const chat = JSON.parse(firstText(res) || "{}");
+      return NextResponse.json({
+        reply: stripEmDashes(String(chat.reply || "")),
+        instruction: stripEmDashes(String(chat.instruction || "")),
+      });
     }
 
     // "Look it up" — the one thing the writer genuinely could not do before.
@@ -333,6 +358,15 @@ Return only the JSON.`,
         styles,
         signature,
         variants,
+        priorInstructions: Array.isArray(body?.priorInstructions)
+          ? body.priorInstructions.slice(-12).map((s: unknown) => String(s).slice(0, 500))
+          : [],
+        priorVersions: Array.isArray(body?.priorVersions)
+          ? body.priorVersions.slice(0, 3).map((v: { instructions?: unknown; text?: unknown }) => ({
+              instructions: String(v?.instructions || "").slice(0, 300),
+              text: String(v?.text || "").slice(0, 8000),
+            }))
+          : [],
       });
 
       const res = await anthropic().messages.create({

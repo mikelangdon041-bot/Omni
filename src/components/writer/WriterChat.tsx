@@ -5,13 +5,16 @@
 // conversation history, because "is that too blunt?" only makes sense as a
 // follow-up to what was already said.
 //
-// It is deliberately read-only: it will tell you what to change and what to type
-// into the refine box, but Generate and Refine stay the only things that touch
-// your draft. A chat that silently rewrites the text you are looking at is how
-// you lose work you didn't know you had.
+// It never edits on its own: answering a question changes nothing. But when an
+// answer proposes a specific change, it comes with the same change written as an
+// instruction, and one button hands that straight to the normal refine pass —
+// so agreeing with a suggestion doesn't mean retyping it and hoping the
+// paraphrase survives. The edit still goes through Refine, which snapshots the
+// current version first, so nothing happens that can't be undone.
 
 import { useEffect, useRef, useState } from "react";
 import {
+  Check,
   FileText,
   Image as ImageIcon,
   Loader2,
@@ -20,6 +23,7 @@ import {
   Send,
   Sparkles,
   Trash2,
+  Wand2,
   X,
 } from "lucide-react";
 import { RichTextView } from "@/components/ui/RichText";
@@ -32,6 +36,9 @@ interface Turn {
   display?: string;
   /** Names of anything attached to this question, for the chips under it. */
   files?: { name: string; kind: "image" | "document" }[];
+  /** The change this answer proposed, ready to hand straight to Refine. */
+  instruction?: string;
+  applied?: boolean;
 }
 
 interface Pending {
@@ -73,6 +80,8 @@ export function WriterChat({
   draft,
   output,
   notes,
+  onApply,
+  applying,
 }: {
   docType: string;
   /** Plain text of what's in the draft box. */
@@ -80,6 +89,9 @@ export function WriterChat({
   /** Plain text of the current version in the output pane. */
   output: string;
   notes: string;
+  /** Apply a suggested change to the piece, via the normal refine pass. */
+  onApply?: (instruction: string) => Promise<void> | void;
+  applying?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -183,7 +195,14 @@ export function WriterChat({
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Could not answer that");
-      setTurns([...next, { role: "assistant", content: String(json.reply || "") }]);
+      setTurns([
+        ...next,
+        {
+          role: "assistant",
+          content: String(json.reply || ""),
+          instruction: String(json.instruction || ""),
+        },
+      ]);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -286,6 +305,41 @@ export function WriterChat({
               <Sparkles size={14} className="mt-1 shrink-0 text-[var(--accent)]" />
               <div className="min-w-0 flex-1">
                 <RichTextView html={toHtml(turn.content)} />
+                {/* When the answer proposed an actual change, it can be applied
+                    from here. The instruction is the model's own wording of what
+                    it just suggested, handed to the same refine pass the box
+                    below uses — so nothing is retyped and nothing is lost in the
+                    retyping. */}
+                {turn.instruction && onApply && (
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={!!applying || turn.applied}
+                      onClick={async () => {
+                        setTurns((prev) =>
+                          prev.map((t, n) => (n === i ? { ...t, applied: true } : t)),
+                        );
+                        await onApply(turn.instruction!);
+                      }}
+                      className="flex items-center gap-1 rounded-lg bg-[var(--accent)] px-2 py-1 text-[11px] font-semibold text-white transition hover:opacity-90 disabled:opacity-50"
+                    >
+                      {turn.applied ? (
+                        <>
+                          <Check size={11} /> Applied
+                        </>
+                      ) : (
+                        <>
+                          <Wand2 size={11} /> Make this change
+                        </>
+                      )}
+                    </button>
+                    {!turn.applied && (
+                      <span className="min-w-0 flex-1 truncate text-[10px] italic text-muted">
+                        {turn.instruction}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           ),

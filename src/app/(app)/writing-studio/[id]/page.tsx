@@ -21,6 +21,7 @@ import {
   Mail,
   Palette,
   Paperclip,
+  Plus,
   Sparkles,
   Trash2,
   Wand2,
@@ -41,6 +42,8 @@ import { ChipGroup } from "@/components/writer/Chips";
 import { IntakeSection } from "@/components/writer/IntakeSection";
 import { diffHighlightHtml } from "@/lib/writer/diff";
 import {
+  createLinkedDoc,
+  fetchSiblings,
   useUserId,
   useWriterDoc,
   useWriterSettings,
@@ -61,6 +64,7 @@ import {
   docTypeEmoji,
   docTypeLabel,
   htmlToPlain,
+  type DocType,
   type WriterContext,
   type WriterDoc,
   type WriterVersion,
@@ -115,6 +119,11 @@ export default function WriterDocPage() {
   const [refineTone, setRefineTone] = useState<string[]>([]);
   const [refineLength, setRefineLength] = useState("as_is");
   const [typeMenu, setTypeMenu] = useState(false);
+  const [companionMenu, setCompanionMenu] = useState(false);
+  const [makingCompanion, setMakingCompanion] = useState(false);
+  const [siblingDocs, setSiblingDocs] = useState<
+    { id: string; title: string; doc_type: string; subject: string }[]
+  >([]);
   // Dismissed once, don't nag again for the same suggestion.
   const [dismissedType, setDismissedType] = useState<string | null>(null);
 
@@ -175,9 +184,24 @@ export default function WriterDocPage() {
     }
   }, [doc]);
 
+  // Titles of the linked pieces, so the strip can name them.
+  const siblingIds = (doc?.context.siblings || []).join(",");
+  useEffect(() => {
+    const ids = siblingIds ? siblingIds.split(",") : [];
+    let active = true;
+    // Goes through the same async path when the list is empty, so the state
+    // update never lands synchronously inside the effect.
+    void fetchSiblings(ids).then((rows) => {
+      if (active) setSiblingDocs(rows);
+    });
+    return () => {
+      active = false;
+    };
+  }, [siblingIds]);
+
   const isEmail = doc?.doc_type === "email";
   const diffOn =
-    (showDiff ?? settings?.show_diff ?? true) && !!doc && !!doc.content.trim();
+    (showDiff ?? settings?.show_diff ?? false) && !!doc && !!doc.content.trim();
   // Diff baseline: the previous version once there is one (so refines show what
   // the refine changed), else what you pasted — but only when that was
   // substantial enough to have been a draft. Diffing a polished piece against a
@@ -433,6 +457,56 @@ export default function WriterDocPage() {
     save({ tags: [...doc.tags, t] });
   }
 
+  /**
+   * Make a second piece of another type from the same material. The new one
+   * starts from the raw draft, notes, attachments and research — not from the
+   * finished text — because a memo built by reformatting an email reads like a
+   * reformatted email. What the first piece produced goes in as background so
+   * the two stay consistent with each other.
+   */
+  async function makeCompanion(type: DocType) {
+    const current = docRef.current;
+    if (!current || !userId) return;
+    setCompanionMenu(false);
+    setMakingCompanion(true);
+    try {
+      await flush();
+      const label = docTypeLabel(type);
+      const existing = htmlToPlain(current.content).trim();
+      const created = await createLinkedDoc(userId, current.id, {
+        doc_type: type,
+        mode: "create",
+        title: current.title ? `${current.title} (${label})` : label,
+        tags: current.tags,
+        original: current.original,
+        context: {
+          ...current.context,
+          // Written from the material, so nothing of the first piece's prose is
+          // being preserved here.
+          fidelity: "draft",
+          // The chips described the other piece's shape; let this one be read
+          // fresh from the same brief.
+          actions: [],
+          length: "as_is",
+          autoFilled: [],
+          siblings: [current.id],
+          background: existing
+            ? `${htmlToPlain(current.context.background)}\n\nThe companion ${docTypeLabel(
+                current.doc_type,
+              ).toLowerCase()} written from this same material, for consistency (do not simply reformat it):\n${existing}`.trim()
+            : current.context.background,
+        },
+      });
+      if (!created) throw new Error("Could not create it");
+      toast("success", `${label} created from the same material`);
+      router.push(`/writing-studio/${created.id}`);
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setMakingCompanion(false);
+    }
+  }
+
   async function discard() {
     if (
       !(await confirm({
@@ -469,10 +543,11 @@ export default function WriterDocPage() {
 
   // Go and look it up. Returns the findings so generate can use them on the same
   // click, and saves them so they're visible and removable afterwards.
-  async function runResearch(): Promise<string> {
+  async function runResearch(explicitQuestion?: string): Promise<string> {
     const current = docRef.current;
     if (!current) return "";
     const question =
+      explicitQuestion?.trim() ||
       researchQuestion.current.trim() ||
       [notesPlain, inputPlain].filter(Boolean).join("\n\n").slice(0, 2000);
     if (!question.trim()) return "";
@@ -515,9 +590,14 @@ export default function WriterDocPage() {
     // Asking for it in the note counts as asking for it: the checkbox is a
     // convenience, not the only way in, and waiting for extraction to tick it
     // would lose the request if Generate is pressed straight after typing.
+    // On a refine the trigger is the refine instruction itself ("look up what
+    // the guidance actually says and work it in"), and it searches even if an
+    // earlier look-up already ran, because the new question is a new question.
+    const askedInRefine = !!refineGuidance && wantsResearch(refineGuidance);
     const askedInWords = wantsResearch(`${notesPlain}\n${inputPlain}`);
-    const researchNotes =
-      (ctx.research || askedInWords) && !ctx.researchNotes.trim() && !refineGuidance
+    const researchNotes = askedInRefine
+      ? await runResearch(refineGuidance)
+      : (ctx.research || askedInWords) && !ctx.researchNotes.trim() && !refineGuidance
         ? await runResearch()
         : ctx.researchNotes;
     setBusy(true);
@@ -567,6 +647,28 @@ export default function WriterDocPage() {
           styles: styleTexts,
           signature: signatureOn ? htmlToPlain(settings?.signature || "") : "",
           variants: refining ? 1 : settings?.variant_count ?? 1,
+          // Every instruction given on this piece so far, plus the last few
+          // versions. Without them a refine has no memory: a constraint from two
+          // rounds ago quietly comes undone, and "put that line back" has
+          // nothing to put back. Both come out of the version history that is
+          // already being saved, so there is nothing extra to store.
+          ...(refining
+            ? {
+                priorInstructions: [...versions]
+                  .reverse()
+                  .map((v) => v.instructions)
+                  .filter(
+                    (s) =>
+                      s &&
+                      s !== "Generated from intake" &&
+                      !s.startsWith("Your version before"),
+                  ),
+                priorVersions: versions.slice(0, 3).map((v) => ({
+                  instructions: v.instructions,
+                  text: htmlToPlain(v.content),
+                })),
+              }
+            : {}),
         }),
       });
       const json = await res.json();
@@ -592,6 +694,12 @@ export default function WriterDocPage() {
         title: doc.title || deriveTitle(first.subject, first.html),
       });
       setGuidance("");
+      // Clear the refine dials after they've been applied. Leaving them ticked
+      // means the next Refine silently repeats a change you already got, which
+      // is rarely what a second press is for.
+      setRefineActions([]);
+      setRefineTone([]);
+      setRefineLength("as_is");
     } catch (e) {
       toast("error", (e as Error).message);
     } finally {
@@ -706,6 +814,63 @@ export default function WriterDocPage() {
             </>
           )}
         </div>
+        {/* Pieces written from the same material. One click between the email
+            and the memo behind it. */}
+        {siblingDocs.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            onClick={() => router.push(`/writing-studio/${s.id}`)}
+            title={`Open the companion ${docTypeLabel(s.doc_type as DocType).toLowerCase()}`}
+            className="flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[10px] font-medium text-muted transition hover:border-[var(--accent)]/50 hover:text-ink"
+          >
+            {docTypeEmoji(s.doc_type as DocType)}
+            <span className="max-w-28 truncate">
+              {s.title || s.subject || docTypeLabel(s.doc_type as DocType)}
+            </span>
+          </button>
+        ))}
+
+        <div className="relative">
+          <button
+            type="button"
+            disabled={makingCompanion}
+            onClick={() => setCompanionMenu((v) => !v)}
+            title="Write a second piece from the same material"
+            className="flex items-center gap-1 rounded-full border border-dashed border-border px-2 py-0.5 text-[10px] font-medium text-muted transition hover:border-[var(--accent)]/60 hover:text-[var(--accent)] disabled:opacity-50"
+          >
+            <Plus size={11} />
+            {makingCompanion ? "Creating…" : "Also make"}
+          </button>
+          {companionMenu && (
+            <>
+              <button
+                type="button"
+                aria-label="Close"
+                className="fixed inset-0 z-20 cursor-default"
+                onClick={() => setCompanionMenu(false)}
+              />
+              <div className="absolute left-0 top-7 z-30 w-64 overflow-hidden rounded-lg border border-border bg-surface py-1 shadow-lg">
+                <p className="px-3 py-1.5 text-[10px] leading-snug text-muted">
+                  A second piece from the same draft, notes and attachments. Both
+                  stay linked, and each is written for its own shape.
+                </p>
+                {DOC_TYPES.filter((t) => t.key !== doc.doc_type).map((t) => (
+                  <button
+                    key={t.key}
+                    type="button"
+                    onClick={() => void makeCompanion(t.key)}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-ink transition hover:bg-canvas"
+                  >
+                    <span>{t.emoji}</span>
+                    <span>{t.label}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
         <span className="hidden text-xs text-muted sm:inline">
           Saves as you type
         </span>
@@ -1106,13 +1271,6 @@ export default function WriterDocPage() {
             </section>
           )}
 
-          <WriterChat
-            docType={doc.doc_type}
-            draft={inputPlain}
-            output={htmlToPlain(doc.content)}
-            notes={notesPlain}
-          />
-
           {/* Optional dials, folded away */}
           <IntakeSection
             title="Tone & style"
@@ -1364,6 +1522,21 @@ export default function WriterDocPage() {
               )}
             </div>
           </section>
+
+          {/* Sits under the result, because that's where the questions are:
+              is this too long, does the ask land, what am I missing. It was
+              below the intake column before, which on a wide screen put it off
+              the bottom of the page. */}
+          <WriterChat
+            docType={doc.doc_type}
+            draft={inputPlain}
+            output={htmlToPlain(doc.content)}
+            notes={notesPlain}
+            applying={busy || researching}
+            // Its own suggestion, handed to the same refine pass the box below
+            // uses. Nothing to retype, nothing to paraphrase away.
+            onApply={(instruction) => generate(instruction)}
+          />
 
           {/* What changed */}
           {diffOn && diffBase && doc.content.trim() && (

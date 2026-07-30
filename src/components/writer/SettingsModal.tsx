@@ -96,7 +96,7 @@ export function SettingsModal({
             </span>
             <input
               type="checkbox"
-              checked={settings?.show_diff ?? true}
+              checked={settings?.show_diff ?? false}
               onChange={(e) => void saveSettings({ show_diff: e.target.checked })}
               className="h-4 w-4 accent-[var(--accent)]"
             />

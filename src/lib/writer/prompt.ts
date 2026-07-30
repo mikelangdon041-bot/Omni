@@ -16,6 +16,17 @@ export interface GenerateArgs {
   styles: { name: string; text: string }[];
   signature: string;
   variants: number;
+  /**
+   * Every instruction given on this piece so far, oldest first. Without it each
+   * refine is a fresh conversation: "don't mention the pricing" is honoured
+   * once, and the round after that puts it straight back.
+   */
+  priorInstructions?: string[];
+  /**
+   * Recent earlier versions, newest first, so "bring back the line about the
+   * pilot" has something to bring it back from.
+   */
+  priorVersions?: { instructions: string; text: string }[];
 }
 
 // How much of the user's own draft survives. This is the loudest instruction in
@@ -173,6 +184,29 @@ ${notes}`,
     .filter(Boolean)
     .join("\n\n");
 
+  // Everything asked for on this piece so far. A refine that only sees the
+  // newest instruction will cheerfully undo the last three.
+  const standing = (a.priorInstructions || []).filter((s) => s.trim());
+  const standingBlock = standing.length
+    ? `\n\nWHAT THEY HAVE ALREADY ASKED FOR ON THIS PIECE, oldest first:
+${standing.map((s, i) => `${i + 1}. ${s}`).join("\n")}
+
+How to treat these:
+- Anything phrased as a constraint or a preference ("don't mention the pricing", "never open with an apology", "always keep it under a page", "leave out the numbers") is STILL IN FORCE. Do not undo it, and do not let it creep back in because this round's instruction didn't repeat it. This is the most common way a refine goes wrong.
+- Anything phrased as a one-off change ("make it shorter", "move the ask up") was already applied to the draft you have. Don't apply it again, and don't reverse it either.
+- If the new instruction genuinely contradicts an earlier one, the new one wins.`
+    : "";
+
+  const versionsBlock = (a.priorVersions || []).length
+    ? `\n\nEARLIER VERSIONS of this piece, newest first. Use these only if the user asks for something back ("put the line about the pilot back", "the previous opening was better"). Do not merge them in otherwise:
+${(a.priorVersions || [])
+        .map(
+          (v, i) =>
+            `--- Version ${i + 1}${v.instructions ? ` (after: ${v.instructions})` : ""} ---\n${v.text.slice(0, 6000)}`,
+        )
+        .join("\n\n")}`
+    : "";
+
   const task = a.previous
     ? `Here is the current draft, including any edits the user has made to it by hand. Revise THIS text, keeping everything they didn't ask you to change.
 
@@ -181,7 +215,7 @@ The guidance below is the user talking to you about the draft, not copy to inser
 Current draft:
 ${a.previous}
 
-What they want changed: ${a.guidance || "(none — light general polish)"}`
+What they want changed this round: ${a.guidance || "(none — light general polish)"}${standingBlock}${versionsBlock}`
     : `Here is everything the user put in the box. Work out what it is and deliver what they want.\n\nWhat the user wrote:\n${a.input || notes}`;
 
   // The picker if it was touched, otherwise whatever the note asks for in

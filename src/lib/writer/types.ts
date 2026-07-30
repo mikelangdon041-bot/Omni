@@ -41,6 +41,14 @@ export interface WriterContext {
    * not look identical to a choice you did.
    */
   autoFilled: string[];
+  /**
+   * Other pieces written from the same material — the deep memo behind the
+   * email, the email that announces the memo. Kept as a link between separate
+   * pieces rather than as one piece with two shapes: the type decides whether
+   * there is a subject line and a signature and how the AI writes, so a single
+   * doc trying to be both would have to be half of each.
+   */
+  siblings: string[];
   styleIds: string[];
 }
 
@@ -61,6 +69,7 @@ export const EMPTY_CONTEXT: WriterContext = {
   researchNotes: "",
   attachments: [],
   autoFilled: [],
+  siblings: [],
   styleIds: [],
 };
 
@@ -77,6 +86,7 @@ export function emptyContext(): WriterContext {
     audience: [],
     attachments: [],
     autoFilled: [],
+    siblings: [],
     styleIds: [],
   };
 }
