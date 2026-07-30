@@ -242,19 +242,28 @@ export function RichText({
   }
 
   function onPaste(e: React.ClipboardEvent) {
-    // A pasted screenshot has no useful text — hand the image off instead.
-    if (onFiles) {
-      const images = filesFrom(e.clipboardData).filter((f) =>
-        f.type.startsWith("image/"),
-      );
-      if (images.length) {
-        e.preventDefault();
-        onFiles(images);
-        return;
-      }
-    }
     const html = e.clipboardData.getData("text/html");
     const text = e.clipboardData.getData("text/plain");
+    const images = filesFrom(e.clipboardData).filter((f) =>
+      f.type.startsWith("image/"),
+    );
+
+    // A pasted screenshot is always intercepted, whether or not this editor can
+    // do something with it. A snip from Windows or ⌘⇧4 puts an image on the
+    // clipboard and nothing in text/html or text/plain, so falling through here
+    // hands it to the browser, which drops the picture into the text at full
+    // size and leaves nowhere to put the caret. An editor that takes files gets
+    // it; one that doesn't simply declines it.
+    if (images.length) {
+      e.preventDefault();
+      if (onFiles) onFiles(images);
+      else if (text) {
+        document.execCommand("insertText", false, text);
+        emit();
+      }
+      return;
+    }
+
     if (!html && !text) return;
     e.preventDefault();
     if (html) document.execCommand("insertHTML", false, cleanPaste(html));

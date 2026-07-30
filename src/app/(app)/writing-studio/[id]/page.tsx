@@ -342,6 +342,14 @@ export default function WriterDocPage() {
   // Emails carry the saved signature unless this piece opts out.
   const signatureOn = isEmail && ctx.useSignature && !!settings?.signature?.trim();
 
+  // Has the version on screen been edited by hand since it was generated? If so,
+  // Regenerate is almost certainly not what's wanted: it writes afresh from the
+  // draft box, which means those edits are not an input and are replaced.
+  const outputEdited =
+    !!doc.content.trim() &&
+    versions.length > 0 &&
+    !versions.some((v) => htmlToPlain(v.content) === htmlToPlain(doc.content));
+
   // Refine can run on chips alone, with no typed instruction.
   const refineHasPicks =
     refineActions.length > 0 || refineTone.length > 0 || refineLength !== "as_is";
@@ -487,8 +495,12 @@ export default function WriterDocPage() {
 
   async function generate(refineGuidance?: string) {
     if (!doc) return;
-    // A refine replaces what's on screen, so bank the current text first.
-    if (refineGuidance) await snapshotCurrent("Your version before this refine");
+    // Anything already on screen goes to history first, refine or regenerate
+    // alike. Regenerate writes from the draft, so hand edits made in the output
+    // pane are not an input to it — but they must never be lost to it either.
+    await snapshotCurrent(
+      refineGuidance ? "Your version before this refine" : "Your version before regenerating",
+    );
     // Look things up before writing, so the findings are available as fact.
     // Asking for it in the note counts as asking for it: the checkbox is a
     // convenience, not the only way in, and waiting for extraction to tick it
@@ -501,36 +513,43 @@ export default function WriterDocPage() {
     setBusy(true);
     try {
       await flush();
+      // Read the doc as it stands right now, not as it was when this click was
+      // wired up. Snapshotting and looking things up both take time, and typing
+      // during either would otherwise be written out of the request.
+      const cur = docRef.current || doc;
+      const curCtx = cur.context;
+      const inputNow = htmlToPlain(cur.original);
+      const notesNow = htmlToPlain(curCtx.brief);
       const styleTexts = styles
-        .filter((s) => ctx.styleIds.includes(s.id))
+        .filter((s) => curCtx.styleIds.includes(s.id))
         .map((s) => ({
           name: s.name,
           text: s.kind === "voice" ? s.voice_profile : s.rules,
         }));
-      const refining = !!refineGuidance && !!doc.content.trim();
+      const refining = !!refineGuidance && !!cur.content.trim();
       const res = await fetch("/api/writer/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
         body: JSON.stringify({
           action: "generate",
-          docType: doc.doc_type,
-          original: inputPlain,
-          previous: refining ? doc.content : "",
+          docType: cur.doc_type,
+          original: inputNow,
+          previous: refining ? cur.content : "",
           guidance: refineGuidance || "",
-          fidelity: ctx.fidelity,
-          noGreeting: ctx.noGreeting,
+          fidelity: curCtx.fidelity,
+          noGreeting: curCtx.noGreeting,
           context: {
-            ...ctx,
-            brief: notesPlain,
-            background: htmlToPlain(ctx.background),
+            ...curCtx,
+            brief: notesNow,
+            background: htmlToPlain(curCtx.background),
             researchNotes,
             // On a refine, the chips in the refine panel are what the user is
             // asking for now; the intake's chips described the original draft.
             ...(refining
               ? {
                   actions: refineActions,
-                  tone: refineTone.length ? refineTone : ctx.tone,
+                  tone: refineTone.length ? refineTone : curCtx.tone,
                   length: refineLength,
                 }
               : {}),
@@ -847,6 +866,9 @@ export default function WriterDocPage() {
                 <RichText
                   value={ctx.brief}
                   onChange={(html) => setCtx({ brief: html })}
+                  // A screenshot pasted here means the same thing as one pasted
+                  // into the draft box: attach it and read it.
+                  onFiles={(files) => void ingestFiles(files)}
                   placeholder="Who it's for, what's at stake, what to change, anything to avoid…"
                   minHeight="min-h-20"
                 />
@@ -935,6 +957,28 @@ export default function WriterDocPage() {
                         ? `Generate ${settings?.variant_count} variants`
                         : "Generate"}
               </Button>
+
+              {doc.content.trim() && !busy && !researching && (
+                <p className="text-[11px] leading-snug text-muted">
+                  {outputEdited ? (
+                    <>
+                      <span className="font-medium text-amber-700">
+                        You&apos;ve edited the version on the right.
+                      </span>{" "}
+                      Regenerate writes a new one from the draft box above, so
+                      those edits won&apos;t carry over — use{" "}
+                      <span className="font-medium text-ink">Refine</span> to
+                      change the version you have. Either way it&apos;s saved to
+                      history first.
+                    </>
+                  ) : (
+                    <>
+                      Regenerate writes a fresh version from the draft and the
+                      options above. The current one is saved to history first.
+                    </>
+                  )}
+                </p>
+              )}
 
               {(busy || researching || uploading) && (
                 <ProgressBar
