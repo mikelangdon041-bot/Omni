@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { extractPdfText } from "@/lib/pdfText";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -27,10 +28,7 @@ export async function POST(req: Request) {
       const mammoth = (await import("mammoth")).default;
       text = (await mammoth.extractRawText({ buffer })).value || "";
     } else if (name.endsWith(".pdf")) {
-      const { PDFParse } = await import("pdf-parse");
-      const parser = new PDFParse({ data: buffer });
-      text = (await parser.getText()).text || "";
-      await parser.destroy();
+      text = await extractPdfText(buffer);
     } else {
       text = buffer.toString("utf-8");
     }

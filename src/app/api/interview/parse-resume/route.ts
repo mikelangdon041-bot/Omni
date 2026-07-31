@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { extractPdfText } from "@/lib/pdfText";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -44,11 +45,7 @@ export async function POST(req: Request) {
   let html = "";
   try {
     if (lower.endsWith(".pdf")) {
-      const { PDFParse } = await import("pdf-parse");
-      const parser = new PDFParse({ data: buffer });
-      const result = await parser.getText();
-      text = result.text || "";
-      await parser.destroy();
+      text = await extractPdfText(buffer);
     } else if (lower.endsWith(".docx") || lower.endsWith(".doc")) {
       const mammoth = (await import("mammoth")).default;
       const [raw, rich] = await Promise.all([

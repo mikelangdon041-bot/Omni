@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { anthropic, WRITER_MODEL } from "@/lib/anthropic";
+import { extractPdfText } from "@/lib/pdfText";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -155,10 +156,7 @@ export async function POST(req: Request) {
     if (ext === "pdf" || mime === "application/pdf") {
       let text = "";
       try {
-        const { PDFParse } = await import("pdf-parse");
-        const parser = new PDFParse({ data: buffer });
-        text = (await parser.getText()).text || "";
-        await parser.destroy();
+        text = await extractPdfText(buffer);
       } catch (err) {
         // Swallowed silently once, which hid a missing pdf.js worker in the
         // deployed bundle for weeks: every PDF quietly took the slow AI path
