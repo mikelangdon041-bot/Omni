@@ -14,7 +14,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  CalendarClock,
   Check,
+  FilePlus2,
   FileText,
   Image as ImageIcon,
   Loader2,
@@ -38,6 +40,13 @@ interface Turn {
   files?: { name: string; kind: "image" | "document" }[];
   /** The change this answer proposed, ready to hand straight to Refine. */
   instruction?: string;
+  /**
+   * Something the answer offered to start alongside this piece — the email that
+   * goes with the memo, the version for leadership, the meeting prep for the
+   * conversation it's about. Deliberately not an instruction: applying any of
+   * these to this piece would overwrite the piece.
+   */
+  handoff?: { app: string; type: string; action: string; brief: string; title: string };
   applied?: boolean;
 }
 
@@ -54,6 +63,36 @@ const EXAMPLES = [
   "How would you open it?",
   "What am I missing?",
 ];
+
+// What each kind of writing is called in a sentence, so the button reads the
+// way someone would say it out loud rather than as a doc-type key.
+const TYPE_WORDS: Record<string, string> = {
+  email: "email",
+  document: "document",
+  message: "message",
+  social: "post",
+  summary: "summary",
+  other: "piece",
+};
+
+/** What to call the piece on screen in a sentence. */
+function docTypeWord(t: string): string {
+  return TYPE_WORDS[t] || "piece";
+}
+
+/** The button's promise: what pressing it actually makes. */
+function handoffAction(app: string, type: string): string {
+  if (app === "meeting-prep") return "Set up the meeting prep";
+  return `Write it as a separate ${docTypeWord(type)}`;
+}
+
+/** What survives it, said plainly, because that's the whole worry. */
+function handoffBlurb(app: string, docType: string): string {
+  const here = `This ${docTypeWord(docType)} stays as it is.`;
+  return app === "meeting-prep"
+    ? `Starts a new prep in Meeting Prep from the same material. ${here}`
+    : `Made from the same material. ${here}`;
+}
 
 /** Answer text → the same simple HTML the rest of the studio renders. */
 function toHtml(text: string): string {
@@ -81,6 +120,7 @@ export function WriterChat({
   output,
   notes,
   onApply,
+  onHandoff,
   applying,
 }: {
   docType: string;
@@ -91,6 +131,17 @@ export function WriterChat({
   notes: string;
   /** Apply a suggested change to the piece, via the normal refine pass. */
   onApply?: (instruction: string) => Promise<void> | void;
+  /**
+   * Start something new alongside this piece, in this app or another one, from
+   * the same material. Separate from onApply on purpose: "write me an email
+   * about this memo" must not eat the memo.
+   */
+  onHandoff?: (h: {
+    app: string;
+    type: string;
+    brief: string;
+    title: string;
+  }) => Promise<void> | void;
   applying?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -195,12 +246,25 @@ export function WriterChat({
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Could not answer that");
+      const app = String(json.handoffApp || "");
+      const brief = String(json.handoffBrief || "");
+      const type = String(json.handoffType || "");
       setTurns([
         ...next,
         {
           role: "assistant",
           content: String(json.reply || ""),
           instruction: String(json.instruction || ""),
+          handoff:
+            app && brief
+              ? {
+                  app,
+                  type,
+                  action: handoffAction(app, type),
+                  brief,
+                  title: String(json.handoffTitle || ""),
+                }
+              : undefined,
         },
       ]);
     } catch (e) {
@@ -343,6 +407,44 @@ export function WriterChat({
                       <span className="min-w-0 flex-1 truncate text-[10px] italic text-muted">
                         {turn.instruction}
                       </span>
+                    )}
+                  </div>
+                )}
+                {/* Its own button, worded so it can't be mistaken for an edit:
+                    what this makes is a second thing, and the piece on screen is
+                    not touched either way. */}
+                {turn.handoff && onHandoff && (
+                  <div className="mt-1.5 space-y-1">
+                    <button
+                      type="button"
+                      disabled={!!applying || turn.applied}
+                      onClick={async () => {
+                        setTurns((prev) =>
+                          prev.map((t, n) => (n === i ? { ...t, applied: true } : t)),
+                        );
+                        await onHandoff(turn.handoff!);
+                      }}
+                      className="flex items-center gap-1 rounded-lg border border-[var(--accent)]/40 bg-[var(--accent-soft)] px-2 py-1 text-[11px] font-semibold text-ink transition hover:opacity-90 disabled:opacity-50"
+                    >
+                      {turn.applied ? (
+                        <>
+                          <Check size={11} /> Created
+                        </>
+                      ) : (
+                        <>
+                          {turn.handoff.app === "meeting-prep" ? (
+                            <CalendarClock size={11} />
+                          ) : (
+                            <FilePlus2 size={11} />
+                          )}{" "}
+                          {turn.handoff.action}
+                        </>
+                      )}
+                    </button>
+                    {!turn.applied && (
+                      <p className="text-[10px] leading-snug text-muted">
+                        {handoffBlurb(turn.handoff.app, docType)}
+                      </p>
                     )}
                   </div>
                 )}

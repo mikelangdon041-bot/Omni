@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
+  AlertCircle,
   Check,
   ChevronDown,
   Copy,
@@ -18,6 +19,7 @@ import {
   History,
   Image as ImageIcon,
   ListChecks,
+  Loader2,
   Mail,
   Palette,
   Paperclip,
@@ -41,6 +43,7 @@ import { useConfirm, useToast } from "@/components/ui/Feedback";
 import { ChipGroup } from "@/components/writer/Chips";
 import { IntakeSection } from "@/components/writer/IntakeSection";
 import { diffHighlightHtml } from "@/lib/writer/diff";
+import { createMeetingFromMaterial } from "@/lib/meetingprep/hooks";
 import {
   createLinkedDoc,
   fetchSiblings,
@@ -85,6 +88,22 @@ const AUTOFILL_LABELS: Record<string, string> = {
   research: "look it up",
 };
 
+// The platform drops a request body over 4.5 MB before it reaches the route, so
+// there is no point sending one — say so here instead of uploading for a while
+// and getting an error page back. Matches MAX_BYTES in /api/writer/ingest.
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+// Longer than the route's own budget for a file, so its wording wins when it can
+// answer at all and this only catches a connection that never comes back.
+const FILE_TIMEOUT_MS = 100_000;
+
+/** A file being read, or one that couldn't be — shown as a chip either way. */
+type Upload = { id: string; name: string; error: string | null };
+
+/** Plain text going into a rich-text field, so brackets and ampersands survive. */
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 /** Reset every field that was auto-filled, leaving anything you set yourself. */
 function clearAutoFilled(ctx: WriterContext): Partial<WriterContext> {
   const blank = emptyContext() as unknown as Record<string, unknown>;
@@ -121,7 +140,12 @@ export default function WriterDocPage() {
 
   const [busy, setBusy] = useState(false);
   const [researching, setResearching] = useState(false);
-  const [uploading, setUploading] = useState(false);
+  // Files dropped but not attached yet — queued, being read, or failed. The
+  // queue is what's on screen, so "nothing is happening" can't be what a slow
+  // file looks like.
+  const [uploads, setUploads] = useState<Upload[]>([]);
+  const [readingId, setReadingId] = useState<string | null>(null);
+  const uploading = uploads.some((u) => !u.error);
   const [editingSig, setEditingSig] = useState(false);
   // Refine dials: the same chips as the intake, but pointed at the version
   // that came out rather than at the draft that went in.
@@ -142,7 +166,6 @@ export default function WriterDocPage() {
   // look-up runs several searches, so they get different expectations.
   const writeProgress = useProgress(busy, 25000);
   const researchProgress = useProgress(researching, 30000);
-  const uploadProgress = useProgress(uploading, 12000);
   const [tagDraft, setTagDraft] = useState("");
   const [guidance, setGuidance] = useState("");
   const [variantResults, setVariantResults] = useState<
@@ -420,69 +443,97 @@ export default function WriterDocPage() {
     !!ctx.keyPoints.trim() ||
     !!htmlToPlain(ctx.background).trim();
 
+  /**
+   * Read one file. Everything that can go wrong here comes back as a thrown
+   * message worth showing someone: the route's own wording where there is one,
+   * and a sentence rather than a parser error where the response never was JSON
+   * (the platform's own 413 and 504 pages are HTML, and `res.json()` on those
+   * used to surface as "Unexpected token '<'").
+   */
+  async function readFile(file: File): Promise<WriterAttachment> {
+    if (file.size > MAX_UPLOAD_BYTES)
+      throw new Error("it's over 4 MB — too big to upload");
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch("/api/writer/ingest", {
+      method: "POST",
+      credentials: "same-origin",
+      body: form,
+      // A file that hangs must not hold the rest of the queue behind it. The
+      // route gives up on its own well inside this.
+      signal: AbortSignal.timeout(FILE_TIMEOUT_MS),
+    });
+    const json = await res
+      .json()
+      .catch(() => ({}) as { html?: string; error?: string });
+    if (!res.ok)
+      throw new Error(
+        json.error ||
+          (res.status === 413
+            ? "it's too big to upload"
+            : `couldn't be read (${res.status})`),
+      );
+    const isImage = (file.type || "").startsWith("image/");
+    const attachment: WriterAttachment = {
+      id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      name: file.name || (isImage ? "Screenshot" : "Attachment"),
+      kind: isImage ? "image" : "document",
+      text: htmlToPlain(String(json.html || "")),
+    };
+    // The picture itself is only held for this session, so "open it" can show
+    // the original as well as the transcription. Nothing to clean up on the
+    // server, and nothing bloating the saved row.
+    if (isImage) previewUrls.current[attachment.id] = URL.createObjectURL(file);
+    return attachment;
+  }
+
   // Get a document, PDF, or screenshot into the box. Uploading is one route in;
   // pasting a screenshot straight from the clipboard or dropping a file onto
   // the box are the same call, which is how most of these actually arrive.
+  //
+  // Genuinely one at a time, and visibly so. Dropping five files used to go
+  // quiet until the last one finished and then fire five toasts at once, so a
+  // single slow file read as the whole thing being stuck. Now every file is a
+  // chip from the moment it's dropped — queued, reading, attached, or failed —
+  // and one that can't be read is marked and left behind rather than taking the
+  // queue down with it.
   async function ingestFiles(files: File[]) {
     if (!doc || !files.length) return;
-    setUploading(true);
-    // Accumulated locally rather than re-read from the doc each pass: with two
-    // files in flight the second read could land before React had re-rendered
-    // the first one in, and quietly drop it.
+    const batch = files.map((file) => ({
+      id: `up_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      file,
+      name: file.name || "That file",
+    }));
+    setUploads((prev) => [
+      ...prev,
+      ...batch.map((b) => ({ id: b.id, name: b.name, error: null })),
+    ]);
+    // Not re-read from the doc each pass: with the queue running, a read could
+    // land before React had re-rendered the previous one in and quietly drop it.
     let list = [...(docRef.current?.context.attachments || [])];
-    // Each file stands on its own: one that can't be read must not take the
-    // other two down with it, which is what happened when a single throw
-    // abandoned the loop.
-    const failed: string[] = [];
-    let added = 0;
-    try {
-      for (const file of files) {
-        const label = file.name || "that file";
-        let json: { html?: string; error?: string };
-        try {
-          const form = new FormData();
-          form.append("file", file);
-          const res = await fetch("/api/writer/ingest", {
-            method: "POST",
-            credentials: "same-origin",
-            body: form,
-          });
-          json = await res.json();
-          if (!res.ok) throw new Error(json.error || "Could not read it");
-        } catch (e) {
-          failed.push(`${label}: ${(e as Error).message}`);
-          continue;
-        }
+    for (const item of batch) {
+      setReadingId(item.id);
+      try {
+        const attachment = await readFile(item.file);
         const current = docRef.current;
         if (!current) return;
-        const isImage = (file.type || "").startsWith("image/");
-        const attachment: WriterAttachment = {
-          id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-          name: file.name || (isImage ? "Screenshot" : "Attachment"),
-          kind: isImage ? "image" : "document",
-          text: htmlToPlain(String(json.html || "")),
-        };
-        // The picture itself is only held for this session, so "open it" can
-        // show the original as well as the transcription. Nothing to clean up
-        // on the server, and nothing bloating the saved row.
-        if (isImage) previewUrls.current[attachment.id] = URL.createObjectURL(file);
         list = [...list, attachment];
-        added += 1;
         save({ context: { ...current.context, attachments: list } });
-      }
-
-      if (added)
-        toast(
-          "success",
-          added === 1 ? `Attached ${list[list.length - 1].name}` : `Attached ${added} files`,
+        // The chip is the attachment now — drop the placeholder.
+        setUploads((prev) => prev.filter((u) => u.id !== item.id));
+      } catch (e) {
+        const why =
+          (e as Error)?.name === "TimeoutError"
+            ? "took too long to read"
+            : (e as Error).message || "couldn't be read";
+        // Named the moment it happens, not saved up for the end of the batch.
+        toast("error", `${item.name}: ${why}`);
+        setUploads((prev) =>
+          prev.map((u) => (u.id === item.id ? { ...u, error: why } : u)),
         );
-      // Name what didn't work and why, rather than a single generic failure for
-      // a batch where most of it succeeded.
-      for (const message of failed) toast("error", message);
-    } catch (e) {
-      toast("error", (e as Error).message);
-    } finally {
-      setUploading(false);
+      } finally {
+        setReadingId((cur) => (cur === item.id ? null : cur));
+      }
     }
   }
 
@@ -499,8 +550,16 @@ export default function WriterDocPage() {
    * finished text — because a memo built by reformatting an email reads like a
    * reformatted email. What the first piece produced goes in as background so
    * the two stay consistent with each other.
+   *
+   * `spinoff` is the same thing asked for in the chat rather than off the "Also
+   * make" menu: the difference is that the chat knows WHY the second piece is
+   * wanted ("a short version for the field team"), so that brief leads the new
+   * piece's note and the new piece writes itself on arrival.
    */
-  async function makeCompanion(type: DocType) {
+  async function makeCompanion(
+    type: DocType,
+    spinoff?: { brief: string; title: string },
+  ) {
     const current = docRef.current;
     if (!current || !userId) return;
     setCompanionMenu(false);
@@ -509,14 +568,20 @@ export default function WriterDocPage() {
       await flush();
       const label = docTypeLabel(type);
       const existing = htmlToPlain(current.content).trim();
+      const brief = spinoff?.brief.trim()
+        ? `<p>${escapeHtml(spinoff.brief.trim())}</p>${current.context.brief || ""}`
+        : current.context.brief;
       const created = await createLinkedDoc(userId, current.id, {
         doc_type: type,
         mode: "create",
-        title: current.title ? `${current.title} (${label})` : label,
+        title:
+          spinoff?.title.trim() ||
+          (current.title ? `${current.title} (${label})` : label),
         tags: current.tags,
         original: current.original,
         context: {
           ...current.context,
+          brief,
           // Written from the material, so nothing of the first piece's prose is
           // being preserved here.
           fidelity: "draft",
@@ -535,7 +600,55 @@ export default function WriterDocPage() {
       });
       if (!created) throw new Error("Could not create it");
       toast("success", `${label} created from the same material`);
-      router.push(`/writing-studio/${created.id}`);
+      // Asked for in the chat, the piece was asked for finished: land on it with
+      // it already being written. Off the menu it opens as an intake to fill in.
+      router.push(`/writing-studio/${created.id}${spinoff ? "?go=1" : ""}`);
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setMakingCompanion(false);
+    }
+  }
+
+  /**
+   * The chat offering something that isn't this piece and isn't a change to it.
+   * Inside the studio that's a companion piece; outside it, the material goes to
+   * the app that actually does that job, rather than the chat pretending it can
+   * do it here or, worse, writing it over the top of what's on screen.
+   */
+  async function handoff(h: { app: string; type: string; brief: string; title: string }) {
+    if (h.app !== "meeting-prep") {
+      const type = DOC_TYPES.find((d) => d.key === h.type)?.key || "other";
+      return makeCompanion(type, { brief: h.brief, title: h.title });
+    }
+    const current = docRef.current;
+    if (!current || !userId) return;
+    setMakingCompanion(true);
+    try {
+      await flush();
+      // Everything they'd otherwise retype over there: what the meeting is for,
+      // then the material this piece was written from, then the piece itself.
+      const material = [
+        h.brief.trim(),
+        htmlToPlain(current.original).trim() &&
+          `What I'm working from:\n${htmlToPlain(current.original).trim()}`,
+        htmlToPlain(current.content).trim() &&
+          `The ${docTypeLabel(current.doc_type).toLowerCase()} I've written about it:\n${htmlToPlain(
+            current.content,
+          ).trim()}`,
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+      const created = await createMeetingFromMaterial(userId, {
+        title: h.title.trim() || current.title || "Meeting",
+        explain: material
+          .split(/\n{2,}/)
+          .map((block) => `<p>${escapeHtml(block).replace(/\n/g, "<br>")}</p>`)
+          .join(""),
+      });
+      if (!created) throw new Error("Could not create it");
+      toast("success", "Meeting prep started from this piece");
+      router.push(`/meeting-prep/${created.id}`);
     } catch (e) {
       toast("error", (e as Error).message);
     } finally {
@@ -747,6 +860,26 @@ export default function WriterDocPage() {
       setBusy(false);
     }
   }
+
+  // A piece asked for in the chat ("write that as a separate email") arrives
+  // with ?go=1 and writes itself, because what was asked for was the piece, not
+  // an empty intake form to go and fill in. Read off the URL rather than through
+  // useSearchParams so the page needs no Suspense boundary, and stripped
+  // immediately so a reload doesn't regenerate over what came out. Declared
+  // after generate() so it isn't reaching forward for it.
+  const autoWrote = useRef(false);
+  useEffect(() => {
+    if (autoWrote.current || !doc || busy) return;
+    if (!new URLSearchParams(window.location.search).has("go")) return;
+    autoWrote.current = true;
+    window.history.replaceState(null, "", window.location.pathname);
+    // Nothing to write from, or something already written: leave it alone.
+    if (doc.content.trim() || !intakePlain.trim()) return;
+    void generate();
+    // generate() reads the live doc off docRef, so it doesn't belong in the deps
+    // — listing it would re-run this on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc, busy]);
 
   function pickVariant(i: number) {
     const v = variantResults[i];
@@ -1122,14 +1255,17 @@ export default function WriterDocPage() {
                       if (files.length) void ingestFiles(files);
                     }}
                   />
+                  {/* Stays live while the queue runs: more files join the back
+                      of it rather than having to wait for it to empty. */}
                   <button
                     type="button"
-                    disabled={uploading}
                     onClick={() => fileRef.current?.click()}
-                    className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-medium text-muted transition hover:border-[var(--accent)]/50 hover:text-ink disabled:opacity-60"
+                    className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-medium text-muted transition hover:border-[var(--accent)]/50 hover:text-ink"
                   >
                     <Paperclip size={12} />
-                    {uploading ? "Reading…" : "Upload a file"}
+                    {uploading
+                      ? `Reading… (${uploads.filter((u) => !u.error).length} left)`
+                      : "Upload a file"}
                   </button>
                   <span className="text-[10px] leading-snug text-muted">
                     Or paste a screenshot straight in, or drop a file on the box.
@@ -1141,7 +1277,7 @@ export default function WriterDocPage() {
                     transcribed screenshot dropped inline is a wall of text you
                     then have to type around, and an image dropped inline can't
                     be typed past at all. */}
-                {ctx.attachments.length > 0 && (
+                {(ctx.attachments.length > 0 || uploads.length > 0) && (
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {ctx.attachments.map((att) => (
                       <span
@@ -1175,6 +1311,50 @@ export default function WriterDocPage() {
                             })
                           }
                           className="rounded p-0.5 text-muted transition hover:text-red-600"
+                        >
+                          <X size={11} />
+                        </button>
+                      </span>
+                    ))}
+
+                    {/* The queue, in the same row as what's already attached, so
+                        a batch reads as a list working through itself rather
+                        than as the page having gone quiet. */}
+                    {uploads.map((up) => (
+                      <span
+                        key={up.id}
+                        title={up.error ? `${up.name} — ${up.error}` : up.name}
+                        className={`flex items-center gap-1.5 rounded-lg border py-1 pl-2 pr-1 text-[11px] ${
+                          up.error
+                            ? "border-red-300 bg-red-50 text-red-700"
+                            : "border-dashed border-border bg-canvas text-muted"
+                        }`}
+                      >
+                        {up.error ? (
+                          <AlertCircle size={12} className="shrink-0" />
+                        ) : (
+                          <Loader2
+                            size={12}
+                            className={`shrink-0 text-[var(--accent)] ${
+                              readingId === up.id ? "animate-spin" : "opacity-40"
+                            }`}
+                          />
+                        )}
+                        <span className="max-w-40 truncate font-medium">{up.name}</span>
+                        <span className="whitespace-nowrap">
+                          {up.error
+                            ? `— ${up.error}`
+                            : readingId === up.id
+                              ? "— reading…"
+                              : "— waiting"}
+                        </span>
+                        <button
+                          type="button"
+                          title={up.error ? "Dismiss" : "Stop waiting for this one"}
+                          onClick={() =>
+                            setUploads((prev) => prev.filter((u) => u.id !== up.id))
+                          }
+                          className="rounded p-0.5 transition hover:text-red-600"
                         >
                           <X size={11} />
                         </button>
@@ -1310,15 +1490,17 @@ export default function WriterDocPage() {
                 </p>
               )}
 
-              {(busy || researching || uploading) && (
+              {/* Uploads aren't here any more: one bar over a queue of files
+                  either finishes early and sits at 100% or crawls, and either
+                  way it says nothing about which file is holding things up. The
+                  chips above say that per file. */}
+              {(busy || researching) && (
                 <ProgressBar
-                  pct={researching ? researchProgress : busy ? writeProgress : uploadProgress}
+                  pct={researching ? researchProgress : writeProgress}
                   label={
                     researching
                       ? "Searching the web and reading what it finds"
-                      : busy
-                        ? "Writing your piece"
-                        : "Reading what you gave me"
+                      : "Writing your piece"
                   }
                 />
               )}
@@ -1719,10 +1901,14 @@ export default function WriterDocPage() {
         draft={inputPlain}
         output={htmlToPlain(doc.content)}
         notes={notesPlain}
-        applying={busy || researching}
+        applying={busy || researching || makingCompanion}
         // Its own suggestion, handed to the same refine pass the box uses.
         // Nothing to retype, nothing to paraphrase away.
         onApply={(instruction) => generate(instruction)}
+        // When what it offered is a new thing rather than an edit — another
+        // piece, or a prep in another app — it goes down its own path and this
+        // one is left as it is.
+        onHandoff={handoff}
       />
 
       {/* An attachment, opened to check what was actually read out of it. The
