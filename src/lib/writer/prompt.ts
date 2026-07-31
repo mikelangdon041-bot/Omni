@@ -1,6 +1,7 @@
 // The generate prompt for Writing Studio, kept out of the route handler so it
 // can be exercised directly against the API (scripts/writer-prompt-check.mjs)
-// without standing up a request and a session.
+// without standing up a request and a session. The chat prompt lives next door
+// in chatPrompt.ts for the same reason.
 
 export interface GenerateArgs {
   docType: string;
