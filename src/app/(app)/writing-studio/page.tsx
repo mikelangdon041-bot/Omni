@@ -3,7 +3,7 @@
 // Writing Studio home: library of everything you've written/edited here,
 // plus the two entry modes (edit something I have / write from scratch).
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   CheckSquare,
@@ -64,6 +64,17 @@ export default function WritingStudioPage() {
   const [tagFilter, setTagFilter] = useState<string>("all");
   const [selected, setSelected] = useState<string[]>([]);
   const [selecting, setSelecting] = useState(false);
+  // The Windows recorder's Ctrl+Shift+W picker has no brief box of its own —
+  // it asks what you're writing, then sends you here with `?type=` to do the
+  // actual typing, on the one intake box that already knows how to extract
+  // from a paste and autosave. Reading it once, off the URL rather than
+  // useSearchParams, keeps this page free of a Suspense boundary.
+  const launcherHandled = useRef(false);
+  const [openingFromLauncher] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      DOC_TYPES.some((t) => t.key === new URLSearchParams(window.location.search).get("type")),
+  );
 
   const allTags = useMemo(
     () => [...new Set(docs.flatMap((d) => d.tags))].sort((a, b) => a.localeCompare(b)),
@@ -125,9 +136,33 @@ export default function WritingStudioPage() {
 
   // One entry path: pick what it is, then say what you want in the workspace.
   // (`mode` is legacy — the AI works out polish-vs-write from what you type.)
-  async function createDoc(docType: DocType) {
+  // `focus` lands with the caret already in the Draft box — used when nothing
+  // asked you to type a brief first (this launcher, or "New piece" itself).
+  async function createDoc(docType: DocType, focus = false) {
     const doc = await add({ doc_type: docType, mode: "create" });
-    if (doc) router.push(`/writing-studio/${doc.id}`);
+    if (doc) router.push(`/writing-studio/${doc.id}${focus ? "?new=1" : ""}`);
+  }
+
+  // Arrived via the desktop app's picker: skip the modal, skip the library,
+  // go straight to a fresh piece of the type that was clicked.
+  useEffect(() => {
+    if (launcherHandled.current || !userId) return;
+    const type = new URLSearchParams(window.location.search).get("type");
+    if (!type || !DOC_TYPES.some((t) => t.key === type)) return;
+    launcherHandled.current = true;
+    window.history.replaceState(null, "", window.location.pathname);
+    // Already true from the lazy initializer above, which reads the same
+    // param — setting it again here would be a synchronous setState inside an
+    // effect, which is exactly the pattern that causes a cascading extra
+    // render mid-mount.
+    void createDoc(type as DocType, true);
+    // createDoc is stable enough for this one-shot effect; listing it would
+    // rerun on every render since it's redefined each time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  if (openingFromLauncher) {
+    return <p className="py-16 text-center text-sm text-muted">Opening a new piece…</p>;
   }
 
   return (

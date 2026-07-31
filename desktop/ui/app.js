@@ -52,6 +52,10 @@ async function fitWindow() {
 const refit = () => requestAnimationFrame(() => requestAnimationFrame(fitWindow));
 
 let status = null;
+// The compose picker sits outside the phase-driven views below — it can come
+// up regardless of whether recording is signed in, idle, or mid-upload, so it
+// is tracked as its own flag rather than folded into `status.phase`.
+let showingCompose = false;
 let devices = { inputs: [], outputs: [] };
 /** Settings is a separate view rather than a state of the main one. */
 let showingSettings = false;
@@ -61,6 +65,19 @@ const mmss = (s) =>
 
 function render() {
   if (!status) return;
+
+  // The picker takes over the whole window while it's up, independent of
+  // sign-in or recording state: it never touches the desktop session at all,
+  // it just opens a browser tab, so nothing about auth or recording gates it.
+  show("compose", showingCompose);
+  if (showingCompose) {
+    show("setup", false);
+    show("main", false);
+    show("settings", false);
+    show("recovered", false);
+    refit();
+    return;
+  }
 
   const signedIn = status.signed_in && status.omni_url;
 
@@ -292,6 +309,39 @@ $("hotkey").addEventListener("keydown", (e) => {
     parts.push(key.length === 1 ? key.toUpperCase() : key);
   }
   if (parts.length) $("hotkey").value = parts.join("+");
+});
+
+// --- Writing Studio picker ---------------------------------------------
+
+function closeCompose() {
+  showingCompose = false;
+  render();
+  // Same reflex as closing after a recording finishes: it opened to do one
+  // thing, and once it's done it should get out of the way again.
+  void invoke("hide_window");
+}
+
+$("compose-close").addEventListener("click", closeCompose);
+
+for (const button of document.querySelectorAll(".type-btn")) {
+  button.addEventListener("click", () => {
+    const type = button.dataset.type;
+    // The website already knows how to turn a type into a fresh piece — see
+    // the `type` query param handling in writing-studio/page.tsx. Sending you
+    // there rather than rebuilding the intake box here is the whole point:
+    // one prompt, one set of chips, one place to keep in sync.
+    void invoke("open_url", { url: `${status.omni_url}/writing-studio?type=${type}` });
+    closeCompose();
+  });
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && showingCompose) closeCompose();
+});
+
+listen("open-compose", () => {
+  showingCompose = true;
+  render();
 });
 
 listen("status", (event) => {

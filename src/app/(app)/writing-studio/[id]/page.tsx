@@ -138,6 +138,19 @@ export default function WriterDocPage() {
   );
   const { styles } = useWriterStyles(userId);
 
+  // Landed here with nothing typed yet — from "New piece", or from the
+  // desktop app's Ctrl+Shift+W picker, which creates the doc and sends you
+  // straight here rather than asking for a brief itself. Read once, off the
+  // URL, and stripped immediately so a later refresh doesn't refocus and
+  // rescroll on top of real work.
+  const [isNewFromLauncher] = useState(
+    () => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("new") === "1",
+  );
+  useEffect(() => {
+    if (!isNewFromLauncher) return;
+    window.history.replaceState(null, "", window.location.pathname);
+  }, [isNewFromLauncher]);
+
   const [busy, setBusy] = useState(false);
   const [researching, setResearching] = useState(false);
   // Files dropped but not attached yet — queued, being read, or failed. The
@@ -374,6 +387,29 @@ export default function WriterDocPage() {
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [intakePlain, busy]);
+
+  // A piece asked for in the chat ("write that as a separate email") arrives
+  // with ?go=1 and writes itself, because what they asked for was the piece, not
+  // an empty intake form to go and fill in. Read off the URL rather than through
+  // useSearchParams so the page needs no Suspense boundary, and stripped
+  // straight away so a reload doesn't write over what came out. It has to sit up
+  // here with the other hooks, above the early returns below, which is why it
+  // reaches down to generate() — a function declaration, so it exists by the
+  // time this runs.
+  const autoWrote = useRef(false);
+  useEffect(() => {
+    if (autoWrote.current || !doc || busy) return;
+    if (!new URLSearchParams(window.location.search).has("go")) return;
+    autoWrote.current = true;
+    window.history.replaceState(null, "", window.location.pathname);
+    // Nothing to write from, or something already written: leave it alone.
+    if (doc.content.trim() || !intakePlain.trim()) return;
+    // eslint-disable-next-line react-hooks/immutability
+    void generate();
+    // generate() reads the live doc off docRef, so it doesn't belong in the deps
+    // — listing it would re-run this on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc, busy]);
 
   if (loading) return <p className="py-16 text-center text-sm text-muted">Loading…</p>;
   if (!doc)
@@ -861,26 +897,6 @@ export default function WriterDocPage() {
     }
   }
 
-  // A piece asked for in the chat ("write that as a separate email") arrives
-  // with ?go=1 and writes itself, because what was asked for was the piece, not
-  // an empty intake form to go and fill in. Read off the URL rather than through
-  // useSearchParams so the page needs no Suspense boundary, and stripped
-  // immediately so a reload doesn't regenerate over what came out. Declared
-  // after generate() so it isn't reaching forward for it.
-  const autoWrote = useRef(false);
-  useEffect(() => {
-    if (autoWrote.current || !doc || busy) return;
-    if (!new URLSearchParams(window.location.search).has("go")) return;
-    autoWrote.current = true;
-    window.history.replaceState(null, "", window.location.pathname);
-    // Nothing to write from, or something already written: leave it alone.
-    if (doc.content.trim() || !intakePlain.trim()) return;
-    void generate();
-    // generate() reads the live doc off docRef, so it doesn't belong in the deps
-    // — listing it would re-run this on every keystroke.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, busy]);
-
   function pickVariant(i: number) {
     const v = variantResults[i];
     if (!v || !doc) return;
@@ -1241,6 +1257,7 @@ export default function WriterDocPage() {
                     'e.g. paste an email and add "reply pushing the meeting to next week" — or write your own rough version and I\'ll tidy it up.'
                   }
                   minHeight="min-h-40"
+                  autoFocus={isNewFromLauncher}
                 />
                 <div className="mt-1.5 flex items-center gap-2">
                   <input

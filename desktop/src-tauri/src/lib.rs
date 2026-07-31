@@ -36,6 +36,12 @@ use tauri_plugin_autostart::ManagerExt as AutostartExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_notification::NotificationExt;
 
+// Ctrl+Shift+R starts a meeting; this starts a piece of writing. Fixed rather
+// than a Settings field like the recording hotkey — the recording one earns
+// that because missing it costs you a meeting, this one only saves a few
+// clicks either way. Easy to promote later if it turns out to matter.
+const COMPOSE_HOTKEY: &str = "Ctrl+Shift+W";
+
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Phase {
@@ -724,6 +730,11 @@ fn hide_window(app: AppHandle) {
     }
 }
 
+// Each shortcut carries its own handler rather than one handler dispatching
+// on every press, because that is what lets the recording hotkey and the
+// compose hotkey coexist: a single blanket handler firing `toggle` for any
+// registered shortcut would start a recording every time Ctrl+Shift+W was
+// pressed too.
 fn register_hotkey(app: &AppHandle, previous: &str, next: &str) -> Result<(), String> {
     let shortcuts = app.global_shortcut();
     if let Ok(old) = previous.parse::<Shortcut>() {
@@ -733,8 +744,21 @@ fn register_hotkey(app: &AppHandle, previous: &str, next: &str) -> Result<(), St
         .parse::<Shortcut>()
         .map_err(|_| format!("\"{next}\" is not a shortcut Windows understands."))?;
     shortcuts
-        .register(parsed)
+        .on_shortcut(parsed, |app, _shortcut, event| {
+            if event.state() == ShortcutState::Pressed {
+                toggle(app);
+            }
+        })
         .map_err(|e| format!("Could not claim {next}: {e}. Another app may already have it."))
+}
+
+/// Bring the window forward on whatever it's showing, and tell it to switch to
+/// the compose picker instead of asking the Rust side to know anything about
+/// Writing Studio — the six document types live in the window's own code,
+/// same as every other piece of that UI.
+fn open_composer(app: &AppHandle) {
+    show_window(app);
+    let _ = app.emit("open-compose", ());
 }
 
 // ---------------------------------------------------------------------------
@@ -753,16 +777,11 @@ pub fn run() {
             // a window in front of whatever they are already doing.
             Some(vec!["--autostart"]),
         ))
-        .plugin(
-            tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
-                    // Key-down only; without this the same press toggles twice.
-                    if event.state() == ShortcutState::Pressed {
-                        toggle(app);
-                    }
-                })
-                .build(),
-        )
+        // No blanket handler here: each shortcut registers its own in
+        // register_hotkey / the compose registration below, which is what
+        // lets two different hotkeys coexist without one triggering the
+        // other's action.
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             get_status,
             list_audio_devices,
@@ -808,10 +827,15 @@ pub fn run() {
             // window is closed it is the only way back in.
             let toggle_item =
                 MenuItem::with_id(app, "toggle", "Start / stop recording", true, None::<&str>)?;
+            let compose_item =
+                MenuItem::with_id(app, "compose", "New writing piece", true, None::<&str>)?;
             let open_item =
                 MenuItem::with_id(app, "open", "Open Omni Recorder", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&toggle_item, &open_item, &quit_item])?;
+            let menu = Menu::with_items(
+                app,
+                &[&toggle_item, &compose_item, &open_item, &quit_item],
+            )?;
 
             let tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
@@ -819,6 +843,7 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "toggle" => toggle(app),
+                    "compose" => open_composer(app),
                     "open" => show_window(app),
                     "quit" => {
                         // Stopping first means a recording in progress is
@@ -851,6 +876,24 @@ pub fn run() {
             // not worth refusing to start over.
             if let Err(e) = register_hotkey(&handle, "", &hotkey) {
                 set_status(&handle, move |s| s.message = e);
+            }
+
+            // The compose hotkey is fixed, so it only needs registering once,
+            // here, rather than going through save_settings like the
+            // recording one does.
+            if let Err(e) = handle
+                .global_shortcut()
+                .on_shortcut(COMPOSE_HOTKEY, |app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        open_composer(app);
+                    }
+                })
+            {
+                set_status(&handle, move |s| {
+                    s.message = format!(
+                        "Could not claim {COMPOSE_HOTKEY} for Writing Studio: {e}. Another app may already have it."
+                    );
+                });
             }
 
             // A recording sitting in the folder means the last one never

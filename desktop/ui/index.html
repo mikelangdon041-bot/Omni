@@ -72,7 +72,32 @@
           Press <kbd id="hotkey-hint">Ctrl+Shift+R</kbd> anywhere to start or stop.
           Closing this window keeps it running in the tray.
         </p>
+        <p>Press <kbd>Ctrl+Shift+W</kbd> anywhere for a new piece in Writing Studio.</p>
       </footer>
+    </section>
+
+    <!-- The Writing Studio picker: say what it is, it opens already set up.
+         No brief typed here on purpose — that box lives on the website, where
+         it can autosave, extract from a paste, and reach everything the AI
+         needs. This is the six-way fork that used to cost a click on the
+         website; the browser tab it opens is the same "New piece" flow. -->
+    <section id="compose" hidden>
+      <header>
+        <div>
+          <p class="eyebrow">Omni Recorder</p>
+          <h1>What are you writing?</h1>
+        </div>
+        <button class="ghost" id="compose-close" title="Close" aria-label="Close">✕</button>
+      </header>
+      <div class="type-grid">
+        <button class="type-btn" data-type="email"><span>✉️</span>Email</button>
+        <button class="type-btn" data-type="document"><span>📄</span>Document / memo</button>
+        <button class="type-btn" data-type="message"><span>💬</span>Message</button>
+        <button class="type-btn" data-type="social"><span>📣</span>LinkedIn / social</button>
+        <button class="type-btn" data-type="summary"><span>📝</span>Summary / abstract</button>
+        <button class="type-btn" data-type="other"><span>✨</span>Anything else</button>
+      </div>
+      <p class="compose-hint">Opens in your browser, already set up and ready to type into.</p>
     </section>
 
     <!-- Settings. Devices are picked here once and never asked about again. -->

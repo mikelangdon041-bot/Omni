@@ -361,6 +361,43 @@ kbd {
   border-radius: 5px;
 }
 
+.type-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.type-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  transition: border-color 0.12s, background 0.12s;
+}
+
+.type-btn span {
+  font-size: 16px;
+}
+
+.type-btn:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.compose-hint {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
 .signed-in {
   margin: 14px 0 0;
   font-size: 12px;
