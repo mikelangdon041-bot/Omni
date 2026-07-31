@@ -10,7 +10,15 @@ export const maxDuration = 120;
 // fall back to Claude when they turn out to be scans; screenshots go to Claude's
 // vision — which is how "I saved the email as a PDF / took a screenshot" works.
 
-const MAX_BYTES = 15 * 1024 * 1024;
+// The platform refuses a request body over 4.5 MB before it ever reaches this
+// function, so promising 15 MB only bought an unexplained failure. The client
+// checks the same number and says so up front.
+const MAX_BYTES = 4 * 1024 * 1024;
+
+// A scan has to be read page-by-page by the model, which is slow and gets
+// refused outright on long documents. Hold it to something that can finish
+// inside the request, and say so plainly when it can't.
+const AI_READ_TIMEOUT_MS = 60_000;
 
 type ImageMime = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
 
@@ -91,7 +99,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "No file received" }, { status: 400 });
     if (file.size > MAX_BYTES)
       return NextResponse.json(
-        { error: "That file is over 15 MB — try a smaller one." },
+        { error: "That file is over 4 MB — try a smaller one." },
         { status: 413 },
       );
 
@@ -151,7 +159,11 @@ export async function POST(req: Request) {
         const parser = new PDFParse({ data: buffer });
         text = (await parser.getText()).text || "";
         await parser.destroy();
-      } catch {
+      } catch (err) {
+        // Swallowed silently once, which hid a missing pdf.js worker in the
+        // deployed bundle for weeks: every PDF quietly took the slow AI path
+        // instead. A broken reader has to be loud.
+        console.error("[writer/ingest] pdf text extraction failed", err);
         text = "";
       }
 
@@ -163,27 +175,32 @@ export async function POST(req: Request) {
 
       // Otherwise it's a scan or an image-only export — let Claude read it.
       try {
-        const res = await anthropic().messages.create({
-          model: WRITER_MODEL,
-          max_tokens: 16000,
-          system: TRANSCRIBE_SYSTEM,
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "document",
-                  source: {
-                    type: "base64",
-                    media_type: "application/pdf",
-                    data: buffer.toString("base64"),
+        const res = await anthropic().messages.create(
+          {
+            model: WRITER_MODEL,
+            max_tokens: 16000,
+            system: TRANSCRIBE_SYSTEM,
+            messages: [
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "document",
+                    source: {
+                      type: "base64",
+                      media_type: "application/pdf",
+                      data: buffer.toString("base64"),
+                    },
                   },
-                },
-                { type: "text", text: "Transcribe everything readable in this document." },
-              ],
-            },
-          ],
-        });
+                  { type: "text", text: "Transcribe everything readable in this document." },
+                ],
+              },
+            ],
+          },
+          // Bounded, and not retried: a scan this size that fails once fails
+          // again, and a second attempt only makes the wait longer.
+          { timeout: AI_READ_TIMEOUT_MS, maxRetries: 0 },
+        );
         const html = cleanModelHtml(firstText(res));
         if (!html || html === "<p></p>")
           return NextResponse.json(
@@ -223,6 +240,8 @@ function readableError(err: unknown): string {
   // The SDK message starts with the status code; matching it loose would let a
   // digit inside a request id decide the wording.
   const status = Number(raw.match(/^(\d{3})/)?.[1] ?? 0);
+  if (/timed out|timeout|aborted/i.test(raw))
+    return "That one took too long to read. If it's a scan, try fewer pages — or paste the text in instead.";
   if (/content filtering|blocked by/i.test(raw))
     return "The reader declined that file. If it's a scan, try a clearer copy, or paste the text in instead.";
   if (status === 413 || /request_too_large|too many tokens/i.test(raw))
