@@ -4,14 +4,12 @@ import { anthropic, WRITER_MODEL } from "@/lib/anthropic";
 import {
   ACTION_CHIPS,
   AUDIENCE_CHIPS,
-  DOC_TYPES,
   FIDELITY_OPTIONS,
   LENGTHS,
   TONE_CHIPS,
 } from "@/lib/writer/types";
 import { stripEmDashes } from "@/lib/writer/sanitize";
 import { buildGeneratePrompt } from "@/lib/writer/prompt";
-import { buildChatSystem, CHAT_SCHEMA, HANDOFF_APPS } from "@/lib/writer/chatPrompt";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -47,11 +45,6 @@ const GENERATE_SCHEMA = {
   required: ["variants"],
   additionalProperties: false,
 };
-
-// The types a chat handoff can be created as, read off the same list the rest
-// of the studio uses so adding a type there doesn't leave the chat unable to
-// suggest it.
-const DOC_TYPE_KEYS: string[] = DOC_TYPES.map((d) => d.key);
 
 function firstText(res: {
   content: { type: string; text?: string }[];
@@ -95,63 +88,6 @@ Be specific and quote short examples from the samples. Under 250 words. Return o
         messages: [{ role: "user", content: `Writing samples:\n\n${samples}` }],
       });
       return NextResponse.json({ profile: firstText(res) });
-    }
-
-    // Ask-me-anything about the piece you're working on. Answering never edits
-    // anything; when the answer proposes a specific change it also returns that
-    // change as an instruction, which the button on the answer feeds to the
-    // ordinary refine pass.
-    if (action === "chat") {
-      const turns: { role: string; content: string }[] = Array.isArray(body?.turns)
-        ? body.turns.slice(-12)
-        : [];
-      if (!turns.length)
-        return NextResponse.json({ error: "Nothing to answer" }, { status: 400 });
-      const docType = String(body?.docType || "email");
-      const draft = String(body?.draft || "").slice(0, 20000);
-      const output = String(body?.output || "").slice(0, 20000);
-      const notes = String(body?.notes || "").slice(0, 8000);
-
-      const res = await anthropic().messages.create({
-        model: WRITER_MODEL,
-        max_tokens: 4000,
-        output_config: { format: { type: "json_schema", schema: CHAT_SCHEMA } },
-        system: buildChatSystem({ docType, draft, output, notes }),
-        messages: turns.map((t) => ({
-          role: t.role === "assistant" ? ("assistant" as const) : ("user" as const),
-          content: String(t.content || "").slice(0, 8000),
-        })),
-      });
-
-      if (res.stop_reason === "refusal")
-        return NextResponse.json(
-          { error: "The model declined that one — try rephrasing." },
-          { status: 502 },
-        );
-      const chat = JSON.parse(firstText(res) || "{}");
-      // A handoff only exists if there is somewhere to send it and something to
-      // say when it gets there; anything short of that is just an answer.
-      const app = HANDOFF_APPS.includes(String(chat.handoffApp || ""))
-        ? String(chat.handoffApp)
-        : "";
-      const handoffBrief = app ? stripEmDashes(String(chat.handoffBrief || "")) : "";
-      const handoff = handoffBrief.trim() ? app : "";
-      return NextResponse.json({
-        reply: stripEmDashes(String(chat.reply || "")),
-        // One or the other, never both: a handoff that also carried an
-        // instruction would put an "apply to this piece" button next to the very
-        // suggestion that must not touch this piece.
-        instruction: handoff ? "" : stripEmDashes(String(chat.instruction || "")),
-        handoffApp: handoff,
-        handoffType:
-          handoff === "writing-studio" && DOC_TYPE_KEYS.includes(String(chat.handoffType || ""))
-            ? String(chat.handoffType)
-            : "",
-        handoffBrief: handoff ? handoffBrief : "",
-        handoffTitle: handoff
-          ? stripEmDashes(String(chat.handoffTitle || "")).slice(0, 80)
-          : "",
-      });
     }
 
     // "Look it up" — the one thing the writer genuinely could not do before.

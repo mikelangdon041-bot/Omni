@@ -36,7 +36,6 @@ import { Modal } from "@/components/ui/Modal";
 import { RichText, RichTextView } from "@/components/ui/RichText";
 import { AutoRichField } from "@/components/ui/AutoRichField";
 import { ProgressBar, useProgress } from "@/components/ui/Progress";
-import { WriterChat } from "@/components/writer/WriterChat";
 import { useChatScope } from "@/components/chat/ChatScope";
 import { toEmailHtml } from "@/lib/writer/clipboard";
 import { wantsResearch } from "@/lib/writer/prompt";
@@ -44,7 +43,6 @@ import { useConfirm, useToast } from "@/components/ui/Feedback";
 import { ChipGroup } from "@/components/writer/Chips";
 import { IntakeSection } from "@/components/writer/IntakeSection";
 import { diffHighlightHtml } from "@/lib/writer/diff";
-import { createMeetingFromMaterial } from "@/lib/meetingprep/hooks";
 import {
   createLinkedDoc,
   fetchSiblings,
@@ -669,52 +667,6 @@ export default function WriterDocPage() {
       // Asked for in the chat, the piece was asked for finished: land on it with
       // it already being written. Off the menu it opens as an intake to fill in.
       router.push(`/writing-studio/${created.id}${spinoff ? "?go=1" : ""}`);
-    } catch (e) {
-      toast("error", (e as Error).message);
-    } finally {
-      setMakingCompanion(false);
-    }
-  }
-
-  /**
-   * The chat offering something that isn't this piece and isn't a change to it.
-   * Inside the studio that's a companion piece; outside it, the material goes to
-   * the app that actually does that job, rather than the chat pretending it can
-   * do it here or, worse, writing it over the top of what's on screen.
-   */
-  async function handoff(h: { app: string; type: string; brief: string; title: string }) {
-    if (h.app !== "meeting-prep") {
-      const type = DOC_TYPES.find((d) => d.key === h.type)?.key || "other";
-      return makeCompanion(type, { brief: h.brief, title: h.title });
-    }
-    const current = docRef.current;
-    if (!current || !userId) return;
-    setMakingCompanion(true);
-    try {
-      await flush();
-      // Everything they'd otherwise retype over there: what the meeting is for,
-      // then the material this piece was written from, then the piece itself.
-      const material = [
-        h.brief.trim(),
-        htmlToPlain(current.original).trim() &&
-          `What I'm working from:\n${htmlToPlain(current.original).trim()}`,
-        htmlToPlain(current.content).trim() &&
-          `The ${docTypeLabel(current.doc_type).toLowerCase()} I've written about it:\n${htmlToPlain(
-            current.content,
-          ).trim()}`,
-      ]
-        .filter(Boolean)
-        .join("\n\n");
-      const created = await createMeetingFromMaterial(userId, {
-        title: h.title.trim() || current.title || "Meeting",
-        explain: material
-          .split(/\n{2,}/)
-          .map((block) => `<p>${escapeHtml(block).replace(/\n/g, "<br>")}</p>`)
-          .join(""),
-      });
-      if (!created) throw new Error("Could not create it");
-      toast("success", "Meeting prep started from this piece");
-      router.push(`/meeting-prep/${created.id}`);
     } catch (e) {
       toast("error", (e as Error).message);
     } finally {
