@@ -18,6 +18,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { BackButton } from "@/components/BackButton";
+import { useChatScope } from "@/components/chat/ChatScope";
 import { exportKolDocx } from "@/lib/conference/exports";
 import { Button } from "@/components/ui/Button";
 import { useConfirm, useToast } from "@/components/ui/Feedback";
@@ -66,6 +67,28 @@ export default function ContactDetailPage({
   const { meetings, add: addMeeting, update: updateMeeting, remove: removeMeeting } =
     useContactMeetings(conference.id, contactId);
   const { recordings } = useRecordings(conference.id, { contactId });
+
+  // The contact on screen, so logging a conversation with them needs no ids.
+  useChatScope(
+    contact
+      ? {
+          app: "conference-planning",
+          subject: { kind: "contact", id: contact.id, label: contact.name },
+          ids: { conferenceId: conference.id },
+          context: [
+            `Contact: ${contact.name}`,
+            [contact.title, contact.institution].filter(Boolean).join(", "),
+            `Tier: ${contact.tier}`,
+            (contact.interests || []).length && `Interests: ${(contact.interests || []).join(", ")}`,
+            contact.background && `Background: ${contact.background}`,
+            contact.meeting_objectives && `What we want from them: ${contact.meeting_objectives}`,
+            contact.engagement_activities && `Engagement so far: ${contact.engagement_activities}`,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        }
+      : null,
+  );
   const insightsApi = useInsights(conference.id);
   const { categories } = useCategories(conference.id);
 

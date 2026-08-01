@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Mail, Phone, MapPin, Pencil } from "lucide-react";
 import { BackButton } from "@/components/BackButton";
+import { useChatScope } from "@/components/chat/ChatScope";
 import {
   useCandidate,
   useCandidateActivity,
@@ -46,6 +47,32 @@ export default function CandidateDetailPage() {
   const [tab, setTab] = usePersistedState<Tab>(`interview-tab:${params.id}`, "Overview", TABS);
 
   const canEdit = !!candidate && candidate.user_id === userId;
+
+  // The candidate and what's on their resume, so the chat can answer about the
+  // gap to the role and write a note against them without an id.
+  useChatScope(
+    candidate
+      ? {
+          app: "interview-prep",
+          subject: {
+            kind: "candidate",
+            id: candidate.id,
+            label: `${candidate.first_name} ${candidate.last_name}`.trim(),
+          },
+          context: [
+            `Candidate: ${candidate.first_name} ${candidate.last_name}`.trim(),
+            candidate.role_title && `Up for: ${candidate.role_title}`,
+            `Status: ${STATUS_LABELS[candidate.status] || candidate.status}`,
+            candidate.location && `Where: ${candidate.location}`,
+            candidate.summary && `Summary: ${candidate.summary}`,
+            candidate.resume_text &&
+              `Resume:\n${candidate.resume_text.slice(0, 8000)}`,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        }
+      : null,
+  );
 
   // Update a field, and log status changes to the activity timeline.
   async function updateAndLog(partial: Partial<Candidate>) {

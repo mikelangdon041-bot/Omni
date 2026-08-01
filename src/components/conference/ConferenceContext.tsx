@@ -16,6 +16,7 @@ import { createClient } from "@/lib/supabase/client";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useChatBase } from "@/components/chat/ChatScope";
 import {
   CalendarDays,
   ClipboardList,
@@ -116,6 +117,23 @@ export function ConferenceProvider({
     attendees,
     attendeesLoading,
     refreshAttendees,
+  );
+
+  // Everything under a conference shares its id, so the chat can log a contact
+  // or capture an insight from any tab without the page repeating itself.
+  useChatBase(
+    conference
+      ? {
+          app: "conference-planning",
+          ids: { conferenceId: conference.id },
+          context: [
+            conference.name && `Conference: ${conference.name}`,
+            conference.location && `Where: ${conference.location}`,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        }
+      : null,
   );
 
   const [showAnnounce, setShowAnnounce] = useState(false);

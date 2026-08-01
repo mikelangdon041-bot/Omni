@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Plus, Search, ArrowUpDown, MapPin, List, CalendarDays, Wand2, BarChart3 } from "lucide-react";
 import { ModuleHero } from "@/components/ui/ModuleHero";
+import { useChatScope } from "@/components/chat/ChatScope";
+import { kolRow, listContext } from "@/lib/chat/context";
 import { Button } from "@/components/territory/ui/Button";
 import { KOLCard } from "@/components/territory/KOLCard";
 import { AddKOLModal } from "@/components/territory/AddKOLModal";
@@ -45,6 +47,13 @@ export default function TerritoryDashboard() {
   const { userId } = useUserId();
   const { kols, loading, add, addMany, update, merge, refresh } = useKOLs(userId);
   const { reminders } = useReminders(userId);
+
+  // The whole roster, so "who haven't I touched this cycle" and "who are my
+  // tier ones at Mass General" are answerable without opening anyone.
+  useChatScope({
+    app: "territory-planning",
+    context: listContext("The people in this territory", kols.map(kolRow), 120),
+  });
 
   const [showAdd, setShowAdd] = useState(false);
   const [showTidy, setShowTidy] = useState(false);

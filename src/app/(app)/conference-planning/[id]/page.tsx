@@ -17,6 +17,8 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useConferenceCtx } from "@/components/conference/ConferenceContext";
+import { useChatScope } from "@/components/chat/ChatScope";
+import { listContext } from "@/lib/chat/context";
 import { useAnnouncements } from "@/lib/conference/hooks";
 import { Avatar } from "@/components/ui/Avatar";
 import { initials } from "@/lib/conference/utils";
@@ -34,6 +36,22 @@ interface Counts {
 export default function ConferenceDashboard() {
   const { conference, attendees } = useConferenceCtx();
   const { announcements } = useAnnouncements(conference.id);
+
+  // The conference itself, plus who is on the team. Contacts, sessions and
+  // insights each live on their own page and register their own scope.
+  useChatScope({
+    app: "conference-planning",
+    subject: { kind: "conference", id: conference.id, label: conference.name || "this conference" },
+    ids: { conferenceId: conference.id },
+    context: [
+      `Conference: ${conference.name}`,
+      conference.location && `Where: ${conference.location}`,
+      conference.start_date && `Dates: ${conference.start_date} to ${conference.end_date || conference.start_date}`,
+      listContext("On the team", attendees.map((a) => [a.name, a.role].filter(Boolean).join(", ")), 40),
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  });
   const [counts, setCounts] = useState<Counts | null>(null);
 
   useEffect(() => {

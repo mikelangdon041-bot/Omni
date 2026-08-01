@@ -41,6 +41,7 @@ import { AddElementBar, ColorInput, Inspector } from "@/components/slides/Inspec
 import { ChartDataModal, type ChartData } from "@/components/slides/ChartDataModal";
 import { PracticeMode } from "@/components/slides/PracticeMode";
 import { useDeck, usePracticeRuns, useUserId } from "@/lib/slides/hooks";
+import { useChatScope } from "@/components/chat/ChatScope";
 import { saveSlidePrefs } from "@/lib/slides/prefs";
 import { polishSlides } from "@/lib/slides/polish";
 import { exportDeckPptx } from "@/lib/slides/pptx";
@@ -181,6 +182,32 @@ export default function DeckEditorPage() {
   const { userId } = useUserId();
   const { deck, loading, save, flush, snapshot, listVersions, saveState } = useDeck(id);
   const { runs, add: addRun } = usePracticeRuns(id, userId);
+
+  // Every slide as text, in order, so "where does this drag" and "cut it to 12
+  // minutes" are answerable without the chat seeing the canvas.
+  useChatScope(
+    deck
+      ? {
+          app: "slide-studio",
+          subject: { kind: "deck", id: deck.id, label: deck.title || "this deck" },
+          context: [
+            `Deck: ${deck.title}`,
+            `${(deck.slides || []).length} slides.`,
+            ...(deck.slides || []).map((s, i) => {
+              const text = (s.elements || [])
+                .map((el: SlideElement) =>
+                  el.type === "bullets"
+                    ? (el.bullets || []).map((b) => `• ${b}`).join("\n")
+                    : el.text || "",
+                )
+                .filter(Boolean)
+                .join("\n");
+              return `--- Slide ${i + 1} ---\n${text}${s.notes ? `\n[notes] ${s.notes}` : ""}`;
+            }),
+          ].join("\n\n"),
+        }
+      : null,
+  );
 
   const [current, setCurrent] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);

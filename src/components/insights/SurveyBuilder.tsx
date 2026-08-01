@@ -16,6 +16,8 @@ import { Badge } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useSurveyAdmin, useOrgProfile } from "@/lib/insights/hooks";
 import { buildTree } from "@/lib/insights/survey";
+import { useChatScope } from "@/components/chat/ChatScope";
+import { listContext } from "@/lib/chat/context";
 import { cn } from "@/lib/ui";
 import {
   QuestionEditorModal,
@@ -69,6 +71,36 @@ export function SurveyBuilder() {
   const [editor, setEditor] = useState<EditorCtx | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  // The survey as it stands, so the chat can say which question is doing no
+  // work and add the one that's missing.
+  useChatScope(
+    template
+      ? {
+          app: "insights",
+          subject: { kind: "survey", id: template.id, label: template.name || "this survey" },
+          ids: { templateId: template.id },
+          context: [
+            `Survey: ${template.name} (${template.status})`,
+            listContext(
+              "Questions",
+              questions.map(
+                (q) =>
+                  `${q.text} [${q.type}${q.required ? ", required" : ""}]${
+                    options.filter((o) => o.question_id === q.id).length
+                      ? ` — options: ${options
+                          .filter((o) => o.question_id === q.id)
+                          .map((o) => o.label)
+                          .join(" / ")}`
+                      : ""
+                  }`,
+              ),
+              80,
+            ),
+          ].join("\n\n"),
+        }
+      : null,
+  );
 
   const tree = useMemo(
     () => buildTree(questions, options),

@@ -8,6 +8,8 @@ import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Check, CloudUpload, Trash2 } from "lucide-react";
 import { BackButton } from "@/components/BackButton";
+import { useChatScope } from "@/components/chat/ChatScope";
+import { meetingContext } from "@/lib/chat/context";
 import { useConfirm } from "@/components/ui/Feedback";
 import { Tabs } from "@/components/ui/Tabs";
 import { DiffPreviewModal, type DiffChange } from "@/components/ui/DiffPreviewModal";
@@ -52,6 +54,19 @@ export default function MeetingPage() {
   );
   // Remembers which tab you were on for THIS meeting specifically.
   const [tab, setTab] = usePersistedState<Tab>(`mp-tab:${id}`, "Setup", TABS, linkedTab);
+
+  // The whole meeting record: setup, the brief as it stands, the questions,
+  // the debrief. Everything the chat needs to answer "what am I missing" and to
+  // add an attendee or a hard question without leaving the tab you're on.
+  useChatScope(
+    meeting
+      ? {
+          app: "meeting-prep",
+          subject: { kind: "meeting", id: meeting.id, label: meeting.title || "this meeting" },
+          context: meetingContext(meeting),
+        }
+      : null,
+  );
 
   const generator = useBriefGenerator({
     meeting,

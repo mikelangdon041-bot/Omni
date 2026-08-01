@@ -15,6 +15,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { ModuleHero } from "@/components/ui/ModuleHero";
+import { useChatScope } from "@/components/chat/ChatScope";
+import { listContext } from "@/lib/chat/context";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Input";
@@ -39,6 +41,24 @@ export default function MeetingPrepPage() {
   const { userId } = useUserId();
   const { meetings, loading, add, remove } = useMpMeetings(userId);
   const { settings, save: saveSettings } = useMpSettings(userId);
+  // Every meeting on the list, so "what have I got next week" and "start a prep
+  // for the exec review" both work from here.
+  useChatScope({
+    app: "meeting-prep",
+    context: listContext(
+      "Meetings being prepared for",
+      meetings.map((m) =>
+        [
+          m.title || "(untitled)",
+          meetingTypeLabel(m.meeting_type),
+          m.date ? new Date(m.date).toLocaleString() : "no date set",
+          (m.brief?.sections || []).length ? "briefed" : "no brief yet",
+        ].join(" | "),
+      ),
+      80,
+    ),
+  });
+
   const [showSettings, setShowSettings] = useState(false);
   const [creating, setCreating] = useState(false);
 

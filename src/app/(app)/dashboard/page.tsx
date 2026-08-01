@@ -4,6 +4,8 @@ import { useState } from "react";
 import dynamic from "next/dynamic";
 import { Building2, Users, User, Upload, Settings2, Plus } from "lucide-react";
 import { ModuleHero } from "@/components/ui/ModuleHero";
+import { useChatScope } from "@/components/chat/ChatScope";
+import { listContext } from "@/lib/chat/context";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/Button";
 import {
@@ -43,6 +45,20 @@ export default function DashboardPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [teamOpen, setTeamOpen] = useState(false);
   const [kpiOpen, setKpiOpen] = useState(false);
+
+  // What is already pinned, so the chat can answer "what am I not looking at"
+  // and build the missing one.
+  useChatScope({
+    app: "dashboard",
+    context: [
+      `What they can see: ${maxScope === "org" ? "the whole company" : maxScope === "team" ? "their team" : "their own"} data.`,
+      listContext(
+        "Tiles pinned to the dashboard",
+        tiles.map((t) => `${t.title} (from ${t.dataset_id})`),
+        60,
+      ),
+    ].join("\n\n"),
+  });
 
   const scopeInfo = SCOPE_COPY[maxScope] || SCOPE_COPY.self;
 

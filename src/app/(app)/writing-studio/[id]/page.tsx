@@ -37,6 +37,7 @@ import { RichText, RichTextView } from "@/components/ui/RichText";
 import { AutoRichField } from "@/components/ui/AutoRichField";
 import { ProgressBar, useProgress } from "@/components/ui/Progress";
 import { WriterChat } from "@/components/writer/WriterChat";
+import { useChatScope } from "@/components/chat/ChatScope";
 import { toEmailHtml } from "@/lib/writer/clipboard";
 import { wantsResearch } from "@/lib/writer/prompt";
 import { useConfirm, useToast } from "@/components/ui/Feedback";
@@ -410,6 +411,35 @@ export default function WriterDocPage() {
     // — listing it would re-run this on every keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc, busy]);
+
+  // What the shared chat can see here, and the one thing only this page can do:
+  // refine, which snapshots the current version first so an applied suggestion
+  // is always undoable.
+  useChatScope(
+    doc
+      ? {
+          app: "writing-studio",
+          subject: {
+            kind: "piece",
+            id: doc.id,
+            label: doc.title || doc.subject || `this ${docTypeLabel(doc.doc_type).toLowerCase()}`,
+          },
+          context: [
+            `Type: ${docTypeLabel(doc.doc_type)}`,
+            doc.title && `Title: ${doc.title}`,
+            doc.subject && `Subject line: ${doc.subject}`,
+            inputPlain && `What they put in the draft box:\n${inputPlain}`,
+            doc.content && `The current version in the output pane:\n${htmlToPlain(doc.content)}`,
+            notesPlain && `Their note about it:\n${notesPlain}`,
+          ]
+            .filter(Boolean)
+            .join("\n\n---\n\n"),
+          editLabel: "Make this change",
+          editBusy: busy || researching || makingCompanion,
+          onEdit: (instruction: string) => generate(instruction),
+        }
+      : null,
+  );
 
   if (loading) return <p className="py-16 text-center text-sm text-muted">Loading…</p>;
   if (!doc)
@@ -1910,23 +1940,6 @@ export default function WriterDocPage() {
           )}
         </div>
       </div>
-
-      {/* Floats bottom-right over everything, so it's in the same place at any
-          scroll position instead of competing for room in a column. */}
-      <WriterChat
-        docType={doc.doc_type}
-        draft={inputPlain}
-        output={htmlToPlain(doc.content)}
-        notes={notesPlain}
-        applying={busy || researching || makingCompanion}
-        // Its own suggestion, handed to the same refine pass the box uses.
-        // Nothing to retype, nothing to paraphrase away.
-        onApply={(instruction) => generate(instruction)}
-        // When what it offered is a new thing rather than an edit — another
-        // piece, or a prep in another app — it goes down its own path and this
-        // one is left as it is.
-        onHandoff={handoff}
-      />
 
       {/* An attachment, opened to check what was actually read out of it. The
           transcription is the part that reaches the AI, so that's what this

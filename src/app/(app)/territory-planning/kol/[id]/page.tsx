@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Mail, Phone, Building2, MapPin, Pencil, Check } from "lucide-react";
 import { BackButton } from "@/components/BackButton";
+import { useChatScope } from "@/components/chat/ChatScope";
+import { kolContext } from "@/lib/chat/context";
 import { AddTaskButton } from "@/components/AddTaskButton";
 import { KolPhoto } from "@/components/territory/KolPhoto";
 import { useKOL, useUserId, useFieldSuggestions } from "@/lib/territory/hooks";
@@ -36,6 +38,22 @@ export default function KOLDetailPage() {
   const suggestions = useFieldSuggestions(userId);
   const [tab, setTab] = useState<Tab>("Profile");
   const [profileEditing, setProfileEditing] = useState(false);
+
+  // The chat sees the person, not the tab. Logging a meeting or moving someone
+  // up a tier is the same request whichever tab happens to be open.
+  useChatScope(
+    kol
+      ? {
+          app: "territory-planning",
+          subject: {
+            kind: "kol",
+            id: kol.id,
+            label: `${kol.first_name} ${kol.last_name}`.trim(),
+          },
+          context: kolContext(kol),
+        }
+      : null,
+  );
 
   if (loading) {
     return <p className="py-12 text-center text-sm text-muted">Loading…</p>;

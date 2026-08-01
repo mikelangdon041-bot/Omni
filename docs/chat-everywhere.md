@@ -3,6 +3,12 @@
 Written 2026-07-31, after the Writing Studio chat learned to hand work off
 instead of overwriting the piece on screen. For assessment, not a commitment.
 
+**Built 2026-08-01.** The shared chat now ships in every app: one bubble mounted
+in the app shell, per-page scope registration, a 24-verb action catalog, the
+cross-app lookup (level 3 read) and the handoff agent (levels 1 and 2). What
+follows is the plan as written; §7 at the end records what actually landed and
+what did not.
+
 ## 1. Where chat actually exists today
 
 Short answer: **it does not exist in all the apps. It exists in one and a half.**
@@ -250,3 +256,55 @@ context rather than charts) plus the scope rules that already exist there
   worth keeping suite-wide rather than letting a chat write silently.
 - **Scope.** Level 3 has to respect the dashboard's existing self / team / org
   rules, or the chat becomes a way to read around them.
+
+---
+
+## 7. What actually landed (2026-08-01)
+
+One chat, mounted once in the app shell, in every app.
+
+**The runtime**
+
+- `lib/chat/actions.ts` — the single catalog of what the chat may do. 24 verbs
+  across the nine apps, each an id, the apps that offer it, one line on when to
+  reach for it, and its parameters. Adding a verb is an entry here plus a
+  handler; nothing else.
+- `lib/chat/prompt.ts` — the ask prompt (the one/two test, the action catalog
+  for wherever you are, today's date) and the compose prompt for handoffs.
+- `lib/chat/run.ts` — the handlers. Every write goes through the same client and
+  the same RLS as the screen the person could have used by hand.
+- `lib/chat/lookup.ts` — the cross-app read.
+- `api/chat` — `ask` and `compose`. Vets every action id against what that app
+  actually offers, and drops anything else rather than shipping it to the client
+  to fail on.
+- `components/chat/OmniChat.tsx` and `ChatScope.tsx` — the bubble, and how pages
+  say what they're looking at. A page registers its scope; a layout registers a
+  base scope for everything under it (that's how any conference tab knows its
+  conference id).
+
+**Levels, as scoped in §4**
+
+- Level 1, create and navigate: any handoff, plus the link on the result.
+- Level 2, do it in place: tasks, reminders, logging a meeting, capturing an
+  insight, adding a contact. No navigation, the chat reports back.
+- Level 3, read across: `lookup` runs server-side inside the answer rather than
+  behind a button, because waiting for a click to find out what Omni knows about
+  a person makes the answer useless. Cross-app *writing* is the handoff agent: it
+  asks the model to stand in the target app and say what it would create there,
+  then runs that through the same handler an in-app request would use.
+
+**Pages that register scope**
+
+Territory (list, KOL), Meeting Prep (list, meeting), Conference (base id on
+every tab, dashboard, contact), Insights (survey builder), Interview (candidate),
+Slide Studio (deck), Writing Studio (piece, with refine), Dashboard. Anywhere
+else falls back to the app the route belongs to.
+
+**Not built**
+
+- Writing Studio's old `WriterChat` is gone; its behaviour moved into the shared
+  one, including refine-in-place and the writer/meeting-prep handoffs.
+- Editing a chart spec by talking to it, editing slides element by element, and
+  regenerating a single brief section are still buttons in their own pages.
+- Insights has one verb (add a question); analyses are still built in the page.
+- Nothing writes without a button press, and there is no schedule or digest.
