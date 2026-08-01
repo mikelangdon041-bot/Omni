@@ -40,7 +40,13 @@ use tauri_plugin_notification::NotificationExt;
 // than a Settings field like the recording hotkey — the recording one earns
 // that because missing it costs you a meeting, this one only saves a few
 // clicks either way. Easy to promote later if it turns out to matter.
-const COMPOSE_HOTKEY: &str = "Ctrl+Shift+W";
+//
+// Ctrl+Shift+W specifically is a bad choice: it is "close window" in Firefox
+// and several editors including this one, so it is already claimed
+// system-wide on a normal dev machine before this app ever starts. Verified
+// by hand — RegisterHotKey for Ctrl+Shift+W failed with
+// ERROR_HOTKEY_ALREADY_REGISTERED here; Ctrl+Alt+W did not.
+const COMPOSE_HOTKEY: &str = "Ctrl+Alt+W";
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -889,11 +895,18 @@ pub fn run() {
                     }
                 })
             {
-                set_status(&handle, move |s| {
-                    s.message = format!(
-                        "Could not claim {COMPOSE_HOTKEY} for Writing Studio: {e}. Another app may already have it."
-                    );
-                });
+                // Unlike the recording hotkey, nothing later ever surfaces
+                // this: the window usually starts hidden, and there is no
+                // failed-recording moment that would force it open. A silent
+                // failure here means Ctrl+Alt+W looks like it does nothing,
+                // forever, with no way to find out why — so it gets a
+                // notification of its own rather than a status line nobody
+                // is looking at.
+                let message = format!(
+                    "Could not claim {COMPOSE_HOTKEY} for Writing Studio: {e}. Another app may already have it."
+                );
+                notify(&handle, "Omni Recorder", &message);
+                set_status(&handle, move |s| s.message = message);
             }
 
             // A recording sitting in the folder means the last one never
