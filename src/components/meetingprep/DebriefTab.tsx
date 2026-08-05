@@ -16,6 +16,7 @@ import {
   Mail,
   MessageSquareText,
   Minimize2,
+  NotebookPen,
   Replace,
   Undo2,
   Wand2,
@@ -23,6 +24,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { SendToOneNote } from "@/components/meetingprep/SendToOneNote";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
@@ -93,6 +95,7 @@ export function DebriefTab({
   const [redoOpen, setRedoOpen] = useState(false);
   const [renames, setRenames] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState(false);
+  const [oneNoteOpen, setOneNoteOpen] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
   const [findWhat, setFindWhat] = useState("");
   const [findWith, setFindWith] = useState("");
@@ -122,20 +125,23 @@ export function DebriefTab({
   // document, so meetings saved before this still open with their notes.
   const notesHtml = debriefNotesHtml(debrief);
 
-  // Copy as rich text so the bullet nesting survives the paste into OneNote
-  // or Word; the plain-text flavour keeps indentation for anywhere else.
-  async function copyNotes() {
+  /**
+   * The notes as they should leave here — which is to say, saying which meeting
+   * they are. A page pasted into OneNote loses every bit of that the moment it
+   * leaves: the meeting it belongs to is only obvious while you are still
+   * looking at the meeting, and it is the thing you most want two months later,
+   * scrolling a section for the one where they said yes.
+   *
+   * Shared by the clipboard and the OneNote hand-off so a note that arrives one
+   * way is not missing something a note that arrives the other way has.
+   */
+  function notesForExport() {
     // The editable node itself, not the wrapper around it: the wrapper also
     // holds the toolbar and the floating rename popup, and serialising those
     // is what made the paste land one level indented with stray markup.
     const el = notesRef.current?.querySelector<HTMLElement>('[contenteditable="true"]');
-    if (!el) return;
+    if (!el) return null;
 
-    // Which meeting, and when. A page of notes pasted into OneNote loses every
-    // bit of that the moment it leaves here — the meeting it belongs to is only
-    // obvious while you are still looking at the meeting — and it is the thing
-    // you most want two months later when you are scrolling back through a
-    // section trying to find the one where they said yes.
     const when = m.date
       ? new Date(m.date).toLocaleDateString(undefined, {
           weekday: "long",
@@ -148,7 +154,7 @@ export function DebriefTab({
     const escape = (s: string) =>
       s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     // Inline styles, not a stylesheet: OneNote and Word both drop anything that
-    // arrives on the clipboard as CSS and render the heading as body text.
+    // arrives as CSS and render the heading as one more line of body text.
     const header =
       `<p style="margin:0 0 2px 0;font-family:Calibri,Helvetica,Arial,sans-serif;font-size:15pt;font-weight:bold">${escape(title)}</p>` +
       (when
@@ -156,15 +162,27 @@ export function DebriefTab({
         : "");
     const plainHeader = when ? `${title}\n${when}\n\n` : `${title}\n\n`;
 
+    return {
+      title,
+      html: header + el.innerHTML,
+      plain: plainHeader + el.innerText,
+    };
+  }
+
+  // Copy as rich text so the bullet nesting survives the paste into OneNote
+  // or Word; the plain-text flavour keeps indentation for anywhere else.
+  async function copyNotes() {
+    const out = notesForExport();
+    if (!out) return;
     try {
       await navigator.clipboard.write([
         new ClipboardItem({
-          "text/html": new Blob([header + el.innerHTML], { type: "text/html" }),
-          "text/plain": new Blob([plainHeader + el.innerText], { type: "text/plain" }),
+          "text/html": new Blob([out.html], { type: "text/html" }),
+          "text/plain": new Blob([out.plain], { type: "text/plain" }),
         }),
       ]);
     } catch {
-      await navigator.clipboard.writeText(plainHeader + el.innerText).catch(() => {});
+      await navigator.clipboard.writeText(out.plain).catch(() => {});
     }
     setCopied(true);
     setTimeout(() => setCopied(false), 1800);
@@ -775,6 +793,16 @@ export function DebriefTab({
                 <Button size="sm" variant="secondary" onClick={() => void copyNotes()}>
                   <Copy size={14} /> {copied ? "Copied" : "Copy all"}
                 </Button>
+                {/* Next to Copy all, because it is the same intention with the
+                    carrying done for you. */}
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setOneNoteOpen(true)}
+                  title="Put these notes at the top of a OneNote page"
+                >
+                  <NotebookPen size={14} /> To OneNote
+                </Button>
                 {/* Regenerating belongs next to what it regenerates — it used
                     to live at the bottom of the capture section above, which
                     is not where anyone looks for it. */}
@@ -1029,6 +1057,16 @@ export function DebriefTab({
           )}
         </div>
       </Modal>
+
+      {/* Handed a reader rather than the text: the notes are edited right up to
+          the moment this is pressed, so anything captured earlier is a snapshot
+          of the wrong version — and reading them here, during render, would
+          mean touching the editor ref mid-render. */}
+      <SendToOneNote
+        open={oneNoteOpen}
+        onClose={() => setOneNoteOpen(false)}
+        getNotes={notesForExport}
+      />
 
       <Modal
         open={findOpen}
