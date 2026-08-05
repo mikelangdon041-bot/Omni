@@ -40,15 +40,34 @@ const BLOCK_TAGS = new Set([
 
 const CONTAINS_BLOCK = "p,div,ul,ol,h1,h2,h3,h4,h5,h6,blockquote,table";
 
-/** Draft HTML plus an optional signature, styled to paste correctly into mail. */
-export function toEmailHtml(bodyHtml: string, signatureHtml = ""): string {
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * Draft HTML plus an optional subject and signature, styled to paste
+ * correctly into mail. A copy can only ever land wherever the cursor is on
+ * paste, and a mail client's Subject box is a separate field from the body —
+ * there is no way for one clipboard write to reach both. Leading with the
+ * subject as its own bold line means it is still there to grab and move,
+ * rather than silently dropped.
+ */
+export function toEmailHtml(bodyHtml: string, signatureHtml = "", subject = ""): string {
   const body = normalizeBlocks(bodyHtml);
   const signature = signatureHtml ? normalizeBlocks(signatureHtml) : "";
   // Same reasoning as the spacers inside each block (see injectSpacers): the
-  // gap has to be a real paragraph, not a margin, or Outlook drops it on the
-  // seam between the piece and the signature too.
-  const gap = body && signature ? `<p style="margin:0;${FONT}">&nbsp;</p>` : "";
-  return `<div style="${FONT}">${body}${gap}${signature}</div>`;
+  // gap has to be a real paragraph, not a margin, or Outlook drops it at the
+  // seam after the subject line and the one before the signature too.
+  const spacer = `<p style="margin:0;${FONT}">&nbsp;</p>`;
+  const subjectLine = subject.trim()
+    ? `<p style="margin:0 0 12px 0;${FONT}"><b>Subject: ${escapeHtml(subject.trim())}</b></p>${spacer}`
+    : "";
+  const gap = body && signature ? spacer : "";
+  return `<div style="${FONT}">${subjectLine}${body}${gap}${signature}</div>`;
 }
 
 /**
@@ -59,18 +78,12 @@ export function toEmailHtml(bodyHtml: string, signatureHtml = ""): string {
  * markup should not be able to put tags into the draft.
  */
 export function plainToHtml(text: string): string {
-  const escape = (s: string) =>
-    s
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
   return (text || "")
     .replace(/\r\n?/g, "\n")
     .split(/\n{2,}/)
     .map((block) => block.trim())
     .filter(Boolean)
-    .map((block) => `<p>${escape(block).replace(/\n/g, "<br>")}</p>`)
+    .map((block) => `<p>${escapeHtml(block).replace(/\n/g, "<br>")}</p>`)
     .join("");
 }
 
@@ -79,10 +92,11 @@ export function plainToHtml(text: string): string {
  * a mailto: body gets. Derived from the same rebuilt markup as the HTML so the
  * two agree about where the blank lines are.
  */
-export function toEmailText(bodyHtml: string, signatureHtml = ""): string {
+export function toEmailText(bodyHtml: string, signatureHtml = "", subject = ""): string {
   const body = htmlToPlain(normalizeBlocks(bodyHtml));
   const signature = signatureHtml ? htmlToPlain(normalizeBlocks(signatureHtml)) : "";
-  return signature ? `${body}\n\n${signature}` : body;
+  const withSignature = signature ? `${body}\n\n${signature}` : body;
+  return subject.trim() ? `Subject: ${subject.trim()}\n\n${withSignature}` : withSignature;
 }
 
 /**

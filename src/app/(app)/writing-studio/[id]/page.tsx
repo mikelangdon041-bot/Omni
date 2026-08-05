@@ -988,8 +988,9 @@ export default function WriterDocPage() {
     // Paragraph spacing has to be inline for Outlook and Gmail to keep it, and
     // the plain-text flavor needs real blank lines between paragraphs.
     const signature = signatureOn ? settings!.signature : "";
-    const html = toEmailHtml(doc.content, signature);
-    const plain = toEmailText(doc.content, signature);
+    const subject = isEmail ? doc.subject : "";
+    const html = toEmailHtml(doc.content, signature, subject);
+    const plain = toEmailText(doc.content, signature, subject);
     try {
       await navigator.clipboard.write([
         new ClipboardItem({
