@@ -130,15 +130,41 @@ export function DebriefTab({
     // is what made the paste land one level indented with stray markup.
     const el = notesRef.current?.querySelector<HTMLElement>('[contenteditable="true"]');
     if (!el) return;
+
+    // Which meeting, and when. A page of notes pasted into OneNote loses every
+    // bit of that the moment it leaves here — the meeting it belongs to is only
+    // obvious while you are still looking at the meeting — and it is the thing
+    // you most want two months later when you are scrolling back through a
+    // section trying to find the one where they said yes.
+    const when = m.date
+      ? new Date(m.date).toLocaleDateString(undefined, {
+          weekday: "long",
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+        })
+      : "";
+    const title = (m.title || "Meeting notes").trim();
+    const escape = (s: string) =>
+      s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    // Inline styles, not a stylesheet: OneNote and Word both drop anything that
+    // arrives on the clipboard as CSS and render the heading as body text.
+    const header =
+      `<p style="margin:0 0 2px 0;font-family:Calibri,Helvetica,Arial,sans-serif;font-size:15pt;font-weight:bold">${escape(title)}</p>` +
+      (when
+        ? `<p style="margin:0 0 12px 0;font-family:Calibri,Helvetica,Arial,sans-serif;font-size:10pt;color:#666">${escape(when)}</p>`
+        : "");
+    const plainHeader = when ? `${title}\n${when}\n\n` : `${title}\n\n`;
+
     try {
       await navigator.clipboard.write([
         new ClipboardItem({
-          "text/html": new Blob([el.innerHTML], { type: "text/html" }),
-          "text/plain": new Blob([el.innerText], { type: "text/plain" }),
+          "text/html": new Blob([header + el.innerHTML], { type: "text/html" }),
+          "text/plain": new Blob([plainHeader + el.innerText], { type: "text/plain" }),
         }),
       ]);
     } catch {
-      await navigator.clipboard.writeText(el.innerText).catch(() => {});
+      await navigator.clipboard.writeText(plainHeader + el.innerText).catch(() => {});
     }
     setCopied(true);
     setTimeout(() => setCopied(false), 1800);
