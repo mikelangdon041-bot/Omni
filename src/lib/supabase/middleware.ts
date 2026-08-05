@@ -2,8 +2,20 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { REMEMBER_COOKIE } from "@/lib/auth";
 
-// Public routes that never require a session.
-const PUBLIC_PATHS = ["/login", "/register"];
+// The sign-in pages. No session needed to reach them, and a signed-in user has
+// no business on them — they get sent home.
+const AUTH_PATHS = ["/login", "/register"];
+
+// Open to everyone, signed in or not, and never redirected either way.
+//
+// The Outlook add-in lives here and needs both halves of that. Outlook fetches
+// the manifest from its own servers with no cookies at all, so a manifest that
+// 307s to /login is a manifest Outlook cannot read — "add from URL" fails, and
+// so does the ribbon button, because the pane it points at answers the same
+// way. And the pane itself has to be allowed to render its own sign-in prompt:
+// bouncing it to /login puts a full login page inside a 400px panel whose
+// post-login redirect goes to the dashboard, with no way back to the add-in.
+const OPEN_PATHS = ["/outlook"];
 
 // The proxy already pays for one `getUser()` on every request. It forwards the
 // verified id on this request header so server components don't have to make
@@ -58,15 +70,16 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const path = request.nextUrl.pathname;
-  const isPublic = PUBLIC_PATHS.some((p) => path.startsWith(p));
+  const isAuthPage = AUTH_PATHS.some((p) => path.startsWith(p));
+  const isOpen = isAuthPage || OPEN_PATHS.some((p) => path.startsWith(p));
 
-  if (!user && !isPublic) {
+  if (!user && !isOpen) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);
   }
 
-  if (user && isPublic) {
+  if (user && isAuthPage) {
     const url = request.nextUrl.clone();
     url.pathname = "/";
     return NextResponse.redirect(url);

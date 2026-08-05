@@ -26,28 +26,52 @@ one place.
 The pane is served from the Omni deployment, so there is nothing to host — you
 only need to tell Outlook where it is. Once, per person.
 
-### Outlook on the web, or new Outlook for Windows
+Outlook goes to **Get Add-ins → My add-ins → Add a custom add-in**, and offers
+either **Add from file** or **Add from URL**. Take whichever it gives you; they
+carry the same manifest, and the file is not a lesser version of the URL —
+Outlook reads either one once, to learn where the pane lives.
 
-1. Open Outlook and go to **Settings → Mail → General → Manage add-ins**
-   (or **Get Add-ins** on the ribbon).
-2. Choose **My add-ins → Add a custom add-in → Add from URL**.
-3. Paste:
-   `https://omni-nine-navy.vercel.app/outlook/manifest.xml`
-4. Accept the warning about a custom add-in. That warning is about the add-in
-   not coming from Microsoft's store; it's yours.
+**Add from file.** Microsoft has been removing the URL option from several of
+these dialogs, so this is increasingly the only one on offer. Save the manifest
+somewhere your file picker will land on — Downloads is fine — and point Outlook
+at it:
 
-### Classic Outlook for Windows
+```text
+https://omni-nine-navy.vercel.app/outlook/manifest.xml   → Save as…
+```
 
-Same flow: **File → Manage Add-ins**, which opens the web page above. Custom
-add-ins installed there show up in the desktop client too, usually within a few
-minutes.
+or take it straight out of this repo, at `public/outlook/manifest.xml`.
+
+**Add from URL.** Paste the same address:
+
+```text
+https://omni-nine-navy.vercel.app/outlook/manifest.xml
+```
+
+Either way, accept the warning about a custom add-in — that warning is about it
+not coming from Microsoft's store. It's yours.
+
+Classic Outlook for Windows uses the same dialog (**File → Manage Add-ins**,
+which opens the web page above). Add-ins installed there show up in the desktop
+client too, usually within a few minutes.
 
 ### If your tenant blocks custom add-ins
 
-Some organisations turn off user-installed add-ins. Then an admin has to deploy
-it from the Microsoft 365 admin center (**Settings → Integrated apps → Upload
-custom apps**), pointing at the same manifest URL. Ask them for
-"Integrated apps, upload custom app, manifest URL"; it takes them a minute.
+Some organisations turn off user-installed add-ins. You'll know because the
+upload itself is refused, not because an option is missing. Then an admin
+deploys it from the Microsoft 365 admin center (**Settings → Integrated apps →
+Upload custom apps**), from the same file or URL. Ask them for "integrated apps,
+upload custom app"; it takes them a minute.
+
+### The manifest has to be reachable without signing in
+
+Outlook fetches it from its own servers, with none of your cookies. The rest of
+Omni redirects a request with no session to `/login`, and a manifest that
+redirects is a manifest Outlook cannot read — so `/outlook` is exempt from that
+gate, both the manifest and the pane. The pane is exempt for the same reason
+from the other side: sending it to `/login` would put a full login page inside a
+400px panel whose post-login redirect goes to the dashboard, with no way back.
+It renders its own sign-in prompt instead.
 
 ## Signing in
 

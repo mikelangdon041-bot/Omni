@@ -213,15 +213,24 @@ export default function OutlookPage() {
           <div className="rounded-xl border border-border bg-surface p-3 text-xs">
             <p className="font-medium">Sign in to Omni first.</p>
             <p className="mt-1 leading-relaxed text-muted">
-              This pane runs on your Omni account. Sign in once and Outlook
-              remembers it.
+              Once, in this panel. Outlook keeps its own browser, so signing in
+              on another tab doesn&apos;t count here.
             </p>
+            {/* In place, not a new tab: on Outlook for Windows this pane runs in
+                its own WebView with its own cookies, so a session created
+                anywhere else never reaches it. */}
             <button
-              onClick={() => window.open("/writing-studio", "_blank", "noopener")}
+              onClick={() => {
+                window.location.href = "/login";
+              }}
               className="mt-2 rounded-lg bg-[var(--accent)] px-3 py-1.5 text-xs font-semibold text-white"
             >
-              Open Omni to sign in
+              Sign in
             </button>
+            <p className="mt-2 leading-relaxed text-muted">
+              Then press <strong className="font-semibold text-ink">Answer this</strong>{" "}
+              on the ribbon again — that&apos;s the last time you&apos;ll have to.
+            </p>
           </div>
         )}
 
