@@ -7,6 +7,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   CheckSquare,
+  ChevronDown,
+  ChevronRight,
   ClipboardPaste,
   PenLine,
   Plus,
@@ -66,6 +68,16 @@ export default function WritingStudioPage() {
   const [tagFilter, setTagFilter] = useState<string>("all");
   const [selected, setSelected] = useState<string[]>([]);
   const [selecting, setSelecting] = useState(false);
+  const [groupBy, setGroupBy] = useState<"date" | "tag">("date");
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  function toggleCollapsed(label: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      return next;
+    });
+  }
   // The Windows recorder's Ctrl+Shift+W picker has no brief box of its own —
   // it asks what you're writing, then sends you here with `?type=` to do the
   // actual typing, on the one intake box that already knows how to extract
@@ -104,7 +116,24 @@ export default function WritingStudioPage() {
 
   // Docs arrive newest-first, so walking them in order yields date buckets in
   // order too — no sorting needed, just a header whenever the bucket changes.
+  // Grouping by tag instead pulls everything on the same topic together
+  // regardless of when it was touched, using the first tag on each piece —
+  // a doc with several tags only needs to live in one pile, and the first is
+  // the one the user put there first.
   const groups = useMemo(() => {
+    if (groupBy === "tag") {
+      const byTag = new Map<string, WriterDoc[]>();
+      for (const d of filtered) {
+        const label = d.tags[0] || "Untagged";
+        const arr = byTag.get(label);
+        if (arr) arr.push(d);
+        else byTag.set(label, [d]);
+      }
+      const labels = [...byTag.keys()].sort((a, b) =>
+        a === "Untagged" ? 1 : b === "Untagged" ? -1 : a.localeCompare(b),
+      );
+      return labels.map((label) => ({ label, docs: byTag.get(label)! }));
+    }
     const out: { label: string; docs: WriterDoc[] }[] = [];
     for (const d of filtered) {
       const label = dateGroup(d.updated_at);
@@ -113,7 +142,7 @@ export default function WritingStudioPage() {
       else out.push({ label, docs: [d] });
     }
     return out;
-  }, [filtered]);
+  }, [filtered, groupBy]);
 
   function toggleSelected(id: string) {
     setSelected((prev) =>
@@ -261,6 +290,23 @@ export default function WritingStudioPage() {
             ))}
           </Select>
         )}
+        {allTags.length > 0 && (
+          <div className="flex items-center gap-0.5 self-start rounded-lg border border-border p-0.5 text-xs font-medium">
+            {(["date", "tag"] as const).map((g) => (
+              <button
+                key={g}
+                onClick={() => setGroupBy(g)}
+                className={`rounded-md px-2.5 py-1 capitalize transition ${
+                  groupBy === g
+                    ? "bg-[var(--accent-soft)] text-[var(--accent)]"
+                    : "text-muted hover:text-ink"
+                }`}
+              >
+                {g === "date" ? "By date" : "By tag"}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Select mode: pick several, delete them in one go. */}
@@ -327,15 +373,26 @@ export default function WritingStudioPage() {
         />
       ) : (
         <div className="space-y-6">
-          {groups.map((group) => (
+          {groups.map((group) => {
+            const isCollapsed = collapsed.has(group.label);
+            return (
             <section key={group.label}>
-              <div className="mb-2 flex items-center gap-2">
+              <button
+                onClick={() => toggleCollapsed(group.label)}
+                className="mb-2 flex w-full items-center gap-2 text-left"
+              >
+                {isCollapsed ? (
+                  <ChevronRight size={14} className="text-muted" />
+                ) : (
+                  <ChevronDown size={14} className="text-muted" />
+                )}
                 <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">
                   {group.label}
                 </h2>
                 <span className="text-[11px] text-muted">{group.docs.length}</span>
                 <span className="h-px flex-1 bg-border" />
-              </div>
+              </button>
+              {!isCollapsed && (
               <ul className="grid gap-3 sm:grid-cols-2">
                 {group.docs.map((d) => {
                   const picked = selected.includes(d.id);
@@ -423,8 +480,10 @@ export default function WritingStudioPage() {
                   );
                 })}
               </ul>
+              )}
             </section>
-          ))}
+            );
+          })}
         </div>
       )}
 

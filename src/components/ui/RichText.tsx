@@ -309,11 +309,14 @@ export function RichText({
       setMenu(null);
     }
     if (e.key === "Tab") { e.preventDefault(); exec(e.shiftKey ? "outdent" : "indent"); }
-    // Enter: keep the browser default inside lists (new bullet), but insert
-    // an explicit line break elsewhere — default block insertion is
-    // unreliable in contenteditable across browsers and could swallow the
-    // carriage return entirely.
-    if (e.key === "Enter" && !e.shiftKey) {
+    // Enter: keep the browser default inside lists (new bullet). Elsewhere,
+    // insert explicit <br>s rather than trusting the browser's own paragraph
+    // insertion, which is unreliable in contenteditable across browsers and
+    // could swallow the carriage return entirely. Plain Enter inserts two —
+    // a blank line, so it reads as a new paragraph on screen and matches the
+    // "two <br>s = paragraph break" rule the copy-out logic uses (clipboard.ts)
+    // — while Shift+Enter inserts one, a soft break within the paragraph.
+    if (e.key === "Enter") {
       let node: Node | null = window.getSelection()?.anchorNode ?? null;
       let inList = false;
       while (node && node !== ref.current) {
@@ -322,8 +325,7 @@ export function RichText({
       }
       if (!inList) {
         e.preventDefault();
-        const ok = document.execCommand("insertLineBreak");
-        if (!ok) document.execCommand("insertHTML", false, "<br>");
+        document.execCommand("insertHTML", false, e.shiftKey ? "<br>" : "<br><br>");
         emit();
       }
     }

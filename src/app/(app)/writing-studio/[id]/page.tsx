@@ -485,7 +485,7 @@ export default function WriterDocPage() {
       <div className="py-16 text-center">
         <p className="text-sm text-muted">This piece was deleted.</p>
         <div className="mt-3 flex justify-center">
-          <BackButton label="Back to Writing Studio" />
+          <BackButton label="Back to Writing Studio" href="/writing-studio" />
         </div>
       </div>
     );
@@ -1021,7 +1021,7 @@ export default function WriterDocPage() {
   return (
     <>
       <div className="mb-4 flex items-center gap-3">
-        <BackButton label="Writing Studio" />
+        <BackButton label="Writing Studio" href="/writing-studio" />
         {/* The type is changeable here, not just at creation. It decides
             whether there's a subject line and a signature and what shape the AI
             writes, so being locked into the choice you made before you'd
