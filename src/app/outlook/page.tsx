@@ -65,7 +65,11 @@ interface ReadEmail {
   subject: string;
   from: string;
   body: string;
-  /** Compose mode: they are writing, not reading. Different job. */
+  /**
+   * Office says this is a draft rather than something received. Used to word
+   * the page, and for nothing else — see the note on the render below about why
+   * this must never decide which controls exist.
+   */
   composing: boolean;
 }
 
@@ -94,22 +98,33 @@ export default function OutlookPage() {
       return;
     }
     // Compose items report their subject through an async accessor; read items
-    // expose it as a plain string. The distinction is also how we tell which of
-    // the two jobs this pane is here to do.
-    const composing = typeof item.subject === "object" && item.subject !== null;
+    // expose it as a plain string. Both shapes are handled because both turn up
+    // — but the answer only changes the wording, never which controls exist.
+    const subjectField = item.subject;
+    const composing = typeof subjectField === "object" && subjectField !== null;
     const who =
       item.from?.displayName ||
       item.from?.emailAddress ||
       item.sender?.displayName ||
       item.sender?.emailAddress ||
       "";
-    const subject = typeof item.subject === "string" ? item.subject : "";
 
-    item.body.getAsync(Office.CoercionType.Text, (result) => {
-      const body =
-        result.status === Office.AsyncResultStatus.Succeeded ? result.value || "" : "";
-      setEmail({ subject, from: who, body: body.slice(0, 40000), composing });
-    });
+    const finish = (subject: string) =>
+      item.body.getAsync(Office.CoercionType.Text, (result) => {
+        const body =
+          result.status === Office.AsyncResultStatus.Succeeded ? result.value || "" : "";
+        setEmail({ subject, from: who, body: body.slice(0, 40000), composing });
+      });
+
+    if (typeof subjectField === "string") finish(subjectField);
+    else if (composing)
+      // A draft's subject has to be asked for. Reading the body regardless of
+      // how that goes: in a reply the body already holds the thread being
+      // answered, which is the part that matters here.
+      subjectField.getAsync((r) =>
+        finish(r.status === Office.AsyncResultStatus.Succeeded ? r.value || "" : ""),
+      );
+    else finish("");
   }, []);
 
   useEffect(() => {
@@ -205,7 +220,7 @@ export default function OutlookPage() {
             Writing Studio
           </p>
           <h1 className="text-base font-semibold">
-            {email?.composing ? "Drop a piece in" : "Answer this one"}
+            {email?.composing ? "This draft" : "Answer this one"}
           </h1>
         </header>
 
@@ -251,12 +266,17 @@ export default function OutlookPage() {
           </p>
         )}
 
-        {/* Reading an email: the reply path. */}
-        {userId && email && !email.composing && (
+        {/* Both jobs, always, for whichever of the two you came here to do.
+            This used to be an either/or keyed off the read-vs-compose guess,
+            and when the guess went the wrong way it left a list of old pieces
+            and no box to type in — no way to ask for anything, and nothing on
+            screen explaining why. A guess about which button you pressed is not
+            worth a dead end, so it now only changes the wording. */}
+        {userId && email && (
           <>
             <div className="rounded-xl border border-border bg-surface p-3">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-                What I&apos;m answering
+                {email.composing ? "What I can see" : "What I'm answering"}
               </p>
               <p className="mt-1 truncate text-xs font-medium">
                 {email.subject || "(no subject)"}
@@ -300,47 +320,47 @@ export default function OutlookPage() {
             </button>
             <p className="text-[11px] leading-snug text-muted">
               Opens in your browser with the email already in. When it reads
-              right, come back to your Outlook reply and this pane will drop it
-              in for you.
+              right, come back to your Outlook reply and drop it in below.
             </p>
-          </>
-        )}
 
-        {/* Composing: the delivery path. */}
-        {userId && email?.composing && (
-          <>
-            <p className="text-[11px] leading-relaxed text-muted">
-              Put the cursor where it should go, then pick the piece. It arrives
-              formatted, with your signature.
-            </p>
-            {inserted && (
-              <p className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
-                Dropped in.
-              </p>
-            )}
-            {recent.length === 0 ? (
-              <p className="rounded-xl border border-dashed border-border bg-canvas p-3 text-xs text-muted">
-                Nothing written yet. Open this pane on the email you want to
-                answer and start there.
-              </p>
-            ) : (
-              <ul className="space-y-1.5">
-                {recent.map((d) => (
-                  <li key={d.id}>
-                    <button
-                      onClick={() => insertIntoReply(d)}
-                      className="w-full rounded-lg border border-border bg-surface p-2.5 text-left transition hover:border-[var(--accent)]"
-                    >
-                      <span className="block truncate text-xs font-medium">
-                        {d.title || d.subject || "Untitled"}
-                      </span>
-                      <span className="mt-0.5 block line-clamp-2 text-[11px] leading-snug text-muted">
-                        {htmlToPlain(d.content)}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
+            {/* The other half of the loop, always in reach. Inserting only
+                works in a draft — Outlook has nowhere to put text in a message
+                you are only reading — so a failure here is reported rather than
+                pre-empted by hiding the list. */}
+            {recent.length > 0 && (
+              <details className="rounded-xl border border-border bg-surface">
+                <summary className="cursor-pointer list-none p-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                  Already written it? Drop one in ▾
+                </summary>
+                <div className="space-y-1.5 px-2.5 pb-2.5">
+                  <p className="text-[11px] leading-relaxed text-muted">
+                    Put the cursor in your reply where it should go, then pick
+                    one. It arrives formatted, with your signature.
+                  </p>
+                  {inserted && (
+                    <p className="rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700">
+                      Dropped in.
+                    </p>
+                  )}
+                  <ul className="space-y-1.5">
+                    {recent.map((d) => (
+                      <li key={d.id}>
+                        <button
+                          onClick={() => insertIntoReply(d)}
+                          className="w-full rounded-lg border border-border bg-canvas p-2.5 text-left transition hover:border-[var(--accent)]"
+                        >
+                          <span className="block truncate text-xs font-medium">
+                            {d.title || d.subject || "Untitled"}
+                          </span>
+                          <span className="mt-0.5 block line-clamp-2 text-[11px] leading-snug text-muted">
+                            {htmlToPlain(d.content)}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </details>
             )}
           </>
         )}
