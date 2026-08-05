@@ -153,10 +153,39 @@ export default function WriterDocPage() {
   const [isReplyPaste, setIsReplyPaste] = useState(
     () => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("reply") === "1",
   );
+  // Handed over by something that already collected everything — the Outlook
+  // add-in, which has the email and your instructions before you ever get here.
+  // Landing on a filled-in form with a Generate button would be asking you to
+  // confirm a decision you already made, twice, in two windows.
+  const [autoGenerate] = useState(
+    () => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("go") === "1",
+  );
+  const autoFired = useRef(false);
+
   useEffect(() => {
-    if (!isNewFromLauncher && !isReplyPaste) return;
+    if (!isNewFromLauncher && !isReplyPaste && !autoGenerate) return;
     window.history.replaceState(null, "", window.location.pathname);
-  }, [isNewFromLauncher, isReplyPaste]);
+  }, [isNewFromLauncher, isReplyPaste, autoGenerate]);
+
+  useEffect(() => {
+    if (!autoGenerate || autoFired.current || !doc) return;
+    // Never over the top of a finished piece: reopening the tab, or a stray
+    // refresh, must not quietly throw away what is already there.
+    if (doc.content.trim()) return;
+    const ready =
+      htmlToPlain(doc.original).trim() || htmlToPlain(doc.context.brief).trim();
+    if (!ready) return;
+    autoFired.current = true;
+    // `generate` is declared further down, past the early return that no hook
+    // can live after. It is a function declaration, so the binding exists for
+    // the whole component body and is live by the time an effect runs — the
+    // complaint is about textual order, not about reading a stale closure.
+    // eslint-disable-next-line react-hooks/immutability
+    void generate();
+    // `generate` is redefined every render, so listing it would refire this on
+    // each one; the ref is what makes it once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoGenerate, doc]);
 
   const [busy, setBusy] = useState(false);
   const [researching, setResearching] = useState(false);

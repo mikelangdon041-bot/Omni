@@ -17,14 +17,27 @@
 // lives. Everything here is intake and delivery.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import Script from "next/script";
 import { plainToHtml, toEmailHtml } from "@/lib/writer/clipboard";
+import { ChipGroup } from "@/components/writer/Chips";
 import {
   useUserId,
   useWriterDocs,
   useWriterSettings,
+  useWriterStyles,
 } from "@/lib/writer/hooks";
-import { emptyContext, htmlToPlain, type WriterDoc } from "@/lib/writer/types";
+import {
+  AUDIENCE_CHIPS,
+  FIDELITY_OPTIONS,
+  LENGTHS,
+  TONE_CHIPS,
+  chipOptions,
+  emptyContext,
+  htmlToPlain,
+  type Fidelity,
+  type WriterDoc,
+} from "@/lib/writer/types";
 
 // The Office.js surface this uses, typed to what it touches. The real library
 // is loaded from Microsoft's CDN at runtime (Office refuses to host it
@@ -78,6 +91,8 @@ export default function OutlookPage() {
   const { docs, add } = useWriterDocs(userId);
   const { settings } = useWriterSettings(userId);
 
+  const { styles } = useWriterStyles(userId);
+
   const [officeReady, setOfficeReady] = useState(false);
   const [outsideOutlook, setOutsideOutlook] = useState(false);
   const [email, setEmail] = useState<ReadEmail | null>(null);
@@ -85,6 +100,22 @@ export default function OutlookPage() {
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
   const [inserted, setInserted] = useState(false);
+
+  // The same dials as the workspace, because the whole promise here is that you
+  // never have to go to the workspace to set them. Answering something you were
+  // sent is writing from scratch, so "Write it" is the honest default — the
+  // other modes only start meaning something once the draft in front of you is
+  // partly yours.
+  const [fidelity, setFidelity] = useState<Fidelity>("draft");
+  const [tone, setTone] = useState<string[]>([]);
+  const [audience, setAudience] = useState<string[]>([]);
+  const [length, setLength] = useState("as_is");
+  const [styleIds, setStyleIds] = useState<string[]>([]);
+  // Derived rather than set: flipping a "reading" flag on in the effect body is
+  // a synchronous setState inside an effect, which is a cascading render for a
+  // spinner. The read is under way from the moment there is an email to read.
+  const [extractDone, setExtractDone] = useState(false);
+  const [autoFilled, setAutoFilled] = useState<string[]>([]);
 
   // Office.onReady fires once and only once per pane load. Guarded because
   // next/script can re-run onLoad across a fast-refresh in development.
@@ -133,6 +164,55 @@ export default function OutlookPage() {
     window.Office?.onReady(() => readOpenItem());
   }, [officeReady, readOpenItem]);
 
+  // Read the dials off the email itself. Who it is from and how it is written
+  // already answer most of "what tone, what audience" — asking you to pick them
+  // by hand for a message the add-in is looking at would be asking you to type
+  // out something it can see. Guesses, so they are flagged as guesses and one
+  // tap moves any of them.
+  const extracted = useRef(false);
+  useEffect(() => {
+    if (!email || !userId || extracted.current) return;
+    if (!email.body.trim() && !email.subject.trim()) return;
+    extracted.current = true;
+    void (async () => {
+      try {
+        const res = await fetch("/api/writer/ai", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            action: "extract",
+            docType: "email",
+            brief: `${email.subject}\nFrom: ${email.from}\n\n${email.body}`.slice(0, 20000),
+          }),
+        });
+        const { extracted: ex } = await res.json();
+        if (!res.ok || !ex) return;
+        const filled: string[] = [];
+        if (Array.isArray(ex.tone) && ex.tone.length) {
+          setTone(ex.tone);
+          filled.push("tone");
+        }
+        if (Array.isArray(ex.audience) && ex.audience.length) {
+          setAudience(ex.audience);
+          filled.push("audience");
+        }
+        if (ex.length && LENGTHS.some((l) => l.key === ex.length) && ex.length !== "as_is") {
+          setLength(String(ex.length));
+          filled.push("length");
+        }
+        setAutoFilled(filled);
+      } catch {
+        // A failed guess is not worth a message: every dial has a usable
+        // default and you were going to check them anyway.
+      } finally {
+        setExtractDone(true);
+      }
+    })();
+  }, [email, userId]);
+
+  const reading = !!email && !!userId && !extractDone;
+
   // Hand the email to Writing Studio as a normal piece and open the workspace.
   // The email goes in the draft box (it is source material, the thing being
   // answered) and the note goes in the instructions box, which is exactly the
@@ -159,7 +239,11 @@ export default function OutlookPage() {
           // Source material plus an instruction, not a draft of theirs to
           // preserve — so the AI writes the reply rather than proofreading the
           // email it was sent.
-          fidelity: "draft",
+          fidelity,
+          tone,
+          audience,
+          length,
+          styleIds,
           recipient: email.from,
           brief: plainToHtml(
             note.trim()
@@ -169,7 +253,10 @@ export default function OutlookPage() {
         },
       });
       if (!doc) throw new Error("Couldn't create the piece");
-      window.open(`/writing-studio/${doc.id}`, "_blank", "noopener");
+      // `go=1` writes it on arrival. Everything the workspace would have asked
+      // for was answered here, so landing on a filled-in form with a Generate
+      // button would be asking for the same decision twice, in two windows.
+      window.open(`/writing-studio/${doc.id}?go=1`, "_blank", "noopener");
     } catch (e) {
       setError((e as Error).message || "That didn't work");
     } finally {
@@ -253,9 +340,9 @@ export default function OutlookPage() {
           <p className="rounded-xl border border-dashed border-border bg-canvas p-3 text-xs leading-relaxed text-muted">
             This page is the Outlook add-in — it only has an email to read when
             it&apos;s open inside Outlook. Use{" "}
-            <a className="font-medium text-[var(--accent)]" href="/writing-studio">
+            <Link className="font-medium text-[var(--accent)]" href="/writing-studio">
               Writing Studio
-            </a>{" "}
+            </Link>{" "}
             directly in the browser.
           </p>
         )}
@@ -311,16 +398,87 @@ export default function OutlookPage() {
               </p>
             </div>
 
+            {/* Everything the workspace would ask, asked here instead — the
+                point of the pane is that you never have to go there to set a
+                dial. Folded away because the defaults are usually right and an
+                open accordion of chips in a 400px panel buries the one box that
+                matters. */}
+            <details className="rounded-xl border border-border bg-surface">
+              <summary className="cursor-pointer list-none p-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                How it should read ▾
+                {reading ? (
+                  <span className="ml-1 font-normal normal-case">reading it…</span>
+                ) : autoFilled.length > 0 ? (
+                  <span className="ml-1 font-normal normal-case text-[var(--accent)]">
+                    {autoFilled.join(", ")} filled in — check me
+                  </span>
+                ) : null}
+              </summary>
+              <div className="space-y-2.5 px-2.5 pb-2.5">
+                <ChipGroup
+                  label="How much to write"
+                  options={FIDELITY_OPTIONS.map((f) => ({ key: f.key, label: f.label }))}
+                  selected={[fidelity]}
+                  single
+                  onToggle={(k) => setFidelity(k as Fidelity)}
+                />
+                <ChipGroup
+                  label="Tone"
+                  options={chipOptions(TONE_CHIPS)}
+                  selected={tone}
+                  hue="sky"
+                  onToggle={(k) =>
+                    setTone((p) => (p.includes(k) ? p.filter((t) => t !== k) : [...p, k]))
+                  }
+                />
+                <ChipGroup
+                  label="Audience"
+                  options={chipOptions(AUDIENCE_CHIPS)}
+                  selected={audience}
+                  hue="violet"
+                  onToggle={(k) =>
+                    setAudience((p) =>
+                      p.includes(k) ? p.filter((a) => a !== k) : [...p, k],
+                    )
+                  }
+                />
+                <ChipGroup
+                  label="Length"
+                  options={LENGTHS}
+                  selected={[length]}
+                  single
+                  hue="amber"
+                  onToggle={setLength}
+                />
+                {styles.length > 0 && (
+                  <ChipGroup
+                    label="Your styles & voices"
+                    options={styles.map((s) => ({
+                      key: s.id,
+                      label: `${s.kind === "voice" ? "🎙️" : "📐"} ${s.name}`,
+                    }))}
+                    selected={styleIds}
+                    hue="teal"
+                    onToggle={(k) =>
+                      setStyleIds((p) =>
+                        p.includes(k) ? p.filter((s) => s !== k) : [...p, k],
+                      )
+                    }
+                  />
+                )}
+              </div>
+            </details>
+
             <button
               onClick={startReply}
               disabled={working}
               className="w-full rounded-lg bg-[var(--accent)] px-3 py-2.5 text-xs font-semibold text-white transition hover:opacity-90 disabled:opacity-50"
             >
-              {working ? "Setting it up…" : "Write the reply"}
+              {working ? "Writing it…" : "Write the reply"}
             </button>
             <p className="text-[11px] leading-snug text-muted">
-              Opens in your browser with the email already in. When it reads
-              right, come back to your Outlook reply and drop it in below.
+              Opens in your browser and starts writing straight away. When it
+              reads right, come back to your Outlook reply and drop it in below.
             </p>
 
             {/* The other half of the loop, always in reach. Inserting only
