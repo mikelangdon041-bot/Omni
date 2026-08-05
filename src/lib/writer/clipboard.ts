@@ -44,7 +44,11 @@ const CONTAINS_BLOCK = "p,div,ul,ol,h1,h2,h3,h4,h5,h6,blockquote,table";
 export function toEmailHtml(bodyHtml: string, signatureHtml = ""): string {
   const body = normalizeBlocks(bodyHtml);
   const signature = signatureHtml ? normalizeBlocks(signatureHtml) : "";
-  return `<div style="${FONT}">${body}${signature}</div>`;
+  // Same reasoning as the spacers inside each block (see injectSpacers): the
+  // gap has to be a real paragraph, not a margin, or Outlook drops it on the
+  // seam between the piece and the signature too.
+  const gap = body && signature ? `<p style="margin:0;${FONT}">&nbsp;</p>` : "";
+  return `<div style="${FONT}">${body}${gap}${signature}</div>`;
 }
 
 /**
@@ -97,8 +101,33 @@ function normalizeBlocks(html: string): string {
   wrapLooseInlines(root, doc);
   for (const el of Array.from(root.querySelectorAll("p,div,h1,h2,h3,h4,h5,h6")))
     splitOnBlankLines(el);
+  injectSpacers(root, doc);
   applyInlineStyles(root);
   return root.innerHTML;
+}
+
+/**
+ * Outlook's paste engine is Word, and Word regularly discards margin/padding
+ * on pasted <p> tags in favor of its own Normal style — the gap this file
+ * spends so much effort giving every block (BLOCK_MARGIN, above) survives
+ * plenty of destinations but not that one. A literal blank paragraph between
+ * blocks survives everywhere, because there is no styling for a client to
+ * ignore: the line is really there. Lists are skipped — a bullet list already
+ * reads as separate from what precedes it, and a blank line before one looks
+ * like a mistake rather than a paragraph break.
+ */
+function injectSpacers(root: HTMLElement, doc: Document) {
+  const children = Array.from(root.children);
+  for (let i = children.length - 1; i > 0; i--) {
+    const prev = children[i - 1];
+    const cur = children[i];
+    if (isList(prev) || isList(cur)) continue;
+    cur.before(doc.createElement("p"));
+  }
+}
+
+function isList(el: Element): boolean {
+  return el.tagName === "UL" || el.tagName === "OL";
 }
 
 /** Does this node put anything on the page? A lone <br> or stray space doesn't. */

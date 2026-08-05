@@ -76,6 +76,7 @@ export function RichText({
   minHeight = "min-h-28",
   onFiles,
   autoFocus = false,
+  onCopy,
 }: {
   value: string;
   onChange: (html: string) => void;
@@ -85,6 +86,14 @@ export function RichText({
   onFiles?: (files: File[]) => void;
   /** Put the caret in here on mount and scroll it into view. */
   autoFocus?: boolean;
+  /**
+   * Override what a native Ctrl+C puts on the clipboard. Without this, a
+   * manual selection copies the DOM as this editor renders it — the app's
+   * own styling, not a mail-safe one — while a "Copy" button elsewhere on the
+   * page can run the same content through real formatting first. Both should
+   * produce the same paste.
+   */
+  onCopy?: (e: React.ClipboardEvent<HTMLDivElement>) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const composing = useRef(false);
@@ -390,6 +399,7 @@ export function RichText({
           onInput={onInput}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
+          onCopy={onCopy}
           spellCheck
           onContextMenu={(e) => {
             // Right-click is where people look for "make this a link", so the

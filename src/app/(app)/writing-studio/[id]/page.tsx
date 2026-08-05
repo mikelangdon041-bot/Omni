@@ -1764,6 +1764,22 @@ export default function WriterDocPage() {
                     value={doc.content}
                     onChange={(html) => save({ content: html })}
                     minHeight="min-h-64"
+                    onCopy={(e) => {
+                      // A manual Ctrl+C here would otherwise put this editor's
+                      // own on-screen HTML on the clipboard — no margins built
+                      // for mail, none of the paragraph-spacer work the "Copy"
+                      // button gets from toEmailHtml. Running the actual
+                      // selection through the same pipeline means it doesn't
+                      // matter which way you copied.
+                      const selection = window.getSelection();
+                      if (!selection || selection.rangeCount === 0 || selection.isCollapsed)
+                        return;
+                      const container = document.createElement("div");
+                      container.appendChild(selection.getRangeAt(0).cloneContents());
+                      e.preventDefault();
+                      e.clipboardData.setData("text/html", toEmailHtml(container.innerHTML));
+                      e.clipboardData.setData("text/plain", toEmailText(container.innerHTML));
+                    }}
                   />
                 ) : (
                   <div className="grid place-items-center rounded-lg border border-dashed border-[var(--accent)]/40 bg-[var(--accent-soft)]/20 py-16 text-center">
