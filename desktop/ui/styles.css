@@ -361,6 +361,46 @@ kbd {
   border-radius: 5px;
 }
 
+/* The way in that isn't a document type: full width, above the grid, tinted so
+   it reads as the shortcut rather than as one more equal choice. */
+.reply-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin-bottom: 10px;
+  padding: 12px 12px;
+  text-align: left;
+  color: var(--ink);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  transition: background 0.12s, transform 0.12s;
+}
+
+.reply-btn:hover {
+  background: var(--surface);
+  transform: translateY(-1px);
+}
+
+.reply-btn > span:first-child {
+  font-size: 18px;
+}
+
+.reply-btn strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.reply-btn em {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  font-style: normal;
+  color: var(--muted);
+}
+
 .type-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

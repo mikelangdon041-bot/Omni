@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   CheckSquare,
+  ClipboardPaste,
   PenLine,
   Plus,
   Search,
@@ -33,6 +34,7 @@ import {
   dateGroup,
   docTypeEmoji,
   docTypeLabel,
+  emptyContext,
   htmlToPlain,
   type DocType,
   type WriterDoc,
@@ -69,12 +71,16 @@ export default function WritingStudioPage() {
   // actual typing, on the one intake box that already knows how to extract
   // from a paste and autosave. Reading it once, off the URL rather than
   // useSearchParams, keeps this page free of a Suspense boundary.
+  // `?reply=1` is the same handoff for the other tile: an email is already
+  // copied and the piece should open ready to take it.
   const launcherHandled = useRef(false);
-  const [openingFromLauncher] = useState(
-    () =>
-      typeof window !== "undefined" &&
-      DOC_TYPES.some((t) => t.key === new URLSearchParams(window.location.search).get("type")),
-  );
+  const [openingFromLauncher] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const params = new URLSearchParams(window.location.search);
+    return (
+      params.get("reply") === "1" || DOC_TYPES.some((t) => t.key === params.get("type"))
+    );
+  });
 
   const allTags = useMemo(
     () => [...new Set(docs.flatMap((d) => d.tags))].sort((a, b) => a.localeCompare(b)),
@@ -143,11 +149,31 @@ export default function WritingStudioPage() {
     if (doc) router.push(`/writing-studio/${doc.id}${focus ? "?new=1" : ""}`);
   }
 
+  // "Reply to this": there is already an email on the clipboard, so the piece is
+  // seeded knowing what it is — an email, written from source material rather
+  // than polished from a draft of theirs — and the workspace opens offering to
+  // take the clipboard rather than waiting to be pasted into.
+  async function createReply() {
+    const doc = await add({
+      doc_type: "email",
+      mode: "create",
+      context: { ...emptyContext(), fidelity: "draft" },
+    });
+    if (doc) router.push(`/writing-studio/${doc.id}?reply=1`);
+  }
+
   // Arrived via the desktop app's picker: skip the modal, skip the library,
   // go straight to a fresh piece of the type that was clicked.
   useEffect(() => {
     if (launcherHandled.current || !userId) return;
-    const type = new URLSearchParams(window.location.search).get("type");
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("reply") === "1") {
+      launcherHandled.current = true;
+      window.history.replaceState(null, "", window.location.pathname);
+      void createReply();
+      return;
+    }
+    const type = params.get("type");
     if (!type || !DOC_TYPES.some((t) => t.key === type)) return;
     launcherHandled.current = true;
     window.history.replaceState(null, "", window.location.pathname);
@@ -402,8 +428,15 @@ export default function WritingStudioPage() {
         </div>
       )}
 
-      {/* New piece: type + mode */}
-      <NewPieceModal open={showNew} onClose={() => setShowNew(false)} onCreate={createDoc} />
+      {/* New piece: pick what it is. Mounted only while it's open, so it never
+          reopens still showing the last click's "Opening…". */}
+      {showNew && (
+        <NewPieceModal
+          onClose={() => setShowNew(false)}
+          onCreate={createDoc}
+          onReply={createReply}
+        />
+      )}
 
       <SettingsModal
         open={showSettings}
@@ -419,29 +452,69 @@ export default function WritingStudioPage() {
   );
 }
 
+// Pick a type and you're in. There is no default selection and no confirm
+// button: preselecting Email meant the fast path — click Email — was the one
+// that looked like it had already happened, so the eye skipped it and went
+// looking for what to press instead. One click, one decision.
 function NewPieceModal({
-  open,
   onClose,
   onCreate,
+  onReply,
 }: {
-  open: boolean;
   onClose: () => void;
-  onCreate: (t: DocType) => Promise<void>;
+  onCreate: (t: DocType, focus?: boolean) => Promise<void>;
+  onReply: () => Promise<void>;
 }) {
-  const [docType, setDocType] = useState<DocType>("email");
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState<DocType | "reply" | null>(null);
 
   return (
-    <Modal open={open} onClose={onClose} title="What are we writing?">
-      <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
+    <Modal open onClose={onClose} title="What are we writing?">
+      <p className="mb-3 text-xs leading-relaxed text-muted">
+        Pick one and you&apos;re straight into a box. Paste a draft, paste an
+        email you need to answer, or just say what you want — whichever is
+        fastest. I&apos;ll work out the rest.
+      </p>
+      {/* Answering something is the common case and it starts somewhere else —
+          in Outlook, with the email already on the clipboard. It gets its own
+          row rather than a seventh tile, because it is not another kind of
+          thing to write, it is a different way in. */}
+      <button
+        disabled={!!creating}
+        onClick={async () => {
+          setCreating("reply");
+          await onReply();
+        }}
+        className={`mb-3 flex w-full items-center gap-2.5 rounded-xl border p-3 text-left transition disabled:cursor-default ${
+          creating === "reply"
+            ? "border-[var(--accent)] bg-[var(--accent-soft)]/60 shadow-sm"
+            : "border-[var(--accent)]/40 bg-[var(--accent-soft)]/30 hover:-translate-y-0.5 hover:border-[var(--accent)] hover:shadow-md disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-none"
+        }`}
+      >
+        <ClipboardPaste size={18} className="shrink-0 text-[var(--accent)]" />
+        <span>
+          <span className="block text-xs font-semibold text-ink">
+            Reply to something I&apos;ve copied
+          </span>
+          <span className="block text-[11px] leading-snug text-muted">
+            {creating === "reply"
+              ? "Opening…"
+              : "Copy the email first, then say what else I need to know."}
+          </span>
+        </span>
+      </button>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
         {DOC_TYPES.map((t) => (
           <button
             key={t.key}
-            onClick={() => setDocType(t.key)}
-            className={`rounded-xl border p-3 text-left transition ${
-              docType === t.key
+            disabled={!!creating}
+            onClick={async () => {
+              setCreating(t.key);
+              await onCreate(t.key, true);
+            }}
+            className={`rounded-xl border p-3 text-left transition disabled:cursor-default ${
+              creating === t.key
                 ? "border-[var(--accent)] bg-[var(--accent-soft)]/60 shadow-sm"
-                : `border-border ${TYPE_COLORS[t.key]?.edge || ""}`
+                : `border-border ${TYPE_COLORS[t.key]?.edge || ""} hover:-translate-y-0.5 hover:shadow-md disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-none`
             }`}
           >
             <span
@@ -449,25 +522,12 @@ function NewPieceModal({
             >
               {t.emoji} {t.label}
             </span>
-            <p className="text-[11px] leading-snug text-muted">{t.blurb}</p>
+            <p className="text-[11px] leading-snug text-muted">
+              {creating === t.key ? "Opening…" : t.blurb}
+            </p>
           </button>
         ))}
       </div>
-      <p className="mb-3 text-xs leading-relaxed text-muted">
-        Next you&apos;ll get one box. Paste a draft, paste an email you need to
-        answer, or just say what you want — whichever is fastest. I&apos;ll work
-        out the rest.
-      </p>
-      <Button
-        className="w-full"
-        disabled={creating}
-        onClick={async () => {
-          setCreating(true);
-          await onCreate(docType);
-        }}
-      >
-        {creating ? "Opening…" : "Start writing"}
-      </Button>
     </Modal>
   );
 }

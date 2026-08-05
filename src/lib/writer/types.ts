@@ -180,10 +180,14 @@ export const FIDELITY_OPTIONS: { key: Fidelity; label: string; blurb: string }[]
   },
 ];
 
+// What to change about the writing. Length is deliberately NOT in here: it has
+// its own picker below, and having it in both places meant "make it shorter"
+// was two chips in two groups sending two different instructions — the picker's
+// version carries a measured word ceiling, the chip's version did not. One dial
+// per idea. ("Tighten / shorten" and "Expand with more detail" used to live
+// here; prompt.ts still reads them off older pieces, as a length.)
 export const ACTION_CHIPS = [
   "Fix grammar & typos",
-  "Tighten / shorten",
-  "Expand with more detail",
   "More persuasive",
   "Softer / more diplomatic",
   "More direct",
@@ -225,8 +229,6 @@ export const LENGTHS: { key: string; label: string }[] = [
 // decorate the label at render time with chipOptions() instead.
 const CHIP_EMOJI: Record<string, string> = {
   "Fix grammar & typos": "🔤",
-  "Tighten / shorten": "✂️",
-  "Expand with more detail": "➕",
   "More persuasive": "🎯",
   "Softer / more diplomatic": "🕊️",
   "More direct": "➡️",
@@ -324,6 +326,9 @@ export function htmlToPlain(html: string): string {
   return html
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/li>/gi, "\n")
+    // A list opening mid-item is a nested list, and without a break here its
+    // first bullet ran on from the line above it: "• Two• Two a".
+    .replace(/<(?:ul|ol)[^>]*>/gi, "\n")
     .replace(/<\/(p|div|h[1-6])>/gi, "\n\n")
     .replace(/<li[^>]*>/gi, "• ")
     .replace(/<[^>]+>/g, "")
@@ -333,6 +338,9 @@ export function htmlToPlain(html: string): string {
     .replace(/&gt;/g, ">")
     .replace(/&#39;|&apos;/g, "'")
     .replace(/&quot;/g, '"')
+    // A deliberately blank paragraph is an &nbsp;, which leaves a line holding
+    // one space. Trailing whitespace is never wanted on any line.
+    .replace(/[^\S\n]+$/gm, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }

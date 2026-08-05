@@ -323,6 +323,16 @@ function closeCompose() {
 
 $("compose-close").addEventListener("click", closeCompose);
 
+// Same handoff as the type tiles, with the website told there is a message on
+// the clipboard waiting. It is the browser that reads the clipboard, not this
+// app: Windows will hand it over here without asking, but the piece has to be
+// created against the signed-in web session anyway, so the read happens where
+// the piece does — behind one click, which is what Chrome requires.
+$("compose-reply").addEventListener("click", () => {
+  void invoke("open_url", { url: `${status.omni_url}/writing-studio?reply=1` });
+  closeCompose();
+});
+
 for (const button of document.querySelectorAll(".type-btn")) {
   button.addEventListener("click", () => {
     const type = button.dataset.type;

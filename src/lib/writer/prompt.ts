@@ -54,6 +54,26 @@ export const FIDELITY_RULES: Record<string, string> = {
 - Their shorthand often mixes the message with notes to you about it ("keep it short", "she's annoyed"). Use the second kind to make choices; only the first kind belongs in the text.`,
 };
 
+// A refine is a different job from a first pass, and running it under the
+// fidelity mode above was the bug behind "I said make it more exciting and it
+// did nothing". That mode describes how much license you have with the user's
+// OWN draft, and its default — edit-only — is the loudest instruction in the
+// prompt: change nothing but errors, add no sentences, hand it back unchanged
+// if it reads fine. Perfectly right for a proofread. Fatal for a refine, where
+// the text on the table is the piece you just wrote and the user has explicitly
+// asked for it to be different. The instruction was being overruled by a dial
+// they set before the piece existed.
+//
+// So on a refine the mode steps aside and the instruction governs, which is
+// also what a person would do if you handed them a draft and said "make this
+// more exciting".
+const REFINE_RULES = `MODE: REVISE ON INSTRUCTION. Treat this as the most important instruction in this prompt.
+- What they asked for this round is an order, and it is the whole job. Carry it out fully and visibly: if the change needs sentences rewritten, rewritten sentences are the correct answer, not a hedge. Coming back with something a reader could mistake for the previous version is a failure, even if nothing in it is wrong.
+- "More exciting", "warmer", "more direct", "less corporate" and the like are real instructions about the writing itself. Change the verbs, the rhythm, the openings, the shape of the sentences — whatever it actually takes to make the difference legible on the page.
+- Everything they did NOT raise stays as it is: the facts, the names, the numbers, the commitments, the structure, and any wording they typed by hand. Change what was asked about and leave the rest alone.
+- Their earlier standing constraints still bind. This instruction is added to them, not a reset.
+- If they gave no instruction at all, make a light general improving pass and change little.`;
+
 // Length only lands when it is a measurable instruction. Asked for something
 // "much shorter" the model trims a few words and calls it done; given a word
 // ceiling it actually cuts. So when there is a draft to measure, the adjective
@@ -71,6 +91,19 @@ const LENGTH_FACTORS: Record<string, number> = {
   shorter: 0.75,
   much_shorter: 0.5,
   longer: 1.4,
+};
+
+/**
+ * "What to change" chips that were really length instructions. They sat next to
+ * the Length picker and said the same thing, so asking for a shorter piece sent
+ * two overlapping orders — and worse, two different ones, since only the picker
+ * carries a word ceiling. They have been retired from the chip list; pieces
+ * saved while they existed still carry the value, so it is read back here as a
+ * length and decided in the one place length is decided.
+ */
+const LEGACY_LENGTH_ACTIONS: Record<string, string> = {
+  "Tighten / shorten": "shorter",
+  "Expand with more detail": "longer",
 };
 
 // Asking for a shorter piece in the note box has to work on its own, without
@@ -147,9 +180,20 @@ function attachmentBlock(attachments: unknown): string {
 
 export function buildGeneratePrompt(a: GenerateArgs): { system: string; user: string } {
   const fidelity = FIDELITY_RULES[a.fidelity] ? a.fidelity : "light";
+  // There is a draft on the table, so this is a revision of the piece rather
+  // than a first write of it. Several things below read differently in that
+  // case — most of all which instruction is in charge.
+  const refining = !!a.previous;
   const ctx = a.ctx || {};
   const list = (v: unknown) => (Array.isArray(v) && v.length ? v.join("; ") : "");
   const notes = String(ctx.brief || "").slice(0, 30000);
+
+  const actionList = (Array.isArray(ctx.actions) ? ctx.actions : []).map(String);
+  // The ticked fixes, minus the retired length chips: on an older piece those
+  // are still in the data, and they are already read as a length further down.
+  // Listing them here too is the same request arriving twice in two wordings —
+  // which is the thing being fixed, not a second opinion worth having.
+  const fixes = actionList.filter((v) => !(v in LEGACY_LENGTH_ACTIONS));
 
   const styleBlock = a.styles.length
     ? `Writing styles to follow (treat these as binding rules):\n${a.styles
@@ -157,19 +201,28 @@ export function buildGeneratePrompt(a: GenerateArgs): { system: string; user: st
         .join("\n")}`
     : "";
 
-  const intake = [
-    // The user's own note goes first and is framed as an order, not as
-    // background colour: typing "just fix the grammar and cut it down" in that
-    // box has to be enough on its own, without also hunting for the matching
-    // chips further down the page.
-    notes &&
-      `THE USER'S OWN INSTRUCTIONS — these are direct orders from them and outrank every other preference below. If they asked for one specific change, make that change and leave everything else alone.
+  // How the note in the intake box is framed. On a first pass it is the order.
+  // On a refine it has already been carried out — the draft below is the result
+  // of it — so presenting it again as "direct orders that outrank everything"
+  // put it in a fight with what the user just typed in the refine box, and the
+  // older, longer, more emphatic instruction tended to win.
+  const notesBlock = refining
+    ? `THE BRIEF THIS PIECE WAS WRITTEN FROM. It has already been applied — the draft below is the result of it. Treat it as standing background: keep honouring anything in it that reads as a constraint, and do not re-apply the one-off parts. Where it disagrees with what they are asking for now, what they are asking for now wins.
+
+${notes}`
+    : `THE USER'S OWN INSTRUCTIONS — these are direct orders from them and outrank every other preference below. If they asked for one specific change, make that change and leave everything else alone.
 
 Read this the way a colleague reads a note over your shoulder: it is them talking TO you about the piece, not text to be dropped INTO the piece. When they say "I want to get across that X", work X into the writing in the piece's own voice and at the right place. Never quote their instruction back, never paste their phrasing verbatim, and never write a sentence that sounds like it is describing the note ("As mentioned, I want to convey…"). If part of the note is only context for you, use it to make better choices and leave it out of the text entirely.
 
-${notes}`,
-    list(ctx.actions) &&
-      `Fixes the user explicitly ticked. Every one of these must be visibly done in the result: ${list(ctx.actions)}`,
+${notes}`;
+
+  const intake = [
+    // The user's own note goes first: typing "just fix the grammar and cut it
+    // down" in that box has to be enough on its own, without also hunting for
+    // the matching chips further down the page.
+    notes && notesBlock,
+    list(fixes) &&
+      `Fixes the user explicitly ticked. Every one of these must be visibly done in the result: ${list(fixes)}`,
     list(ctx.tone) && `Tone: ${list(ctx.tone)}`,
     list(ctx.audience) && `Audience: ${list(ctx.audience)}`,
     ctx.recipient && `Recipient: ${ctx.recipient}`,
@@ -208,7 +261,7 @@ ${(a.priorVersions || [])
         .join("\n\n")}`
     : "";
 
-  const task = a.previous
+  const task = refining
     ? `Here is the current draft, including any edits the user has made to it by hand. Revise THIS text, keeping everything they didn't ask you to change.
 
 The guidance below is the user talking to you about the draft, not copy to insert. Interpret it and fold it in: if they say "I want the idea that we're already piloting this", write that idea into the flow of the piece in its own voice, in the place it belongs. Do not quote their words back, do not paste their phrasing verbatim, and do not add a sentence that reads like a note to yourself. If the guidance is only context, let it inform your choices and keep it out of the text.
@@ -219,9 +272,18 @@ ${a.previous}
 What they want changed this round: ${a.guidance || "(none — light general polish)"}${standingBlock}${versionsBlock}`
     : `Here is everything the user put in the box. Work out what it is and deliver what they want.\n\nWhat the user wrote:\n${a.input || notes}`;
 
-  // The picker if it was touched, otherwise whatever the note asks for in
-  // plain words.
+  // The picker if it was touched, otherwise whatever the note asks for in plain
+  // words. LEGACY_LENGTH_ACTIONS are read here too: length used to be sayable
+  // twice, once as a Length chip and once as a "what to change" chip, which is
+  // the double instruction the user hit ("shorter" plus "tighten / shorten" in
+  // the same request). The chips are gone, but pieces saved before then still
+  // carry the value, so it is honoured — as a length, in the one place length
+  // is decided, rather than as a second competing order.
   let lengthKey = String(ctx.length || "");
+  if (!LENGTH_RULES[lengthKey]) {
+    for (const [action, key] of Object.entries(LEGACY_LENGTH_ACTIONS))
+      if (actionList.includes(action)) lengthKey = key;
+  }
   if (!LENGTH_RULES[lengthKey]) {
     const asked = `${notes} ${a.guidance}`;
     if (SHORTEN_HINT.test(asked)) lengthKey = "shorter";
@@ -236,20 +298,22 @@ What they want changed this round: ${a.guidance || "(none — light general poli
   // and the length picker does nothing, which is exactly the complaint it was
   // added to fix — so the conflict is settled here, in favour of the thing the
   // user explicitly asked for.
-  const actionList = (Array.isArray(ctx.actions) ? ctx.actions : []).map(String);
-  const lengthMoves =
-    !!lengthRule ||
-    actionList.includes("Tighten / shorten") ||
-    actionList.includes("Expand with more detail");
+  const lengthMoves = !!lengthRule;
   const wantsRestructure =
     RESTRUCTURE_HINT.test(`${notes} ${a.guidance}`) ||
     actionList.includes("Restructure for clarity") ||
     actionList.includes("Make it skimmable");
 
-  // Rewrite and write-from-notes both change the shape by design, so neither
-  // gets a length-preservation clause bolted on.
-  const fidelityBlock =
-    fidelity === "rewrite" || fidelity === "draft"
+  // A refine answers to the instruction, not to the dial the user set before
+  // the piece existed. Rewrite and write-from-notes both change the shape by
+  // design, so neither gets a length-preservation clause bolted on either.
+  const fidelityBlock = refining
+    ? `${REFINE_RULES}${
+        lengthRule
+          ? ""
+          : "\n- Length is not what they asked about, so do not use this round to make the piece noticeably longer or shorter. Aim to land near the word count you were given."
+      }`
+    : fidelity === "rewrite" || fidelity === "draft"
       ? FIDELITY_RULES[fidelity]
       : `${FIDELITY_RULES[fidelity]}\n${
           lengthMoves

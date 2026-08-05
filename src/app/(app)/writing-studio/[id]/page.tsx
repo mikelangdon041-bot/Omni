@@ -12,6 +12,7 @@ import {
   AlertCircle,
   Check,
   ChevronDown,
+  ClipboardPaste,
   Copy,
   Eye,
   EyeOff,
@@ -37,7 +38,7 @@ import { RichText, RichTextView } from "@/components/ui/RichText";
 import { AutoRichField } from "@/components/ui/AutoRichField";
 import { ProgressBar, useProgress } from "@/components/ui/Progress";
 import { useChatScope } from "@/components/chat/ChatScope";
-import { toEmailHtml } from "@/lib/writer/clipboard";
+import { plainToHtml, toEmailHtml, toEmailText } from "@/lib/writer/clipboard";
 import { wantsResearch } from "@/lib/writer/prompt";
 import { useConfirm, useToast } from "@/components/ui/Feedback";
 import { ChipGroup } from "@/components/writer/Chips";
@@ -145,10 +146,17 @@ export default function WriterDocPage() {
   const [isNewFromLauncher] = useState(
     () => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("new") === "1",
   );
+  // Came in on "Reply to this" rather than "New piece": there is an email on the
+  // clipboard and the whole point is not to have to shepherd it across. The
+  // browser will not read the clipboard on page load, only on a click, so the
+  // click is offered rather than taken.
+  const [isReplyPaste, setIsReplyPaste] = useState(
+    () => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("reply") === "1",
+  );
   useEffect(() => {
-    if (!isNewFromLauncher) return;
+    if (!isNewFromLauncher && !isReplyPaste) return;
     window.history.replaceState(null, "", window.location.pathname);
-  }, [isNewFromLauncher]);
+  }, [isNewFromLauncher, isReplyPaste]);
 
   const [busy, setBusy] = useState(false);
   const [researching, setResearching] = useState(false);
@@ -176,7 +184,10 @@ export default function WriterDocPage() {
   // Nothing here reports real progress (the AI calls return in one shot), so the
   // bars are time-based estimates. Writing takes longer than a look-up, and a
   // look-up runs several searches, so they get different expectations.
-  const writeProgress = useProgress(busy, 25000);
+  // Longer than it was: generate thinks before it writes now, so the bar that
+  // used to be near the top by the time the text arrived would otherwise sit
+  // pinned at 95% for the second half of every call.
+  const writeProgress = useProgress(busy, 40000);
   const researchProgress = useProgress(researching, 30000);
   const [tagDraft, setTagDraft] = useState("");
   const [guidance, setGuidance] = useState("");
@@ -947,10 +958,9 @@ export default function WriterDocPage() {
     if (!doc) return;
     // Paragraph spacing has to be inline for Outlook and Gmail to keep it, and
     // the plain-text flavor needs real blank lines between paragraphs.
-    const html = toEmailHtml(doc.content, signatureOn ? settings!.signature : "");
-    const plain =
-      htmlToPlain(doc.content) +
-      (signatureOn ? `\n\n${htmlToPlain(settings!.signature)}` : "");
+    const signature = signatureOn ? settings!.signature : "";
+    const html = toEmailHtml(doc.content, signature);
+    const plain = toEmailText(doc.content, signature);
     try {
       await navigator.clipboard.write([
         new ClipboardItem({
@@ -967,9 +977,7 @@ export default function WriterDocPage() {
 
   function openInEmail() {
     if (!doc) return;
-    const body =
-      htmlToPlain(doc.content) +
-      (signatureOn ? `\n\n${htmlToPlain(settings!.signature)}` : "");
+    const body = toEmailText(doc.content, signatureOn ? settings!.signature : "");
     window.location.href = `mailto:?subject=${encodeURIComponent(doc.subject)}&body=${encodeURIComponent(body)}`;
   }
 
@@ -1231,6 +1239,28 @@ export default function WriterDocPage() {
                   draft to clean up, an email you need to answer, or a sentence
                   saying what you want — I&apos;ll work out which it is.
                 </p>
+                {isReplyPaste && !htmlToPlain(doc.original).trim() && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const text = await navigator.clipboard.readText();
+                        if (!text.trim()) {
+                          toast("error", "Nothing on the clipboard — copy the email first");
+                          return;
+                        }
+                        save({ original: plainToHtml(text) });
+                        setIsReplyPaste(false);
+                      } catch {
+                        toast("error", "Couldn't read the clipboard — paste it in yourself");
+                        setIsReplyPaste(false);
+                      }
+                    }}
+                    className="mb-2 flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-[var(--accent)]/60 bg-[var(--accent-soft)]/40 px-3 py-2.5 text-xs font-semibold text-[var(--accent)] transition hover:bg-[var(--accent-soft)]"
+                  >
+                    <ClipboardPaste size={14} /> Drop in the email you copied
+                  </button>
+                )}
                 <RichText
                   value={doc.original}
                   onChange={(html) => save({ original: html })}

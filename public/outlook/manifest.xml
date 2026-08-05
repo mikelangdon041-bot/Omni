@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Writing Studio, as an Outlook add-in.
+
+  Sideload this file once (see public/outlook/README.md) and Writing Studio
+  appears as a button on the ribbon in two places: on an email you are reading,
+  where it reads the message and starts the reply, and on an email you are
+  writing, where it drops a finished piece in at the cursor.
+
+  Everything the button opens is /outlook on the Omni deployment — the pane is a
+  normal page of the app, so there is nothing to redeploy separately and nothing
+  in it that can drift from the studio itself.
+
+  This is the XML manifest rather than the newer unified JSON one on purpose:
+  XML is what classic Outlook for Windows, Outlook for Mac, new Outlook and
+  Outlook on the web all accept today, and this has to work wherever the mail
+  actually is.
+-->
+<OfficeApp
+  xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+  xmlns:mailappor="http://schemas.microsoft.com/office/mailappversionoverrides/1.0"
+  xsi:type="MailApp">
+
+  <!-- Regenerate this GUID if you ever publish a second, separate add-in from
+       the same deployment; Outlook keys the installation off it. -->
+  <Id>4a2f6d18-9c31-4b7e-8d0a-6f5c2b1e7a94</Id>
+  <Version>1.0.0.0</Version>
+  <ProviderName>Omni</ProviderName>
+  <DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="Writing Studio" />
+  <Description DefaultValue="Answer the email you're looking at without copying it anywhere. Say what else matters, get a draft in your voice, and drop it back into the reply." />
+  <IconUrl DefaultValue="https://omni-nine-navy.vercel.app/icon-192.png" />
+  <HighResolutionIconUrl DefaultValue="https://omni-nine-navy.vercel.app/icon-512.png" />
+  <SupportUrl DefaultValue="https://omni-nine-navy.vercel.app/writing-studio" />
+
+  <AppDomains>
+    <AppDomain>https://omni-nine-navy.vercel.app</AppDomain>
+  </AppDomains>
+
+  <Hosts>
+    <Host Name="Mailbox" />
+  </Hosts>
+
+  <!-- 1.3 is the floor for reading the body of the open message and for writing
+       into a compose window at the cursor, which are the two things this does. -->
+  <Requirements>
+    <Sets>
+      <Set Name="Mailbox" MinVersion="1.3" />
+    </Sets>
+  </Requirements>
+
+  <!-- Required by the base schema. Superseded by the VersionOverrides below on
+       every client that supports add-in commands, which is all of them now. -->
+  <FormSettings>
+    <Form xsi:type="ItemRead">
+      <DesktopSettings>
+        <SourceLocation DefaultValue="https://omni-nine-navy.vercel.app/outlook" />
+        <RequestedHeight>420</RequestedHeight>
+      </DesktopSettings>
+    </Form>
+  </FormSettings>
+
+  <Permissions>ReadWriteItem</Permissions>
+
+  <Rule xsi:type="RuleCollection" Mode="Or">
+    <Rule xsi:type="ItemIs" ItemType="Message" FormType="Read" />
+    <Rule xsi:type="ItemIs" ItemType="Message" FormType="Edit" />
+  </Rule>
+
+  <VersionOverrides xmlns="http://schemas.microsoft.com/office/mailappversionoverrides" xsi:type="VersionOverridesV1_0">
+    <Requirements>
+      <bt:Sets DefaultMinVersion="1.3">
+        <bt:Set Name="Mailbox" />
+      </bt:Sets>
+    </Requirements>
+
+    <Hosts>
+      <Host xsi:type="MailHost">
+        <DesktopFormFactor>
+          <FunctionFile resid="paneUrl" />
+
+          <!-- Reading an email: the button that starts the reply. -->
+          <ExtensionPoint xsi:type="MessageReadCommandSurface">
+            <OfficeTab id="TabDefault">
+              <Group id="omniWriterGroupRead">
+                <Label resid="groupLabel" />
+                <Control xsi:type="Button" id="omniWriterReplyButton">
+                  <Label resid="replyLabel" />
+                  <Supertip>
+                    <Title resid="replyLabel" />
+                    <Description resid="replyTip" />
+                  </Supertip>
+                  <Icon>
+                    <bt:Image size="16" resid="icon16" />
+                    <bt:Image size="32" resid="icon32" />
+                    <bt:Image size="80" resid="icon80" />
+                  </Icon>
+                  <Action xsi:type="ShowTaskpane">
+                    <SourceLocation resid="paneUrl" />
+                  </Action>
+                </Control>
+              </Group>
+            </OfficeTab>
+          </ExtensionPoint>
+
+          <!-- Writing an email: the button that drops a finished piece in. -->
+          <ExtensionPoint xsi:type="MessageComposeCommandSurface">
+            <OfficeTab id="TabDefault">
+              <Group id="omniWriterGroupCompose">
+                <Label resid="groupLabel" />
+                <Control xsi:type="Button" id="omniWriterInsertButton">
+                  <Label resid="insertLabel" />
+                  <Supertip>
+                    <Title resid="insertLabel" />
+                    <Description resid="insertTip" />
+                  </Supertip>
+                  <Icon>
+                    <bt:Image size="16" resid="icon16" />
+                    <bt:Image size="32" resid="icon32" />
+                    <bt:Image size="80" resid="icon80" />
+                  </Icon>
+                  <Action xsi:type="ShowTaskpane">
+                    <SourceLocation resid="paneUrl" />
+                  </Action>
+                </Control>
+              </Group>
+            </OfficeTab>
+          </ExtensionPoint>
+        </DesktopFormFactor>
+      </Host>
+    </Hosts>
+
+    <Resources>
+      <bt:Images>
+        <bt:Image id="icon16" DefaultValue="https://omni-nine-navy.vercel.app/icon-192.png" />
+        <bt:Image id="icon32" DefaultValue="https://omni-nine-navy.vercel.app/icon-192.png" />
+        <bt:Image id="icon80" DefaultValue="https://omni-nine-navy.vercel.app/icon-512.png" />
+      </bt:Images>
+      <bt:Urls>
+        <bt:Url id="paneUrl" DefaultValue="https://omni-nine-navy.vercel.app/outlook" />
+      </bt:Urls>
+      <bt:ShortStrings>
+        <bt:String id="groupLabel" DefaultValue="Writing Studio" />
+        <bt:String id="replyLabel" DefaultValue="Answer this" />
+        <bt:String id="insertLabel" DefaultValue="Drop a piece in" />
+      </bt:ShortStrings>
+      <bt:LongStrings>
+        <bt:String id="replyTip" DefaultValue="Read this email into Writing Studio, say what else matters, and get a reply written in your voice." />
+        <bt:String id="insertTip" DefaultValue="Insert a piece you've written into this reply, formatted, at the cursor." />
+      </bt:LongStrings>
+    </Resources>
+  </VersionOverrides>
+</OfficeApp>

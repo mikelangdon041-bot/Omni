@@ -14,6 +14,7 @@ import Link from "next/link";
 import {
   ArrowUpRight,
   Check,
+  ChevronDown,
   FileText,
   Image as ImageIcon,
   Loader2,
@@ -22,7 +23,6 @@ import {
   Search,
   Send,
   Sparkles,
-  Trash2,
   Wand2,
   X,
 } from "lucide-react";
@@ -94,6 +94,7 @@ export function OmniChat() {
   const [reading, setReading] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // The conversation is about the thing on screen, so moving to another thing
   // starts a new one rather than answering about the last one.
@@ -111,7 +112,39 @@ export function OmniChat() {
     if (turns.length) endRef.current?.scrollIntoView({ block: "nearest" });
   }, [turns, working]);
 
+  // The box grows with what is in it, up to a point. On one line, a question
+  // long enough to be worth asking scrolled its own beginning out of sight
+  // while it was being typed, so there was no way to reread it before sending.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 168)}px`;
+  }, [draft, open, pending.length]);
+
+  // Escape puts it away, like every other overlay here.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
+
   const examples = useMemo(() => EXAMPLES[scope.app] || EXAMPLES.home, [scope.app]);
+
+  /** Out of the way, conversation intact — the badge on the bubble says so. */
+  function minimize() {
+    setOpen(false);
+  }
+
+  /** Done with it: put it away and throw the conversation out. */
+  function close() {
+    setOpen(false);
+    setTurns([]);
+    setPending([]);
+    setDraft("");
+    setError("");
+  }
 
   // Attach a screenshot or a document to the question. Same extractor the
   // writer's draft box uses, so a picture of the thing you're asking about is
@@ -297,31 +330,36 @@ export function OmniChat() {
         <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[var(--accent-soft)] text-[var(--accent)]">
           <MessageCircle size={15} />
         </span>
-        <span className="min-w-0 flex-1">
+        {/* The whole title bar is the minimize target — the two icons are for
+            people who go looking for a control, and this is for everyone who
+            just wants the thing out of the way. */}
+        <button
+          type="button"
+          title="Minimize"
+          onClick={minimize}
+          className="min-w-0 flex-1 cursor-pointer text-left"
+        >
           <span className="block truncate text-sm font-semibold">
             {scope.subject ? `Ask about ${scope.subject.label}` : "Ask"}
           </span>
-        </span>
-        {turns.length > 0 && (
-          <button
-            type="button"
-            title="Clear the conversation"
-            onClick={() => {
-              setTurns([]);
-              setError("");
-            }}
-            className="grid h-7 w-7 place-items-center rounded text-muted transition hover:bg-surface hover:text-red-600"
-          >
-            <Trash2 size={13} />
-          </button>
-        )}
+        </button>
         <button
           type="button"
-          title="Close"
-          onClick={() => setOpen(false)}
-          className="grid h-7 w-7 place-items-center rounded text-muted transition hover:bg-surface hover:text-ink"
+          title="Minimize — keeps this conversation"
+          aria-label="Minimize"
+          onClick={minimize}
+          className="grid h-8 w-8 place-items-center rounded-lg text-muted transition hover:bg-surface hover:text-ink"
         >
-          <X size={15} />
+          <ChevronDown size={17} />
+        </button>
+        <button
+          type="button"
+          title={turns.length ? "Close and clear this conversation" : "Close"}
+          aria-label="Close"
+          onClick={close}
+          className="grid h-8 w-8 place-items-center rounded-lg text-muted transition hover:bg-surface hover:text-red-600"
+        >
+          <X size={17} />
         </button>
       </div>
 
@@ -469,7 +507,7 @@ export function OmniChat() {
           </div>
         )}
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-end gap-2">
           <input
             ref={fileRef}
             type="file"
@@ -491,7 +529,9 @@ export function OmniChat() {
           >
             <Paperclip size={14} />
           </button>
-          <input
+          <textarea
+            ref={inputRef}
+            rows={1}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onPaste={(e) => {
@@ -504,13 +544,15 @@ export function OmniChat() {
               }
             }}
             onKeyDown={(e) => {
+              // Enter sends; Shift+Enter is how you get a second line, and the
+              // box grows to show it.
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 void ask(draft);
               }
             }}
             placeholder={pending.length ? "Add a question, or just send it…" : "Ask, or say what you want done…"}
-            className="flex-1 rounded-lg border border-border bg-canvas px-2.5 py-1.5 text-sm outline-none transition focus:border-[var(--accent)]"
+            className="max-h-42 min-h-8 flex-1 resize-none overflow-y-auto rounded-lg border border-border bg-canvas px-2.5 py-1.5 text-sm leading-relaxed outline-none transition focus:border-[var(--accent)]"
           />
           <button
             type="button"

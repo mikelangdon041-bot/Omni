@@ -89,6 +89,18 @@
         </div>
         <button class="ghost" id="compose-close" title="Close" aria-label="Close">✕</button>
       </header>
+      <!-- Answering something is the common case and it does not start from a
+           blank page, it starts from a message that is already on screen. It
+           sits above the grid because it is a different way in, not a seventh
+           kind of thing to write. Outlook has its own add-in that skips the
+           copy entirely; this is the path for everywhere else. -->
+      <button class="reply-btn" id="compose-reply">
+        <span>📋</span>
+        <span>
+          <strong>Reply to something I've copied</strong>
+          <em>Copy the message first, then say what else I need to know.</em>
+        </span>
+      </button>
       <div class="type-grid">
         <button class="type-btn" data-type="email"><span>✉️</span>Email</button>
         <button class="type-btn" data-type="document"><span>📄</span>Document / memo</button>

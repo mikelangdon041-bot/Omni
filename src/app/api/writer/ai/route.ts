@@ -12,7 +12,9 @@ import { stripEmDashes } from "@/lib/writer/sanitize";
 import { buildGeneratePrompt } from "@/lib/writer/prompt";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+// Generate thinks before it writes now, so the ceiling that fit a straight
+// completion no longer fits the slowest piece it is asked for.
+export const maxDuration = 300;
 
 // Writing Studio's text AI — powered by Claude. Actions:
 //   generate      — create/edit/refine a piece of writing. The free-text brief
@@ -241,8 +243,8 @@ Rules:
 - background: a compact summary of relevant context from pasted source material (who said what, dates, history). Empty if the brief has no source material.
 - tone / audience: pick ONLY from the allowed values, and only when the brief clearly implies them. Usually 0–2 picks.
 - Sentences the user addressed to YOU ("make it shorter", "this is going to my VP", "she hates long emails") outrank anything implied by the material they pasted. If they say who it is going to, that is the audience and the recipient, whatever the pasted draft is addressed to.
-- actions: the specific fixes they asked for, mapped onto the allowed values ("fix the spelling" → "Fix grammar & typos"; "cut it down" → "Tighten / shorten"; "make it less harsh" → "Softer / more diplomatic"). [] if they asked for nothing specific.
-- length: "shorter", "much_shorter" or "longer" ONLY if they asked about length ("cut it down" → shorter, "way too long, halve it" → much_shorter, "flesh it out" → longer). Otherwise "as_is".
+- actions: the specific fixes they asked for, mapped onto the allowed values ("fix the spelling" → "Fix grammar & typos"; "make it less harsh" → "Softer / more diplomatic"). [] if they asked for nothing specific. Length is NOT an action — it has its own field below, and putting a length request in both sends the same instruction twice.
+- length: "shorter", "much_shorter" or "longer" ONLY if they asked about length ("cut it down" → shorter, "way too long, halve it" → much_shorter, "flesh it out" → longer). Otherwise "as_is". This is the only place a length request belongs.
 - fidelity: how much license they are giving you. "light" if they want a proofread or only the specific fixes they named (this is the safe default). "polish" if they want it improved but still theirs. "rewrite" if they asked for a rewrite of a real draft. "draft" when what they gave you is shorthand rather than prose — fragments, bullets, a few notes plus context — and they plainly expect you to write the actual piece from it.
 - noGreeting: true only if they said not to open with a greeting ("no hi", "skip the pleasantries", "get straight to it"). Otherwise false.
 - research: true only if they asked for something to be looked up or checked that you would otherwise have to invent — "find out how others are doing this", "look up the guidance", "get the rationale", "what's the current recommendation", "check what the data says". False when they only want their own material written better.
@@ -292,15 +294,31 @@ Return only the JSON.`,
           : [],
       });
 
-      const res = await anthropic().messages.create({
+      // Thinking is ON for this one call, and it is the difference between the
+      // studio's output and what the same model gives you if you just ask it in
+      // a chat. This model family does not think unless asked: omit the
+      // parameter and every piece is written first-token-to-last with no plan,
+      // which shows up exactly where you would expect — refines that miss the
+      // point, and openings that go nowhere. Adaptive lets it spend the thought
+      // on the hard ones and skip it on "fix the typos".
+      //
+      // Streamed because thinking and the piece share the max_tokens budget, and
+      // a two-thousand-word memo with reasoning in front of it is long enough on
+      // one non-streaming request to hit the SDK's own timeout before the model
+      // is finished. Nothing is streamed on to the browser; the route still
+      // answers once, with the finished JSON.
+      const stream = anthropic().messages.stream({
         model: WRITER_MODEL,
-        max_tokens: 16000,
+        max_tokens: 32000,
+        thinking: { type: "adaptive" },
         output_config: {
+          effort: "high",
           format: { type: "json_schema", schema: GENERATE_SCHEMA },
         },
         system,
         messages: [{ role: "user", content: userMessage }],
       });
+      const res = await stream.finalMessage();
 
       if (res.stop_reason === "refusal")
         return NextResponse.json(
