@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Eye, EyeOff } from "lucide-react";
+import { safeNext } from "@/lib/auth";
 
 export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const router = useRouter();
@@ -87,7 +88,11 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
         return;
       }
 
-      router.push("/");
+      // Back where the sign-in started, if it started somewhere that can't be
+      // navigated back to — the Outlook pane. Read off the URL rather than
+      // through useSearchParams, which would put this form behind a Suspense
+      // boundary for one optional parameter.
+      router.push(safeNext(new URLSearchParams(window.location.search).get("next")) || "/");
       router.refresh();
     } catch {
       setError("Network error. Please try again.");

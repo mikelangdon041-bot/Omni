@@ -773,6 +773,13 @@ fn open_composer(app: &AppHandle) {
 
 pub fn run() {
     tauri::Builder::default()
+        // Must be the first plugin registered: it is what makes a second
+        // launch (autostart racing a manual open, or a stale process from
+        // before an update) hand off to the already-running instance instead
+        // of starting a rival that silently loses the hotkey registration.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            show_window(app);
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(

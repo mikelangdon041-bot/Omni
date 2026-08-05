@@ -219,18 +219,18 @@ export default function OutlookPage() {
             {/* In place, not a new tab: on Outlook for Windows this pane runs in
                 its own WebView with its own cookies, so a session created
                 anywhere else never reaches it. */}
+            {/* ?next= brings the panel back here afterwards. Without it the
+                login lands on the dashboard, and a 400px panel with no address
+                bar has no way back to the add-in — which just looks like the
+                whole app crammed into a sliver. */}
             <button
               onClick={() => {
-                window.location.href = "/login";
+                window.location.href = "/login?next=%2Foutlook";
               }}
               className="mt-2 rounded-lg bg-[var(--accent)] px-3 py-1.5 text-xs font-semibold text-white"
             >
               Sign in
             </button>
-            <p className="mt-2 leading-relaxed text-muted">
-              Then press <strong className="font-semibold text-ink">Answer this</strong>{" "}
-              on the ribbon again — that&apos;s the last time you&apos;ll have to.
-            </p>
           </div>
         )}
 

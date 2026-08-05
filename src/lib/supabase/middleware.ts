@@ -1,6 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
-import { REMEMBER_COOKIE } from "@/lib/auth";
+import { REMEMBER_COOKIE, safeNext } from "@/lib/auth";
 
 // The sign-in pages. No session needed to reach them, and a signed-in user has
 // no business on them — they get sent home.
@@ -81,7 +81,12 @@ export async function updateSession(request: NextRequest) {
 
   if (user && isAuthPage) {
     const url = request.nextUrl.clone();
-    url.pathname = "/";
+    // Honour ?next= here too. Signing in from the Outlook pane lands back on
+    // /login for a moment on the way through, and sending them home at that
+    // point would undo the redirect the pane asked for before the form ever
+    // gets to read it.
+    url.pathname = safeNext(request.nextUrl.searchParams.get("next")) || "/";
+    url.search = "";
     return NextResponse.redirect(url);
   }
 

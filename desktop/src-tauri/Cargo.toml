@@ -18,6 +18,12 @@ tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
+# Without this, autostart plus a manual launch (or two logins racing) leaves
+# two processes each trying to own the same hotkey. Only the first wins;
+# nothing distinguishes the loser from a working instance, so whichever one
+# an already-confused user quits is a coin flip. This makes a second launch a
+# no-op that just surfaces the first instance instead of spawning a rival.
+tauri-plugin-single-instance = "2"
 # A hotkey that only works if you remembered to launch the app is not a hotkey,
 # so it starts with Windows by default.
 tauri-plugin-autostart = "2"

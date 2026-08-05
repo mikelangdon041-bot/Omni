@@ -15,6 +15,25 @@ export function isValidUsername(username: string) {
   return /^[a-z0-9._-]{3,30}$/.test(normalizeUsername(username));
 }
 
+/**
+ * Where to go after signing in, when the sign-in didn't start at the front door.
+ * The Outlook task pane is the case that needs it: it is a 400px panel with no
+ * address bar, so being dropped on the dashboard afterwards is a dead end — you
+ * cannot navigate back to the add-in from inside it.
+ *
+ * Only same-site paths survive. A `next` is attacker-supplied by definition, and
+ * an unchecked one turns the login page into an open redirect: `//evil.com` and
+ * `https://evil.com` are both things a browser will happily treat as another
+ * origin, so anything that isn't a single leading slash is thrown away.
+ */
+export function safeNext(raw: string | null | undefined): string | null {
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return null;
+  // A backslash is a slash to some URL parsers, so "/\evil.com" is the same
+  // trick wearing a different hat.
+  if (raw.includes("\\")) return null;
+  return raw;
+}
+
 // "Remember me": marker cookie set at login. "1" (or absent) → long-lived
 // session cookies; "0" → browser-session cookies, enforced on every refresh.
 export const REMEMBER_COOKIE = "omni-remember";
