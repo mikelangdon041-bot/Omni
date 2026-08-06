@@ -316,15 +316,19 @@ impl Client {
     }
 
     /// Turn the transcript into a saved meeting and return where it lives.
+    /// An empty `title` leaves the naming to the same AI prompt that writes
+    /// the notes — the server already treats a blank title that way.
     pub async fn capture(
         &self,
         transcript: &str,
         audio_path: &str,
         keep_audio: bool,
+        title: &str,
     ) -> Result<Captured> {
         let body = json!({
             "transcript": transcript,
             "audioPath": if keep_audio { audio_path } else { "" },
+            "title": title,
         });
         let text = self.post("/api/meeting/capture", body).await?;
         serde_json::from_str(&text).context("Omni sent an unexpected reply while saving the meeting")

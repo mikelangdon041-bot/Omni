@@ -135,6 +135,14 @@ function render() {
   // speech, which sits low. Square-rooting it makes normal talking visible.
   $("meter-fill").style.width = `${Math.round(Math.sqrt((status.level || 0) / 100) * 100)}%`;
 
+  // Open the whole time a title could still make it into the meeting: from
+  // the first second of recording through the last second of the upload,
+  // since capture() only reads it once the notes are about to be written.
+  show("title-field", recording || working);
+  if (document.activeElement !== $("meeting-title")) {
+    $("meeting-title").value = status.title || "";
+  }
+
   show("progress", working);
   $("progress-fill").style.width = `${status.percent || 0}%`;
   $("progress-label").textContent = status.message || "Working";
@@ -243,6 +251,10 @@ $("signin").addEventListener("submit", async (e) => {
 });
 
 $("record").addEventListener("click", () => invoke("toggle_recording"));
+
+$("meeting-title").addEventListener("input", () => {
+  void invoke("set_title", { title: $("meeting-title").value });
+});
 
 $("recover-send").addEventListener("click", () => {
   const orphan = (status.orphans || [])[0];

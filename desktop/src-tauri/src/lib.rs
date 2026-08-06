@@ -83,6 +83,10 @@ pub struct Status {
     system_device_id: String,
     /// URL of the last finished meeting, so "Open it" works after the fact.
     last_meeting: String,
+    /// Editable from the window at any point between the hotkey starting a
+    /// recording and the notes actually being written — typed early, typed
+    /// while it uploads, or left blank for the AI to name it instead.
+    title: String,
     /// Recordings found on disk that never became meetings — the app was
     /// killed, the machine restarted, or an upload failed. Offered back rather
     /// than left in a folder nobody would think to look in.
@@ -176,6 +180,7 @@ impl AppState {
             mic_device_id: settings.mic_device_id.clone(),
             system_device_id: settings.system_device_id.clone(),
             last_meeting: String::new(),
+            title: String::new(),
             orphans: Vec::new(),
         };
         Self {
@@ -276,6 +281,7 @@ fn start_recording(app: &AppHandle) -> Result<(), String> {
         s.seconds = 0;
         s.percent = 0;
         s.last_meeting = String::new();
+        s.title = String::new();
     });
 
     // Tick the elapsed time and level so the tray tooltip and the window both
@@ -321,6 +327,10 @@ async fn stop_recording(app: AppHandle) {
         s.percent = 0;
         s.level = 0;
     });
+    // The one moment worth interrupting you for: the meeting just ended and
+    // the title field is right there while the upload runs in the background,
+    // rather than a separate prompt that would hold the upload up for it.
+    show_window(&app);
 
     let recording = match recorder.stop() {
         Ok(r) => r,
@@ -410,8 +420,16 @@ async fn upload_and_capture(
         s.message = "Writing your notes".into();
     });
 
+    // Read now rather than earlier: this is the last moment a title typed
+    // while the upload was running still makes it in.
+    let title = {
+        let state = app.state::<AppState>();
+        let status = state.status.lock().unwrap();
+        status.title.clone()
+    };
+
     client
-        .capture(&transcript, &audio_path, settings.keep_audio)
+        .capture(&transcript, &audio_path, settings.keep_audio, &title)
         .await
         .map_err(|e| e.to_string())
 }
@@ -658,6 +676,14 @@ fn toggle_recording(app: AppHandle) {
     toggle(&app);
 }
 
+// Fired on every keystroke in the title field, so this only touches the one
+// field rather than going through save_settings — a title is part of the
+// in-progress recording's status, not a remembered preference.
+#[tauri::command]
+fn set_title(app: AppHandle, title: String) {
+    set_status(&app, |s| s.title = title);
+}
+
 // Send a recording that never made it — the app was killed mid-meeting, the
 // machine restarted, or the upload failed. Same pipeline as a normal stop, so
 // a recovered meeting is indistinguishable from one that went straight
@@ -677,6 +703,9 @@ async fn recover(app: AppHandle, path: String) -> Result<(), String> {
         s.phase = Phase::Working;
         s.percent = 0;
         s.message = "Sending the recovered recording".into();
+        // A recovered recording is not the one the title field (if anything
+        // was typed into it since) belongs to.
+        s.title = String::new();
     });
 
     match upload_and_capture(&app, &settings, &file).await {
@@ -802,6 +831,7 @@ pub fn run() {
             sign_out,
             save_settings,
             toggle_recording,
+            set_title,
             recover,
             discard_orphan,
             open_url,
