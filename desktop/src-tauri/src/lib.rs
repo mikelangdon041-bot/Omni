@@ -87,6 +87,14 @@ pub struct Status {
     /// recording and the notes actually being written — typed early, typed
     /// while it uploads, or left blank for the AI to name it instead.
     title: String,
+    /// Which OneNote section the finished notes should land in, chosen from the
+    /// same window and in the same window of time as the title. Empty means
+    /// nowhere — the notes stay in Omni and you copy them yourself, exactly as
+    /// before this existed.
+    onenote_section: String,
+    /// The human-readable "Notebook › Section", so the window can show what is
+    /// selected without asking the server what that id means.
+    onenote_section_name: String,
     /// Recordings found on disk that never became meetings — the app was
     /// killed, the machine restarted, or an upload failed. Offered back rather
     /// than left in a folder nobody would think to look in.
@@ -181,6 +189,8 @@ impl AppState {
             system_device_id: settings.system_device_id.clone(),
             last_meeting: String::new(),
             title: String::new(),
+            onenote_section: String::new(),
+            onenote_section_name: String::new(),
             orphans: Vec::new(),
         };
         Self {
@@ -282,6 +292,10 @@ fn start_recording(app: &AppHandle) -> Result<(), String> {
         s.percent = 0;
         s.last_meeting = String::new();
         s.title = String::new();
+        // `onenote_section` deliberately survives. A title belongs to one
+        // meeting; a destination is where meetings go, and re-picking the same
+        // section every time is the clicking this was built to remove. Change
+        // it in the window whenever one meeting belongs somewhere else.
     });
 
     // Tick the elapsed time and level so the tray tooltip and the window both
@@ -420,16 +434,16 @@ async fn upload_and_capture(
         s.message = "Writing your notes".into();
     });
 
-    // Read now rather than earlier: this is the last moment a title typed
-    // while the upload was running still makes it in.
-    let title = {
+    // Read now rather than earlier: this is the last moment a title typed —
+    // or a destination picked — while the upload was running still makes it in.
+    let (title, section) = {
         let state = app.state::<AppState>();
         let status = state.status.lock().unwrap();
-        status.title.clone()
+        (status.title.clone(), status.onenote_section.clone())
     };
 
     client
-        .capture(&transcript, &audio_path, settings.keep_audio, &title)
+        .capture(&transcript, &audio_path, settings.keep_audio, &title, &section)
         .await
         .map_err(|e| e.to_string())
 }
@@ -684,6 +698,44 @@ fn set_title(app: AppHandle, title: String) {
     set_status(&app, |s| s.title = title);
 }
 
+// The same idea for where the notes end up. Both halves are stored: the id is
+// what the server needs, the name is what the window shows, and keeping the
+// name here means selecting a destination costs no extra round trip to turn an
+// opaque id back into words.
+#[tauri::command]
+fn set_onenote_section(app: AppHandle, id: String, name: String) {
+    set_status(&app, |s| {
+        s.onenote_section = id;
+        s.onenote_section_name = name;
+    });
+}
+
+/// Everything the destination picker needs: whether OneNote is connected at
+/// all, the sections that can be written to, and where the last meeting went.
+///
+/// The remembered section is the server's, the same one the web picker uses, so
+/// a destination chosen in either place is the one both offer next — and it
+/// survives restarting this app without a second thing on disk to keep in sync.
+///
+/// Proxied through Rust rather than fetched by the window directly: the access
+/// token lives on this side, and handing it to the webview to make its own
+/// authenticated calls would put a credential somewhere it is not needed.
+#[tauri::command]
+async fn onenote_destinations(app: AppHandle) -> Result<serde_json::Value, String> {
+    let settings = {
+        let state = app.state::<AppState>();
+        let settings = state.settings.lock().unwrap();
+        settings.clone()
+    };
+    let base = settings.normalized_url();
+    let config = auth::fetch_config(&base).await.map_err(|e| e.to_string())?;
+    let token = auth::access_token(&config, &settings.username)
+        .await
+        .map_err(|e| e.to_string())?;
+    let client = omni::Client::new(&base, &token).map_err(|e| e.to_string())?;
+    client.onenote_destinations().await.map_err(|e| e.to_string())
+}
+
 // Send a recording that never made it — the app was killed mid-meeting, the
 // machine restarted, or the upload failed. Same pipeline as a normal stop, so
 // a recovered meeting is indistinguishable from one that went straight
@@ -832,6 +884,8 @@ pub fn run() {
             save_settings,
             toggle_recording,
             set_title,
+            set_onenote_section,
+            onenote_destinations,
             recover,
             discard_orphan,
             open_url,

@@ -29,7 +29,12 @@ import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { RichText } from "@/components/ui/RichText";
-import { cleanNotesHtml, debriefNotesHtml, tidyNotesHtml } from "@/lib/meetingprep/notes";
+import {
+  cleanNotesHtml,
+  debriefNotesHtml,
+  exportHeaderHtml,
+  tidyNotesHtml,
+} from "@/lib/meetingprep/notes";
 import {
   applyNameMap,
   countMatchesInHtml,
@@ -143,7 +148,7 @@ export function DebriefTab({
     if (!el) return null;
 
     const when = m.date
-      ? new Date(m.date).toLocaleDateString(undefined, {
+      ? new Date(m.date).toLocaleDateString("en-US", {
           weekday: "long",
           year: "numeric",
           month: "long",
@@ -151,15 +156,9 @@ export function DebriefTab({
         })
       : "";
     const title = (m.title || "Meeting notes").trim();
-    const escape = (s: string) =>
-      s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    // Inline styles, not a stylesheet: OneNote and Word both drop anything that
-    // arrives as CSS and render the heading as one more line of body text.
-    const header =
-      `<p style="margin:0 0 2px 0;font-family:Calibri,Helvetica,Arial,sans-serif;font-size:15pt;font-weight:bold">${escape(title)}</p>` +
-      (when
-        ? `<p style="margin:0 0 12px 0;font-family:Calibri,Helvetica,Arial,sans-serif;font-size:10pt;color:#666">${escape(when)}</p>`
-        : "");
+    // The same builder the recorder's automatic hand-off uses, so notes that
+    // arrive in OneNote by themselves look exactly like notes you carried.
+    const header = exportHeaderHtml(title, m.date || null);
     const plainHeader = when ? `${title}\n${when}\n\n` : `${title}\n\n`;
 
     return {

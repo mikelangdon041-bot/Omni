@@ -61,6 +61,20 @@
           <input id="meeting-title" type="text" placeholder="Leave blank and AI will name it" spellcheck="false" />
         </label>
 
+        <!-- Where the finished notes go. Open in the same window of time as the
+             title, because that is the window in which you know the answer:
+             the meeting is happening and you can see which project it is. When
+             the notes are written the server puts them at the top of that page
+             itself, so there is nothing left to carry.
+             Hidden entirely unless OneNote is connected — most people have not
+             connected it and an empty dropdown is a question nobody asked. -->
+        <label class="title-field" id="destination-field" hidden>
+          Send the notes to
+          <select id="onenote-section">
+            <option value="">Keep them in Omni</option>
+          </select>
+        </label>
+
         <div class="bar" id="progress" hidden>
           <div class="bar-track"><div class="bar-fill" id="progress-fill"></div></div>
           <p class="bar-label"><span id="progress-label">Working</span><span id="progress-pct">0%</span></p>

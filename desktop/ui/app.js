@@ -57,6 +57,10 @@ let status = null;
 // is tracked as its own flag rather than folded into `status.phase`.
 let showingCompose = false;
 let devices = { inputs: [], outputs: [] };
+// Declared up here with the rest of the module state because render() reads it,
+// and render() must never be the thing that touches it first.
+let onenoteSections = [];
+let onenoteAsked = false;
 /** Settings is a separate view rather than a state of the main one. */
 let showingSettings = false;
 
@@ -141,6 +145,18 @@ function render() {
   show("title-field", recording || working);
   if (document.activeElement !== $("meeting-title")) {
     $("meeting-title").value = status.title || "";
+  }
+
+  // Asked for the first time a recording could actually use them, not at
+  // startup: this app is meant to sit in the tray costing nothing, and most
+  // launches never record at all.
+  if (recording || working) void loadDestinations();
+
+  // Same window of time as the title, and only once we know OneNote is
+  // connected and which sections exist.
+  show("destination-field", (recording || working) && onenoteSections.length > 0);
+  if (document.activeElement !== $("onenote-section")) {
+    $("onenote-section").value = status.onenote_section || "";
   }
 
   show("progress", working);
@@ -254,6 +270,50 @@ $("record").addEventListener("click", () => invoke("toggle_recording"));
 
 $("meeting-title").addEventListener("input", () => {
   void invoke("set_title", { title: $("meeting-title").value });
+});
+
+// --- Where the notes land -----------------------------------------------
+
+// Fetched once, lazily, the first time a recording could use them. Doing it at
+// startup would put a network call on the path of an app that is meant to sit
+// in the tray costing nothing, for a feature most launches never touch.
+async function loadDestinations() {
+  if (onenoteAsked) return;
+  onenoteAsked = true;
+  try {
+    const info = await invoke("onenote_destinations");
+    if (!info?.connected) return;
+    onenoteSections = info.sections || [];
+    const select = $("onenote-section");
+    for (const section of onenoteSections) {
+      const option = document.createElement("option");
+      option.value = section.id;
+      option.textContent = section.notebook
+        ? `${section.notebook} › ${section.name}`
+        : section.name;
+      select.appendChild(option);
+    }
+    // Default to wherever the last meeting went — the same section the web
+    // picker offers first, so the two never disagree about "last time".
+    if (info.lastSectionId && onenoteSections.some((s) => s.id === info.lastSectionId)) {
+      void invoke("set_onenote_section", {
+        id: info.lastSectionId,
+        name: info.lastSectionName || "",
+      });
+    }
+    render();
+  } catch {
+    // Not connected, offline, or OneNote is having a day. The picker simply
+    // does not appear and everything works exactly as it did before it existed.
+  }
+}
+
+$("onenote-section").addEventListener("change", () => {
+  const select = $("onenote-section");
+  void invoke("set_onenote_section", {
+    id: select.value,
+    name: select.selectedOptions[0]?.textContent || "",
+  });
 });
 
 $("recover-send").addEventListener("click", () => {

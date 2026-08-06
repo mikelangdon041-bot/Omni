@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { routeAuth } from "@/lib/supabase/route";
 import {
   createPage,
   disconnect,
@@ -24,16 +24,10 @@ export const maxDuration = 60;
 //   send      — put the notes on a page, or on a new one
 //   disconnect
 
-async function requireUser() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  return user;
-}
-
 export async function POST(req: Request) {
-  const user = await requireUser();
+  // routeAuth, not the cookie client: the destination picker in the desktop
+  // recorder calls this too, and it is not a browser — it sends a bearer token.
+  const { user } = await routeAuth(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json().catch(() => null);

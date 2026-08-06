@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { routeAuth } from "@/lib/supabase/route";
 import { CaptureRefusal, captureFromTranscript } from "@/lib/meetingprep/captureAi";
-import { tidyNotesHtml } from "@/lib/meetingprep/notes";
+import { exportHeaderHtml, tidyNotesHtml } from "@/lib/meetingprep/notes";
+import { createPage, prependToPage } from "@/lib/microsoft/graph";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -97,6 +98,30 @@ export async function POST(req: Request) {
       );
     }
 
+    // Where the recorder was told, mid-meeting, that these notes should end up.
+    // Done here rather than back in the app because the whole point is that
+    // stopping the recording is the last thing you do — a hand-off that waited
+    // for someone to open a tab and press a button would be the copy and paste
+    // again, wearing a hat.
+    const sectionId = String(body.oneNoteSectionId || "");
+    const pageId = String(body.oneNotePageId || "");
+    let oneNote: string | null = null;
+    if (sectionId || pageId) {
+      try {
+        const notesHtml =
+          exportHeaderHtml(data.title, new Date().toISOString()) +
+          tidyNotesHtml(result.notes);
+        if (pageId) await prependToPage(user.id, pageId, notesHtml);
+        else await createPage(user.id, sectionId, data.title, notesHtml);
+        oneNote = "sent";
+      } catch (e) {
+        // Never fatal. The meeting is saved and the notes exist; OneNote being
+        // unreachable is a thing to mention, not a reason to lose a recording
+        // that cannot be made again.
+        oneNote = (e as Error).message === "NOT_CONNECTED" ? "not-connected" : "failed";
+      }
+    }
+
     return NextResponse.json({
       id: data.id,
       title: data.title,
@@ -105,6 +130,7 @@ export async function POST(req: Request) {
       path: `/meeting-prep/${data.id}?tab=Debrief`,
       actions: result.actions.length,
       ungrounded: result.ungrounded,
+      oneNote,
     });
   } catch (e) {
     if (e instanceof CaptureRefusal) {

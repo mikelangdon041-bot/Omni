@@ -1,6 +1,39 @@
 import { parseOutline } from "@/lib/summaryTree";
 import type { Debrief } from "./types";
 
+/**
+ * The heading that goes above notes leaving the app — which meeting, and when.
+ *
+ * Notes carry nothing identifying them once they are out: the meeting they
+ * belong to is only obvious while you are still looking at the meeting, and it
+ * is the thing you most want two months later, scrolling a OneNote section for
+ * the one where they said yes.
+ *
+ * Shared by the clipboard, the OneNote button and the recorder's automatic
+ * hand-off, so a note that arrives one way is not missing something a note that
+ * arrives another way has. Styled inline because OneNote and Word both drop
+ * anything arriving as CSS and would render this as one more line of body text.
+ */
+export function exportHeaderHtml(title: string, date: string | null): string {
+  const escape = (s: string) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const when = date
+    ? new Date(date).toLocaleDateString("en-US", {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      })
+    : "";
+  const name = (title || "Meeting notes").trim();
+  return (
+    `<p style="margin:0 0 2px 0;font-family:Calibri,Helvetica,Arial,sans-serif;font-size:15pt;font-weight:bold">${escape(name)}</p>` +
+    (when
+      ? `<p style="margin:0 0 12px 0;font-family:Calibri,Helvetica,Arial,sans-serif;font-size:10pt;color:#666">${escape(when)}</p>`
+      : "")
+  );
+}
+
 // The notes are one HTML document now. Meetings saved under the two earlier
 // shapes — `sections` (separate cards) and `summary` (an indented "- "
 // outline) — are folded into the same shape on read, so nothing already

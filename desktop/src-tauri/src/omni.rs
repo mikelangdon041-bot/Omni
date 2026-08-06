@@ -324,14 +324,50 @@ impl Client {
         audio_path: &str,
         keep_audio: bool,
         title: &str,
+        onenote_section: &str,
     ) -> Result<Captured> {
         let body = json!({
             "transcript": transcript,
             "audioPath": if keep_audio { audio_path } else { "" },
             "title": title,
+            // Empty means "leave them in Omni". The server only reaches for
+            // OneNote when it is given somewhere to put them.
+            "oneNoteSectionId": onenote_section,
         });
         let text = self.post("/api/meeting/capture", body).await?;
         serde_json::from_str(&text).context("Omni sent an unexpected reply while saving the meeting")
+    }
+
+    /// What the destination picker needs: is OneNote connected, which sections
+    /// can be written to, and where did the last one go.
+    ///
+    /// Returned as raw JSON — the window is the only thing that reads it, and
+    /// giving it a Rust shape here would mean maintaining the same list twice.
+    ///
+    /// Not connected is a normal answer, not a failure: most of the time this
+    /// runs the answer is "no", and a picker that errored rather than hiding
+    /// itself would put a red message in front of someone who never asked for
+    /// OneNote in the first place.
+    pub async fn onenote_destinations(&self) -> Result<serde_json::Value> {
+        let status_text = self
+            .post("/api/onenote", json!({ "action": "status" }))
+            .await?;
+        let status: serde_json::Value = serde_json::from_str(&status_text)
+            .context("Omni sent an unexpected reply about OneNote")?;
+        if status.get("connected").and_then(|v| v.as_bool()) != Some(true) {
+            return Ok(json!({ "connected": false, "sections": [] }));
+        }
+        let sections_text = self
+            .post("/api/onenote", json!({ "action": "sections" }))
+            .await?;
+        let sections: serde_json::Value = serde_json::from_str(&sections_text)
+            .context("Omni sent an unexpected reply about OneNote")?;
+        Ok(json!({
+            "connected": true,
+            "sections": sections.get("sections").cloned().unwrap_or(json!([])),
+            "lastSectionId": status.get("lastSectionId").cloned().unwrap_or(json!(null)),
+            "lastSectionName": status.get("lastSectionName").cloned().unwrap_or(json!(null)),
+        }))
     }
 }
 
