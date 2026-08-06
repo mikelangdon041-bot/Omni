@@ -11,16 +11,19 @@
 //
 // It closes the loop as well: once the reply is written, come back to the
 // compose window and this pane drops it in, formatted, with the signature.
-//
-// Not a second writing tool. It creates a normal Writing Studio piece and hands
-// off to the workspace, which is where every prompt, chip and version already
-// lives. Everything here is intake and delivery.
+// Generation happens right here in the pane — read the email, set the dials,
+// hit write, watch it come back, edit it if it's not quite right, drop it in.
+// No hand-off to a separate tab: everything the workspace can do to a piece is
+// available here too, just for the one piece this pane exists to write.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import Script from "next/script";
 import { plainToHtml, toEmailHtml } from "@/lib/writer/clipboard";
 import { ChipGroup } from "@/components/writer/Chips";
+import { RichText } from "@/components/ui/RichText";
+import { ProgressBar, useProgress } from "@/components/ui/Progress";
+import { createClient } from "@/lib/supabase/client";
 import {
   useUserId,
   useWriterDocs,
@@ -38,6 +41,8 @@ import {
   type Fidelity,
   type WriterDoc,
 } from "@/lib/writer/types";
+
+const supabase = createClient();
 
 // The Office.js surface this uses, typed to what it touches. The real library
 // is loaded from Microsoft's CDN at runtime (Office refuses to host it
@@ -86,9 +91,20 @@ interface ReadEmail {
   composing: boolean;
 }
 
+/** Grow with what's typed, up to a cap, then scroll — never a fixed box you
+ * have to scroll inside to see what you just wrote. */
+function useAutoGrow(ref: React.RefObject<HTMLTextAreaElement | null>, value: string) {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
+  }, [ref, value]);
+}
+
 export default function OutlookPage() {
   const { userId } = useUserId();
-  const { docs, add } = useWriterDocs(userId);
+  const { docs, add, refresh } = useWriterDocs(userId);
   const { settings } = useWriterSettings(userId);
 
   const { styles } = useWriterStyles(userId);
@@ -97,7 +113,7 @@ export default function OutlookPage() {
   const [outsideOutlook, setOutsideOutlook] = useState(false);
   const [email, setEmail] = useState<ReadEmail | null>(null);
   const [note, setNote] = useState("");
-  const [working, setWorking] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
   const [inserted, setInserted] = useState(false);
 
@@ -116,6 +132,37 @@ export default function OutlookPage() {
   // spinner. The read is under way from the moment there is an email to read.
   const [extractDone, setExtractDone] = useState(false);
   const [autoFilled, setAutoFilled] = useState<string[]>([]);
+
+  // The piece being written, once "Write the reply" has been pressed. Its
+  // presence is what switches the pane from intake to result — everything
+  // after that point (editing, refining, inserting) happens against this doc
+  // without ever leaving the pane.
+  const [resultDoc, setResultDoc] = useState<WriterDoc | null>(null);
+  const [resultContent, setResultContent] = useState("");
+  const [resultSubject, setResultSubject] = useState("");
+  const [guidance, setGuidance] = useState("");
+
+  const noteRef = useRef<HTMLTextAreaElement>(null);
+  useAutoGrow(noteRef, note);
+  const guidanceRef = useRef<HTMLTextAreaElement>(null);
+  useAutoGrow(guidanceRef, guidance);
+
+  // Autosave for edits made in the result box: optimistic locally, debounced to
+  // the database so the piece survives a reopen and shows up right in "Drop one
+  // in" — but "Add to email" below always uses what's on screen, so a save that
+  // hasn't landed yet is never the thing missing from the reply.
+  const pendingRef = useRef<{ content?: string; subject?: string }>({});
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function queueResultSave(partial: { content?: string; subject?: string }) {
+    if (!resultDoc) return;
+    pendingRef.current = { ...pendingRef.current, ...partial };
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      const p = pendingRef.current;
+      pendingRef.current = {};
+      void supabase.from("writer_docs").update(p).eq("id", resultDoc.id);
+    }, 800);
+  }
 
   // Office.onReady fires once and only once per pane load. Guarded because
   // next/script can re-run onLoad across a fast-refresh in development.
@@ -213,14 +260,76 @@ export default function OutlookPage() {
 
   const reading = !!email && !!userId && !extractDone;
 
-  // Hand the email to Writing Studio as a normal piece and open the workspace.
-  // The email goes in the draft box (it is source material, the thing being
-  // answered) and the note goes in the instructions box, which is exactly the
-  // split the prompt already knows how to read.
-  async function startReply() {
-    if (!email || working) return;
-    setWorking(true);
+  // The actual AI call, shared by the first write and every refine after it.
+  // `refineGuidance` present means "revise what's on screen"; absent means
+  // "write it from the intake". Either way the result lands in state and is
+  // persisted to the same row, so the doc this pane is working on never
+  // multiplies into several.
+  async function runGenerate(target: WriterDoc, refineGuidance?: string) {
+    setGenerating(true);
     setError("");
+    try {
+      const styleTexts = styles
+        .filter((s) => styleIds.includes(s.id))
+        .map((s) => ({
+          name: s.name,
+          text: s.kind === "voice" ? s.voice_profile : s.rules,
+        }));
+      const refining = !!refineGuidance && !!resultContent.trim();
+      const res = await fetch("/api/writer/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          action: "generate",
+          docType: "email",
+          original: htmlToPlain(target.original),
+          previous: refining ? resultContent : "",
+          guidance: refineGuidance || "",
+          fidelity,
+          context: {
+            ...emptyContext(),
+            fidelity,
+            tone,
+            audience,
+            length,
+            styleIds,
+            recipient: email?.from || "",
+            brief: htmlToPlain(target.context.brief),
+          },
+          styles: styleTexts,
+          signature: settings?.signature ? htmlToPlain(settings.signature) : "",
+          variants: 1,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Generation failed");
+      const first = json.variants?.[0];
+      if (!first) throw new Error("Nothing usable came back — try again");
+      setResultContent(first.html);
+      setResultSubject(first.subject || target.subject);
+      await supabase
+        .from("writer_docs")
+        .update({ content: first.html, subject: first.subject || target.subject })
+        .eq("id", target.id);
+      void refresh();
+      setGuidance("");
+    } catch (e) {
+      setError((e as Error).message || "That didn't work");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  // Create the piece and write it, right here. The email goes in the draft box
+  // (it is source material, the thing being answered) and the note goes in the
+  // instructions box, which is exactly the split the prompt already knows how
+  // to read.
+  async function writeReply() {
+    if (!email || generating) return;
+    setError("");
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    pendingRef.current = {};
     try {
       const header = [
         email.from && `From: ${email.from}`,
@@ -253,29 +362,42 @@ export default function OutlookPage() {
         },
       });
       if (!doc) throw new Error("Couldn't create the piece");
-      // `go=1` writes it on arrival. Everything the workspace would have asked
-      // for was answered here, so landing on a filled-in form with a Generate
-      // button would be asking for the same decision twice, in two windows.
-      window.open(`/writing-studio/${doc.id}?go=1`, "_blank", "noopener");
+      setResultDoc(doc);
+      setResultContent("");
+      setResultSubject(doc.subject);
+      await runGenerate(doc);
     } catch (e) {
       setError((e as Error).message || "That didn't work");
-    } finally {
-      setWorking(false);
     }
+  }
+
+  async function refine() {
+    if (!resultDoc || !guidance.trim() || generating) return;
+    await runGenerate(resultDoc, guidance.trim());
+  }
+
+  // Back to the dials, to write it again from scratch a different way.
+  function startOver() {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    pendingRef.current = {};
+    setResultDoc(null);
+    setResultContent("");
+    setResultSubject("");
+    setGuidance("");
+    setError("");
   }
 
   // The other half of the loop: the reply is written, they are back in Outlook
   // with a compose window open, and this drops the finished piece in where the
   // cursor is — styled, because a paste into Outlook that keeps its paragraph
   // breaks needs its spacing inline.
-  function insertIntoReply(doc: WriterDoc) {
+  function insertHtml(html: string, useSig: boolean) {
     const Office = window.Office;
     const item = Office?.context?.mailbox?.item;
     if (!Office || !item) return;
-    const useSig = doc.context?.useSignature !== false;
-    const html = toEmailHtml(doc.content, useSig ? settings?.signature || "" : "");
+    const withSig = toEmailHtml(html, useSig ? settings?.signature || "" : "");
     item.body.setSelectedDataAsync(
-      html,
+      withSig,
       { coercionType: Office.CoercionType.Html },
       (result) => {
         if (result.status === Office.AsyncResultStatus.Succeeded) {
@@ -288,7 +410,13 @@ export default function OutlookPage() {
     );
   }
 
+  function insertIntoReply(doc: WriterDoc) {
+    insertHtml(doc.content, doc.context?.useSignature !== false);
+  }
+
+  const progress = useProgress(generating, 20000);
   const recent = docs.filter((d) => htmlToPlain(d.content).trim()).slice(0, 6);
+  const hasResult = !!resultContent.trim();
 
   return (
     <>
@@ -376,116 +504,207 @@ export default function OutlookPage() {
               </p>
             </div>
 
-            <div>
-              <label
-                htmlFor="note"
-                className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-muted"
-              >
-                Anything else I need to know?
-              </label>
-              <textarea
-                id="note"
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                autoFocus
-                placeholder={
-                  'e.g. "say yes but push it to the 12th, and don\'t commit to a budget yet"'
-                }
-                className="min-h-24 w-full rounded-lg border border-border bg-surface p-2 text-xs leading-relaxed outline-none focus:border-[var(--accent)]"
-              />
-              <p className="mt-1 text-[11px] leading-snug text-muted">
-                Optional. Everything about the email itself, I already have.
-              </p>
-            </div>
-
-            {/* Everything the workspace would ask, asked here instead — the
-                point of the pane is that you never have to go there to set a
-                dial. Folded away because the defaults are usually right and an
-                open accordion of chips in a 400px panel buries the one box that
-                matters. */}
-            <details className="rounded-xl border border-border bg-surface">
-              <summary className="cursor-pointer list-none p-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
-                How it should read ▾
-                {reading ? (
-                  <span className="ml-1 font-normal normal-case">reading it…</span>
-                ) : autoFilled.length > 0 ? (
-                  <span className="ml-1 font-normal normal-case text-[var(--accent)]">
-                    {autoFilled.join(", ")} filled in — check me
-                  </span>
-                ) : null}
-              </summary>
-              <div className="space-y-2.5 px-2.5 pb-2.5">
-                <ChipGroup
-                  label="How much to write"
-                  options={FIDELITY_OPTIONS.map((f) => ({ key: f.key, label: f.label }))}
-                  selected={[fidelity]}
-                  single
-                  onToggle={(k) => setFidelity(k as Fidelity)}
-                />
-                <ChipGroup
-                  label="Tone"
-                  options={chipOptions(TONE_CHIPS)}
-                  selected={tone}
-                  hue="sky"
-                  onToggle={(k) =>
-                    setTone((p) => (p.includes(k) ? p.filter((t) => t !== k) : [...p, k]))
-                  }
-                />
-                <ChipGroup
-                  label="Audience"
-                  options={chipOptions(AUDIENCE_CHIPS)}
-                  selected={audience}
-                  hue="violet"
-                  onToggle={(k) =>
-                    setAudience((p) =>
-                      p.includes(k) ? p.filter((a) => a !== k) : [...p, k],
-                    )
-                  }
-                />
-                <ChipGroup
-                  label="Length"
-                  options={LENGTHS}
-                  selected={[length]}
-                  single
-                  hue="amber"
-                  onToggle={setLength}
-                />
-                {styles.length > 0 && (
-                  <ChipGroup
-                    label="Your styles & voices"
-                    options={styles.map((s) => ({
-                      key: s.id,
-                      label: `${s.kind === "voice" ? "🎙️" : "📐"} ${s.name}`,
-                    }))}
-                    selected={styleIds}
-                    hue="teal"
-                    onToggle={(k) =>
-                      setStyleIds((p) =>
-                        p.includes(k) ? p.filter((s) => s !== k) : [...p, k],
-                      )
+            {!resultDoc && (
+              <>
+                <div>
+                  <label
+                    htmlFor="note"
+                    className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-muted"
+                  >
+                    Anything else I need to know?
+                  </label>
+                  <textarea
+                    id="note"
+                    ref={noteRef}
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                    autoFocus
+                    rows={1}
+                    placeholder={
+                      'e.g. "say yes but push it to the 12th, and don\'t commit to a budget yet"'
                     }
+                    className="max-h-56 w-full resize-none overflow-y-auto rounded-lg border border-border bg-surface p-2 text-xs leading-relaxed outline-none focus:border-[var(--accent)]"
                   />
+                  <p className="mt-1 text-[11px] leading-snug text-muted">
+                    Optional. Everything about the email itself, I already have.
+                  </p>
+                </div>
+
+                {/* Everything the workspace would ask, asked here instead — the
+                    point of the pane is that you never have to go there to set a
+                    dial. Left open, not tucked behind a chevron: a tone and style
+                    picked after Generate has already been pressed doesn't count. */}
+                <div className="rounded-xl border border-border bg-surface">
+                  <p className="p-2.5 pb-0 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                    How it should read
+                    {reading ? (
+                      <span className="ml-1 font-normal normal-case">reading it…</span>
+                    ) : autoFilled.length > 0 ? (
+                      <span className="ml-1 font-normal normal-case text-[var(--accent)]">
+                        {autoFilled.join(", ")} filled in — check me
+                      </span>
+                    ) : null}
+                  </p>
+                  <div className="space-y-2.5 p-2.5">
+                    <ChipGroup
+                      label="How much to write"
+                      options={FIDELITY_OPTIONS.map((f) => ({ key: f.key, label: f.label }))}
+                      selected={[fidelity]}
+                      single
+                      onToggle={(k) => setFidelity(k as Fidelity)}
+                    />
+                    <ChipGroup
+                      label="Tone"
+                      options={chipOptions(TONE_CHIPS)}
+                      selected={tone}
+                      hue="sky"
+                      onToggle={(k) =>
+                        setTone((p) => (p.includes(k) ? p.filter((t) => t !== k) : [...p, k]))
+                      }
+                    />
+                    <ChipGroup
+                      label="Audience"
+                      options={chipOptions(AUDIENCE_CHIPS)}
+                      selected={audience}
+                      hue="violet"
+                      onToggle={(k) =>
+                        setAudience((p) =>
+                          p.includes(k) ? p.filter((a) => a !== k) : [...p, k],
+                        )
+                      }
+                    />
+                    <ChipGroup
+                      label="Length"
+                      options={LENGTHS}
+                      selected={[length]}
+                      single
+                      hue="amber"
+                      onToggle={setLength}
+                    />
+                    {styles.length > 0 && (
+                      <ChipGroup
+                        label="Your styles & voices"
+                        options={styles.map((s) => ({
+                          key: s.id,
+                          label: `${s.kind === "voice" ? "🎙️" : "📐"} ${s.name}`,
+                        }))}
+                        selected={styleIds}
+                        hue="teal"
+                        onToggle={(k) =>
+                          setStyleIds((p) =>
+                            p.includes(k) ? p.filter((s) => s !== k) : [...p, k],
+                          )
+                        }
+                      />
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  onClick={writeReply}
+                  disabled={generating}
+                  className="w-full rounded-lg bg-[var(--accent)] px-3 py-2.5 text-xs font-semibold text-white transition hover:opacity-90 disabled:opacity-50"
+                >
+                  {generating ? "Writing it…" : "Write the reply"}
+                </button>
+                <p className="text-[11px] leading-snug text-muted">
+                  Writes it right here, then you can edit it or drop it into your
+                  reply below.
+                </p>
+              </>
+            )}
+
+            {resultDoc && (
+              <div className="space-y-2.5">
+                {generating && (
+                  <div className="rounded-xl border border-border bg-surface p-3">
+                    <ProgressBar
+                      pct={progress}
+                      label={hasResult ? "Revising it…" : "Writing your reply…"}
+                    />
+                  </div>
+                )}
+
+                {!generating && hasResult && (
+                  <>
+                    <div className="rounded-xl border border-border bg-surface p-2.5">
+                      <label
+                        htmlFor="subject"
+                        className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-muted"
+                      >
+                        Subject
+                      </label>
+                      <input
+                        id="subject"
+                        value={resultSubject}
+                        onChange={(e) => {
+                          setResultSubject(e.target.value);
+                          queueResultSave({ subject: e.target.value });
+                        }}
+                        className="w-full rounded-md border border-border bg-canvas px-2 py-1.5 text-xs font-medium outline-none focus:border-[var(--accent)]"
+                      />
+                    </div>
+
+                    <RichText
+                      value={resultContent}
+                      onChange={(html) => {
+                        setResultContent(html);
+                        queueResultSave({ content: html });
+                      }}
+                      minHeight="min-h-32"
+                    />
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() =>
+                          insertHtml(resultContent, resultDoc.context?.useSignature !== false)
+                        }
+                        className="flex-1 rounded-lg bg-[var(--accent)] px-3 py-2.5 text-xs font-semibold text-white transition hover:opacity-90"
+                      >
+                        {inserted ? "Dropped in ✓" : "Add to email"}
+                      </button>
+                      <button
+                        onClick={startOver}
+                        className="rounded-lg border border-border px-3 py-2.5 text-xs font-medium text-muted transition hover:text-ink"
+                      >
+                        Start over
+                      </button>
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="guidance"
+                        className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-muted"
+                      >
+                        Want it different?
+                      </label>
+                      <textarea
+                        id="guidance"
+                        ref={guidanceRef}
+                        value={guidance}
+                        onChange={(e) => setGuidance(e.target.value)}
+                        rows={1}
+                        placeholder='e.g. "shorter, and a bit warmer"'
+                        className="max-h-40 w-full resize-none overflow-y-auto rounded-lg border border-border bg-surface p-2 text-xs leading-relaxed outline-none focus:border-[var(--accent)]"
+                      />
+                      <button
+                        onClick={refine}
+                        disabled={generating || !guidance.trim()}
+                        className="mt-1.5 w-full rounded-lg border border-[var(--accent)] px-3 py-2 text-xs font-semibold text-[var(--accent)] transition hover:bg-[var(--accent-soft)] disabled:opacity-50"
+                      >
+                        Revise
+                      </button>
+                    </div>
+                  </>
                 )}
               </div>
-            </details>
-
-            <button
-              onClick={startReply}
-              disabled={working}
-              className="w-full rounded-lg bg-[var(--accent)] px-3 py-2.5 text-xs font-semibold text-white transition hover:opacity-90 disabled:opacity-50"
-            >
-              {working ? "Writing it…" : "Write the reply"}
-            </button>
-            <p className="text-[11px] leading-snug text-muted">
-              Opens in your browser and starts writing straight away. When it
-              reads right, come back to your Outlook reply and drop it in below.
-            </p>
+            )}
 
             {/* The other half of the loop, always in reach. Inserting only
                 works in a draft — Outlook has nowhere to put text in a message
                 you are only reading — so a failure here is reported rather than
                 pre-empted by hiding the list. */}
-            {recent.length > 0 && (
+            {!resultDoc && recent.length > 0 && (
               <details className="rounded-xl border border-border bg-surface">
                 <summary className="cursor-pointer list-none p-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
                   Already written it? Drop one in ▾
