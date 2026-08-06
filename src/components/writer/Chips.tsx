@@ -42,6 +42,7 @@ export function ChipGroup({
   onToggle,
   single,
   hue = "accent",
+  dense = false,
 }: {
   label: string;
   options: string[] | { key: string; label: string }[];
@@ -50,12 +51,20 @@ export function ChipGroup({
   /** Radio behavior: exactly one stays selected. */
   single?: boolean;
   hue?: ChipHue;
+  /** Tighter padding and type, for a short panel where every row of height
+   * pushes the rest of the form further below the fold. */
+  dense?: boolean;
 }) {
   const opts = options.map((o) => (typeof o === "string" ? { key: o, label: o } : o));
   const colors = HUES[hue];
   return (
     <div>
-      <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
+      <p
+        className={cn(
+          "font-semibold uppercase tracking-wide text-muted",
+          dense ? "mb-0.5 text-[10px]" : "mb-1 text-[11px]",
+        )}
+      >
         {label}
       </p>
       <div className="flex flex-wrap gap-1">
@@ -70,7 +79,8 @@ export function ChipGroup({
                 onToggle(o.key);
               }}
               className={cn(
-                "rounded-full border px-2.5 py-1 text-xs font-medium transition",
+                "rounded-full border font-medium transition",
+                dense ? "px-2 py-0.5 text-[11px]" : "px-2.5 py-1 text-xs",
                 on
                   ? colors.on
                   : cn("border-border bg-surface text-muted hover:text-ink", colors.off),

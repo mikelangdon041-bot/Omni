@@ -429,7 +429,7 @@ export default function OutlookPage() {
         onError={() => setOutsideOutlook(true)}
       />
 
-      <main className="mx-auto max-w-md space-y-3 p-3 text-ink">
+      <main className="mx-auto max-w-md space-y-2 p-2.5 text-ink">
         <header>
           <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">
             Writing Studio
@@ -489,17 +489,17 @@ export default function OutlookPage() {
             worth a dead end, so it now only changes the wording. */}
         {userId && email && (
           <>
-            <div className="rounded-xl border border-border bg-surface p-3">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+            <div className="rounded-xl border border-border bg-surface p-2.5">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
                 {email.composing ? "What I can see" : "What I'm answering"}
               </p>
-              <p className="mt-1 truncate text-xs font-medium">
+              <p className="mt-0.5 truncate text-xs font-medium">
                 {email.subject || "(no subject)"}
               </p>
               <p className="truncate text-[11px] text-muted">
                 {email.from || "(unknown sender)"}
               </p>
-              <p className="mt-1.5 line-clamp-3 text-[11px] leading-relaxed text-muted">
+              <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted">
                 {email.body.trim() || "(couldn't read the body)"}
               </p>
             </div>
@@ -509,7 +509,7 @@ export default function OutlookPage() {
                 <div>
                   <label
                     htmlFor="note"
-                    className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-muted"
+                    className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-muted"
                   >
                     Anything else I need to know?
                   </label>
@@ -525,7 +525,7 @@ export default function OutlookPage() {
                     }
                     className="max-h-56 w-full resize-none overflow-y-auto rounded-lg border border-border bg-surface p-2 text-xs leading-relaxed outline-none focus:border-[var(--accent)]"
                   />
-                  <p className="mt-1 text-[11px] leading-snug text-muted">
+                  <p className="mt-0.5 text-[11px] leading-snug text-muted">
                     Optional. Everything about the email itself, I already have.
                   </p>
                 </div>
@@ -535,7 +535,7 @@ export default function OutlookPage() {
                     dial. Left open, not tucked behind a chevron: a tone and style
                     picked after Generate has already been pressed doesn't count. */}
                 <div className="rounded-xl border border-border bg-surface">
-                  <p className="p-2.5 pb-0 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                  <p className="p-2 pb-0 text-[10px] font-semibold uppercase tracking-wide text-muted">
                     How it should read
                     {reading ? (
                       <span className="ml-1 font-normal normal-case">reading it…</span>
@@ -545,8 +545,9 @@ export default function OutlookPage() {
                       </span>
                     ) : null}
                   </p>
-                  <div className="space-y-2.5 p-2.5">
+                  <div className="space-y-1.5 p-2">
                     <ChipGroup
+                      dense
                       label="How much to write"
                       options={FIDELITY_OPTIONS.map((f) => ({ key: f.key, label: f.label }))}
                       selected={[fidelity]}
@@ -554,6 +555,7 @@ export default function OutlookPage() {
                       onToggle={(k) => setFidelity(k as Fidelity)}
                     />
                     <ChipGroup
+                      dense
                       label="Tone"
                       options={chipOptions(TONE_CHIPS)}
                       selected={tone}
@@ -563,6 +565,7 @@ export default function OutlookPage() {
                       }
                     />
                     <ChipGroup
+                      dense
                       label="Audience"
                       options={chipOptions(AUDIENCE_CHIPS)}
                       selected={audience}
@@ -574,6 +577,7 @@ export default function OutlookPage() {
                       }
                     />
                     <ChipGroup
+                      dense
                       label="Length"
                       options={LENGTHS}
                       selected={[length]}
@@ -583,6 +587,7 @@ export default function OutlookPage() {
                     />
                     {styles.length > 0 && (
                       <ChipGroup
+                        dense
                         label="Your styles & voices"
                         options={styles.map((s) => ({
                           key: s.id,
