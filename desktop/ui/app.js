@@ -191,6 +191,11 @@ function render() {
   button.classList.toggle("stop", recording);
   button.disabled = working;
 
+  // Only offered while it's still recording — once Stop hands it off to
+  // upload/transcribe, the audio is on its way out and cancelling would just
+  // orphan a half-finished job instead of cleanly discarding one.
+  show("cancel-recording", recording);
+
   show("open-meeting", Boolean(status.last_meeting));
   $("hotkey-hint").textContent = status.hotkey;
   $("who").textContent = status.username;
@@ -273,6 +278,16 @@ $("signin").addEventListener("submit", async (e) => {
 });
 
 $("record").addEventListener("click", () => invoke("toggle_recording"));
+
+$("cancel-recording").addEventListener("click", () => {
+  // No confirm() on Stop — losing that would cost a whole meeting — but this
+  // button's entire purpose is throwing the recording away, so it gets one:
+  // opening the window mid-meeting to check on it is exactly the moment a
+  // stray click here would otherwise cost the meeting for real.
+  if (window.confirm("Discard this recording? It cannot be recovered.")) {
+    void invoke("cancel_recording");
+  }
+});
 
 $("meeting-title").addEventListener("input", () => {
   void invoke("set_title", { title: $("meeting-title").value });

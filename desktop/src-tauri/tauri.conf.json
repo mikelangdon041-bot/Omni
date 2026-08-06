@@ -39,7 +39,8 @@
     "resources": ["icons/tray-idle.png", "icons/tray-recording.png"],
     "windows": {
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "webviewInstallMode": { "type": "skip" }
       }
     }
   }

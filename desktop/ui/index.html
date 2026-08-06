@@ -92,6 +92,9 @@
         <p class="note" id="note"></p>
 
         <button class="primary big" id="record">Start recording</button>
+        <!-- Only while actively recording — once it's uploading, throwing it
+             away means losing the only copy, so Cancel stops offering. -->
+        <button class="ghost wide" id="cancel-recording" hidden>Discard this recording</button>
         <button class="link" id="open-meeting" hidden>Open the meeting</button>
       </div>
 

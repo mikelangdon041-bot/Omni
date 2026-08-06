@@ -690,6 +690,33 @@ fn toggle_recording(app: AppHandle) {
     toggle(&app);
 }
 
+// The window can be opened mid-recording — someone checking it's actually
+// running, or realising partway through that this one shouldn't be kept at
+// all. Stop and write it up assumes you want the meeting; this is the other
+// answer: throw the audio away and go back to Idle without ever uploading.
+#[tauri::command]
+fn cancel_recording(app: AppHandle) {
+    let recorder = {
+        let state = app.state::<AppState>();
+        let mut slot = state.recorder.lock().unwrap();
+        slot.take()
+    };
+    let Some(recorder) = recorder else { return };
+    if let Ok(recording) = recorder.stop() {
+        let _ = std::fs::remove_file(&recording.path);
+    }
+    set_status(&app, |s| {
+        s.phase = Phase::Idle;
+        s.message = String::new();
+        s.seconds = 0;
+        s.percent = 0;
+        s.level = 0;
+        s.title = String::new();
+        // `folder_id` survives, same as a normal stop — it's where meetings
+        // go, not something tied to the one that just got thrown away.
+    });
+}
+
 // Fired on every keystroke in the title field, so this only touches the one
 // field rather than going through save_settings — a title is part of the
 // in-progress recording's status, not a remembered preference.
@@ -897,6 +924,7 @@ pub fn run() {
             sign_out,
             save_settings,
             toggle_recording,
+            cancel_recording,
             set_title,
             set_folder,
             list_folders,
