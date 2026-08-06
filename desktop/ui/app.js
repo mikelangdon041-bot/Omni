@@ -59,8 +59,11 @@ let showingCompose = false;
 let devices = { inputs: [], outputs: [] };
 // Declared up here with the rest of the module state because render() reads it,
 // and render() must never be the thing that touches it first.
-let onenoteSections = [];
-let onenoteAsked = false;
+let folders = [];
+let foldersAsked = false;
+// "+ New person" / "+ New topic" chosen from the select — which kind, so the
+// form knows what it's creating and can send the right label.
+let creatingFolderKind = null;
 /** Settings is a separate view rather than a state of the main one. */
 let showingSettings = false;
 
@@ -150,13 +153,16 @@ function render() {
   // Asked for the first time a recording could actually use them, not at
   // startup: this app is meant to sit in the tray costing nothing, and most
   // launches never record at all.
-  if (recording || working) void loadDestinations();
+  if (recording || working) void loadFolders();
 
-  // Same window of time as the title, and only once we know OneNote is
-  // connected and which sections exist.
-  show("destination-field", (recording || working) && onenoteSections.length > 0);
-  if (document.activeElement !== $("onenote-section")) {
-    $("onenote-section").value = status.onenote_section || "";
+  // Same window of time as the title. Shown whenever a recording is live or
+  // being written up — unlike the OneNote picker this replaced, it's always
+  // useful: leaving it on Uncategorized is a fine answer, but it's always a
+  // question worth asking.
+  show("destination-field", (recording || working) && !creatingFolderKind);
+  show("new-folder-form", (recording || working) && Boolean(creatingFolderKind));
+  if (document.activeElement !== $("folder-select")) {
+    $("folder-select").value = status.folder_id || "";
   }
 
   show("progress", working);
@@ -272,48 +278,96 @@ $("meeting-title").addEventListener("input", () => {
   void invoke("set_title", { title: $("meeting-title").value });
 });
 
-// --- Where the notes land -----------------------------------------------
+// --- Where the meeting is filed ------------------------------------------
 
 // Fetched once, lazily, the first time a recording could use them. Doing it at
 // startup would put a network call on the path of an app that is meant to sit
 // in the tray costing nothing, for a feature most launches never touch.
-async function loadDestinations() {
-  if (onenoteAsked) return;
-  onenoteAsked = true;
+async function loadFolders() {
+  if (foldersAsked) return;
+  foldersAsked = true;
   try {
-    const info = await invoke("onenote_destinations");
-    if (!info?.connected) return;
-    onenoteSections = info.sections || [];
-    const select = $("onenote-section");
-    for (const section of onenoteSections) {
-      const option = document.createElement("option");
-      option.value = section.id;
-      option.textContent = section.notebook
-        ? `${section.notebook} › ${section.name}`
-        : section.name;
-      select.appendChild(option);
-    }
-    // Default to wherever the last meeting went — the same section the web
-    // picker offers first, so the two never disagree about "last time".
-    if (info.lastSectionId && onenoteSections.some((s) => s.id === info.lastSectionId)) {
-      void invoke("set_onenote_section", {
-        id: info.lastSectionId,
-        name: info.lastSectionName || "",
-      });
-    }
+    folders = await invoke("list_folders");
+    fillFolderSelect();
     render();
   } catch {
-    // Not connected, offline, or OneNote is having a day. The picker simply
-    // does not appear and everything works exactly as it did before it existed.
+    // Offline, or Omni is having a day. The picker still shows Uncategorized
+    // and "+ New…" — creating one will just fail with a clear error rather
+    // than the whole feature disappearing.
   }
 }
 
-$("onenote-section").addEventListener("change", () => {
-  const select = $("onenote-section");
-  void invoke("set_onenote_section", {
+function fillFolderSelect() {
+  const select = $("folder-select");
+  const chosen = select.value;
+  select.innerHTML = '<option value="">Uncategorized</option>';
+  const people = folders.filter((f) => f.kind === "person");
+  const topics = folders.filter((f) => f.kind === "topic");
+  const group = (label, items) => {
+    if (items.length === 0) return null;
+    const g = document.createElement("optgroup");
+    g.label = label;
+    for (const f of items) {
+      const option = document.createElement("option");
+      option.value = f.id;
+      option.textContent = f.name;
+      g.appendChild(option);
+    }
+    return g;
+  };
+  const peopleGroup = group("People", people);
+  if (peopleGroup) select.appendChild(peopleGroup);
+  const newPerson = document.createElement("option");
+  newPerson.value = "__new_person__";
+  newPerson.textContent = "+ New person…";
+  select.appendChild(newPerson);
+  const topicsGroup = group("Topics", topics);
+  if (topicsGroup) select.appendChild(topicsGroup);
+  const newTopic = document.createElement("option");
+  newTopic.value = "__new_topic__";
+  newTopic.textContent = "+ New topic…";
+  select.appendChild(newTopic);
+  select.value = folders.some((f) => f.id === chosen) ? chosen : "";
+}
+
+$("folder-select").addEventListener("change", () => {
+  const select = $("folder-select");
+  if (select.value === "__new_person__" || select.value === "__new_topic__") {
+    creatingFolderKind = select.value === "__new_person__" ? "person" : "topic";
+    $("new-folder-heading").textContent =
+      creatingFolderKind === "person" ? "New person" : "New topic";
+    $("new-folder-name").value = "";
+    render();
+    requestAnimationFrame(() => $("new-folder-name").focus());
+    return;
+  }
+  void invoke("set_folder", {
     id: select.value,
     name: select.selectedOptions[0]?.textContent || "",
   });
+});
+
+$("new-folder-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = $("new-folder-name").value.trim();
+  if (!name || !creatingFolderKind) return;
+  try {
+    const folder = await invoke("create_folder", { kind: creatingFolderKind, name });
+    folders = [...folders, folder];
+    fillFolderSelect();
+    $("folder-select").value = folder.id;
+    await invoke("set_folder", { id: folder.id, name: folder.name });
+  } catch (e) {
+    window.alert(String(e));
+  } finally {
+    creatingFolderKind = null;
+    render();
+  }
+});
+
+$("new-folder-cancel").addEventListener("click", () => {
+  creatingFolderKind = null;
+  render();
 });
 
 $("recover-send").addEventListener("click", () => {

@@ -37,8 +37,10 @@ import { Input, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { RichText } from "@/components/ui/RichText";
 import { useToast } from "@/components/ui/Feedback";
+import { FolderPicker } from "@/components/meetingprep/FolderPicker";
 import { startLiveCapture, type LiveCapture } from "@/lib/meetingprep/liveCapture";
 import { tidyNotesHtml } from "@/lib/meetingprep/notes";
+import type { MpFolder } from "@/lib/meetingprep/types";
 import { renameInHtml, renameInText } from "@/lib/meetingprep/rename";
 import { transcribeUpload, type UploadProgress } from "@/lib/meetingprep/uploadCapture";
 import { createClient } from "@/lib/supabase/client";
@@ -66,6 +68,8 @@ export interface CaptureResult {
   nameMap?: Record<string, string>;
   /** Territory KOL this meeting was linked to at capture time. */
   kolId?: string;
+  /** Person or topic folder chosen before saving. Null files it as Uncategorized. */
+  folder?: MpFolder | null;
   /** Where the recording was kept, when the user chose to keep it. */
   audioPath?: string;
 }
@@ -142,9 +146,11 @@ function mmss(sec: number) {
 }
 
 export function MeetingRecorder({
+  userId,
   onSave,
   saving,
 }: {
+  userId: string | null;
   /** Persist the finished notes. `transcript` is "" when the user drops it. */
   onSave: (result: CaptureResult) => Promise<void>;
   saving?: boolean;
@@ -185,6 +191,7 @@ export function MeetingRecorder({
   const [titleOverride, setTitleOverride] = useState("");
   const [kolQuery, setKolQuery] = useState("");
   const [kolId, setKolId] = useState("");
+  const [folder, setFolder] = useState<MpFolder | null>(null);
   const [kolOptions, setKolOptions] = useState<{ id: string; label: string; detail: string }[]>([]);
   // Capture settings are remembered. Re-ticking the same boxes before every
   // meeting is exactly the kind of friction that stops people recording.
@@ -532,7 +539,12 @@ export function MeetingRecorder({
     await onSave({
       ...result,
       nameMap,
-      kolId: kolId || undefined,
+      // A person-folder linked to a KOL wins over a separately-typed KOL
+      // search only if that search was left empty — filing under "Sam"
+      // shouldn't silently override a different person you explicitly
+      // linked in the field above.
+      kolId: kolId || folder?.kol_id || undefined,
+      folder,
       audioPath: audioPath || undefined,
       actions: result.actions.filter((a) => a.selected),
       transcript: keepTranscript ? trimmed : "",
@@ -715,6 +727,20 @@ export function MeetingRecorder({
               onChange={(e) => setTitleOverride(e.target.value)}
               placeholder="Leave blank and I'll name it from what was said"
             />
+
+            {/* Where this lands — a person or topic folder, chosen now while
+                it's fresh, same as the desktop recorder's picker. Left on
+                Uncategorized, it still saves; the reminder to file it lives
+                on the meeting list and the Folders page, not here. */}
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted">File under</label>
+              <FolderPicker
+                userId={userId}
+                folderId={folder?.id ?? null}
+                onChange={setFolder}
+                className="w-full rounded-md border border-border bg-canvas px-2 py-1.5 text-sm outline-none transition focus:border-[var(--accent)]"
+              />
+            </div>
 
             {/* Linking here rather than after saving: the KOL is fresh in mind
                 now, and the debrief can then be logged against them without a

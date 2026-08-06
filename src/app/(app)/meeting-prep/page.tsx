@@ -10,6 +10,7 @@ import {
   ChevronDown,
   ChevronUp,
   FileAudio,
+  FolderKanban,
   Plus,
   Settings2,
   Trash2,
@@ -22,25 +23,44 @@ import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { useConfirm } from "@/components/ui/Feedback";
+import { createClient } from "@/lib/supabase/client";
+import { CreateFolderModal, FolderSelect } from "@/components/meetingprep/FolderPicker";
 import {
+  useMpFolders,
   useMpMeetings,
   useMpSettings,
   useUserId,
 } from "@/lib/meetingprep/hooks";
 import {
   DEFAULT_BRIEF_SECTIONS,
+  folderMovePatch,
   meetingTypeLabel,
   orderSections,
   type CustomSection,
+  type FolderKind,
+  type MpFolder,
   type MpMeeting,
 } from "@/lib/meetingprep/types";
+
+const supabase = createClient();
 
 export default function MeetingPrepPage() {
   const router = useRouter();
   const confirm = useConfirm();
   const { userId } = useUserId();
-  const { meetings, loading, add, remove } = useMpMeetings(userId);
+  const { meetings, loading, add, remove, refresh } = useMpMeetings(userId);
   const { settings, save: saveSettings } = useMpSettings(userId);
+  const { folders } = useMpFolders(userId);
+  const [creatingFolderKind, setCreatingFolderKind] = useState<FolderKind | null>(null);
+  // Which meeting a "+ New person/topic" was opened from, so the folder that
+  // comes out of the modal is filed onto the right card rather than left for
+  // a second click.
+  const [creatingFolderFor, setCreatingFolderFor] = useState<MpMeeting | null>(null);
+
+  async function moveFolder(m: MpMeeting, folder: MpFolder | null) {
+    await supabase.from("mp_meetings").update(folderMovePatch(folder)).eq("id", m.id);
+    await refresh();
+  }
   // Every meeting on the list, so "what have I got next week" and "start a prep
   // for the exec review" both work from here.
   useChatScope({
@@ -91,6 +111,12 @@ export default function MeetingPrepPage() {
   }
 
   const briefed = meetings.filter((m) => (m.brief?.sections || []).length > 0).length;
+  // "Uncategorized" isn't every undated meeting — plenty of upcoming ones are
+  // still being prepped and have nothing to file yet. It's specifically a
+  // recording that finished (a transcript or notes exist) with nowhere to go.
+  const uncategorizedRecorded = meetings.filter(
+    (m) => !m.folder_id && ((m.debrief?.transcript || "").trim() || (m.debrief?.notesHtml || "").trim()),
+  ).length;
 
   return (
     <>
@@ -105,6 +131,13 @@ export default function MeetingPrepPage() {
         ]}
         action={
           <div className="flex flex-wrap gap-2">
+            <Button
+              variant="secondary"
+              className="!border-white/40 !bg-white/15 !text-white hover:!bg-white/25"
+              onClick={() => router.push("/meeting-prep/folders")}
+            >
+              <FolderKanban size={16} /> Folders
+            </Button>
             <Button
               variant="secondary"
               className="!border-white/40 !bg-white/15 !text-white hover:!bg-white/25"
@@ -130,6 +163,17 @@ export default function MeetingPrepPage() {
         }
       />
 
+      {uncategorizedRecorded > 0 && (
+        <button
+          onClick={() => router.push("/meeting-prep/folders/uncategorized")}
+          className="mb-6 flex w-full items-center gap-2 rounded-xl border border-amber-300/60 bg-amber-50 px-4 py-2.5 text-left text-sm text-amber-900 transition hover:border-amber-400"
+        >
+          <FolderKanban size={15} className="shrink-0" />
+          {uncategorizedRecorded} recorded meeting{uncategorizedRecorded === 1 ? "" : "s"} not yet
+          filed under a person or topic — <span className="font-semibold underline">file them</span>
+        </button>
+      )}
+
       {loading ? (
         <p className="py-16 text-center text-sm text-muted">Loading…</p>
       ) : meetings.length === 0 ? (
@@ -147,7 +191,13 @@ export default function MeetingPrepPage() {
           <MeetingList
             title="Upcoming & undated"
             meetings={upcoming}
+            folders={folders}
             onOpen={(id) => router.push(`/meeting-prep/${id}`)}
+            onMoveFolder={moveFolder}
+            onRequestCreateFolder={(kind, m) => {
+              setCreatingFolderKind(kind);
+              setCreatingFolderFor(m);
+            }}
             onDelete={async (m) => {
               if (
                 await confirm({
@@ -164,7 +214,13 @@ export default function MeetingPrepPage() {
             <MeetingList
               title="Past"
               meetings={past}
+              folders={folders}
               onOpen={(id) => router.push(`/meeting-prep/${id}`)}
+              onMoveFolder={moveFolder}
+              onRequestCreateFolder={(kind, m) => {
+                setCreatingFolderKind(kind);
+                setCreatingFolderFor(m);
+              }}
               onDelete={async (m) => {
                 if (
                   await confirm({
@@ -188,6 +244,18 @@ export default function MeetingPrepPage() {
         order={settings?.section_order || []}
         onSaveOrder={(section_order) => void saveSettings({ section_order })}
       />
+
+      <CreateFolderModal
+        userId={userId}
+        kind={creatingFolderKind}
+        onClose={() => {
+          setCreatingFolderKind(null);
+          setCreatingFolderFor(null);
+        }}
+        onCreated={(folder) => {
+          if (creatingFolderFor) void moveFolder(creatingFolderFor, folder);
+        }}
+      />
     </>
   );
 }
@@ -195,15 +263,22 @@ export default function MeetingPrepPage() {
 function MeetingList({
   title,
   meetings,
+  folders,
   onOpen,
+  onMoveFolder,
+  onRequestCreateFolder,
   onDelete,
 }: {
   title: string;
   meetings: MpMeeting[];
+  folders: MpFolder[];
   onOpen: (id: string) => void;
+  onMoveFolder: (m: MpMeeting, folder: MpFolder | null) => void;
+  onRequestCreateFolder: (kind: FolderKind, m: MpMeeting) => void;
   onDelete: (m: MpMeeting) => void;
 }) {
   if (meetings.length === 0) return null;
+  const folderName = (id: string | null) => folders.find((f) => f.id === id)?.name || null;
   return (
     <section>
       <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">
@@ -278,6 +353,30 @@ function MeetingList({
                         Logged
                       </span>
                     )}
+                  </div>
+                  {/* Folder chip + quick move — the same control the meeting
+                      detail page and the recorder use, dropped here so a
+                      meeting can be filed without opening it. */}
+                  <div
+                    className="mt-2 flex items-center gap-1.5"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                        m.folder_id
+                          ? "bg-canvas text-muted"
+                          : "bg-amber-50 text-amber-700"
+                      }`}
+                    >
+                      {folderName(m.folder_id) || "Uncategorized"}
+                    </span>
+                    <FolderSelect
+                      folders={folders}
+                      folderId={m.folder_id}
+                      onChange={(folder) => onMoveFolder(m, folder)}
+                      onRequestCreate={(kind) => onRequestCreateFolder(kind, m)}
+                      className="rounded-md border border-transparent bg-transparent px-1 py-0.5 text-[10px] text-muted opacity-0 outline-none transition group-hover:opacity-100 focus:opacity-100 focus:border-[var(--accent)]"
+                    />
                   </div>
                 </div>
               </div>

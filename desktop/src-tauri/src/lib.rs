@@ -87,14 +87,14 @@ pub struct Status {
     /// recording and the notes actually being written — typed early, typed
     /// while it uploads, or left blank for the AI to name it instead.
     title: String,
-    /// Which OneNote section the finished notes should land in, chosen from the
-    /// same window and in the same window of time as the title. Empty means
-    /// nowhere — the notes stay in Omni and you copy them yourself, exactly as
-    /// before this existed.
-    onenote_section: String,
-    /// The human-readable "Notebook › Section", so the window can show what is
-    /// selected without asking the server what that id means.
-    onenote_section_name: String,
+    /// Which person or topic folder the finished meeting should be filed
+    /// under, chosen from the same window and in the same window of time as
+    /// the title. Empty means Uncategorized — it still saves, with a
+    /// reminder to file it shown on the web app's list.
+    folder_id: String,
+    /// The folder's name, so the window can show what is selected without
+    /// asking the server what that id means.
+    folder_name: String,
     /// Recordings found on disk that never became meetings — the app was
     /// killed, the machine restarted, or an upload failed. Offered back rather
     /// than left in a folder nobody would think to look in.
@@ -189,8 +189,8 @@ impl AppState {
             system_device_id: settings.system_device_id.clone(),
             last_meeting: String::new(),
             title: String::new(),
-            onenote_section: String::new(),
-            onenote_section_name: String::new(),
+            folder_id: String::new(),
+            folder_name: String::new(),
             orphans: Vec::new(),
         };
         Self {
@@ -292,10 +292,10 @@ fn start_recording(app: &AppHandle) -> Result<(), String> {
         s.percent = 0;
         s.last_meeting = String::new();
         s.title = String::new();
-        // `onenote_section` deliberately survives. A title belongs to one
-        // meeting; a destination is where meetings go, and re-picking the same
-        // section every time is the clicking this was built to remove. Change
-        // it in the window whenever one meeting belongs somewhere else.
+        // `folder_id` deliberately survives. A title belongs to one meeting;
+        // a destination is where meetings go, and re-picking the same folder
+        // every time is the clicking this was built to remove. Change it in
+        // the window whenever one meeting belongs somewhere else.
     });
 
     // Tick the elapsed time and level so the tray tooltip and the window both
@@ -435,15 +435,15 @@ async fn upload_and_capture(
     });
 
     // Read now rather than earlier: this is the last moment a title typed —
-    // or a destination picked — while the upload was running still makes it in.
-    let (title, section) = {
+    // or a folder picked — while the upload was running still makes it in.
+    let (title, folder_id) = {
         let state = app.state::<AppState>();
         let status = state.status.lock().unwrap();
-        (status.title.clone(), status.onenote_section.clone())
+        (status.title.clone(), status.folder_id.clone())
     };
 
     client
-        .capture(&transcript, &audio_path, settings.keep_audio, &title, &section)
+        .capture(&transcript, &audio_path, settings.keep_audio, &title, &folder_id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -698,30 +698,25 @@ fn set_title(app: AppHandle, title: String) {
     set_status(&app, |s| s.title = title);
 }
 
-// The same idea for where the notes end up. Both halves are stored: the id is
-// what the server needs, the name is what the window shows, and keeping the
-// name here means selecting a destination costs no extra round trip to turn an
-// opaque id back into words.
+// The same idea for where the meeting ends up. Both halves are stored: the id
+// is what the server needs, the name is what the window shows, and keeping
+// the name here means selecting a destination costs no extra round trip to
+// turn an opaque id back into words.
 #[tauri::command]
-fn set_onenote_section(app: AppHandle, id: String, name: String) {
+fn set_folder(app: AppHandle, id: String, name: String) {
     set_status(&app, |s| {
-        s.onenote_section = id;
-        s.onenote_section_name = name;
+        s.folder_id = id;
+        s.folder_name = name;
     });
 }
 
-/// Everything the destination picker needs: whether OneNote is connected at
-/// all, the sections that can be written to, and where the last meeting went.
-///
-/// The remembered section is the server's, the same one the web picker uses, so
-/// a destination chosen in either place is the one both offer next — and it
-/// survives restarting this app without a second thing on disk to keep in sync.
+/// Every person/topic folder, for the destination picker.
 ///
 /// Proxied through Rust rather than fetched by the window directly: the access
 /// token lives on this side, and handing it to the webview to make its own
 /// authenticated calls would put a credential somewhere it is not needed.
 #[tauri::command]
-async fn onenote_destinations(app: AppHandle) -> Result<serde_json::Value, String> {
+async fn list_folders(app: AppHandle) -> Result<serde_json::Value, String> {
     let settings = {
         let state = app.state::<AppState>();
         let settings = state.settings.lock().unwrap();
@@ -733,7 +728,26 @@ async fn onenote_destinations(app: AppHandle) -> Result<serde_json::Value, Strin
         .await
         .map_err(|e| e.to_string())?;
     let client = omni::Client::new(&base, &token).map_err(|e| e.to_string())?;
-    client.onenote_destinations().await.map_err(|e| e.to_string())
+    client.list_folders().await.map_err(|e| e.to_string())
+}
+
+/// "+ New person" / "+ New topic" from the picker itself — the person you're
+/// meeting doesn't have a folder yet, and stopping to open a browser tab for
+/// one would defeat the point of a one-hotkey recorder.
+#[tauri::command]
+async fn create_folder(app: AppHandle, kind: String, name: String) -> Result<serde_json::Value, String> {
+    let settings = {
+        let state = app.state::<AppState>();
+        let settings = state.settings.lock().unwrap();
+        settings.clone()
+    };
+    let base = settings.normalized_url();
+    let config = auth::fetch_config(&base).await.map_err(|e| e.to_string())?;
+    let token = auth::access_token(&config, &settings.username)
+        .await
+        .map_err(|e| e.to_string())?;
+    let client = omni::Client::new(&base, &token).map_err(|e| e.to_string())?;
+    client.create_folder(&kind, &name).await.map_err(|e| e.to_string())
 }
 
 // Send a recording that never made it — the app was killed mid-meeting, the
@@ -884,8 +898,9 @@ pub fn run() {
             save_settings,
             toggle_recording,
             set_title,
-            set_onenote_section,
-            onenote_destinations,
+            set_folder,
+            list_folders,
+            create_folder,
             recover,
             discard_orphan,
             open_url,

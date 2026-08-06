@@ -1,11 +1,55 @@
+import JSZip from "jszip";
 import { NextResponse } from "next/server";
 import { routeAuth } from "@/lib/supabase/route";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { CaptureRefusal, captureFromTranscript } from "@/lib/meetingprep/captureAi";
 import { exportHeaderHtml, tidyNotesHtml } from "@/lib/meetingprep/notes";
 import { createPage, prependToPage } from "@/lib/microsoft/graph";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
+
+const TRANSCRIPT_BUCKET = "transcripts";
+
+// The bucket isn't declared anywhere else (every other bucket in this app is
+// created once by hand in the Supabase dashboard) — created on first use here
+// instead, so this feature works the moment the migration is run, with no
+// manual dashboard step for a deploy to miss.
+async function ensureTranscriptBucket(admin: ReturnType<typeof createAdminClient>) {
+  const { error } = await admin.storage.getBucket(TRANSCRIPT_BUCKET);
+  if (error) {
+    await admin.storage.createBucket(TRANSCRIPT_BUCKET, { public: false });
+  }
+}
+
+// Archives the transcript as a zip in Supabase storage, filed under the
+// meeting's folder (or "uncategorized"). Best-effort: the meeting itself is
+// already saved by the time this runs, so a storage hiccup here is worth
+// reporting, never worth losing the meeting over.
+async function archiveTranscript(
+  userId: string,
+  meetingId: string,
+  folderId: string | null,
+  title: string,
+  transcript: string,
+): Promise<string | null> {
+  if (!transcript.trim()) return null;
+  try {
+    const admin = createAdminClient();
+    await ensureTranscriptBucket(admin);
+    const zip = new JSZip();
+    zip.file("transcript.txt", `${title}\n\n${transcript}`);
+    const bytes = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+    const path = `${userId}/${folderId || "uncategorized"}/${meetingId}.zip`;
+    const { error } = await admin.storage
+      .from(TRANSCRIPT_BUCKET)
+      .upload(path, bytes, { contentType: "application/zip", upsert: true });
+    if (error) return null;
+    return path;
+  } catch {
+    return null;
+  }
+}
 
 // Transcript in, saved meeting out — the second half of "record a meeting",
 // done server-side.
@@ -69,6 +113,28 @@ export async function POST(req: Request) {
       String(body.hint || "").trim() ||
       "Recorded meeting";
 
+    // Where this meeting is filed — a person or topic folder chosen mid-
+    // recording, or nothing, which lands it in "Uncategorized" (folder_id
+    // null) with a reminder to file it later. Resolved server-side, not
+    // trusted from the body, so a stale or foreign id can't attach a meeting
+    // to someone else's folder.
+    const folderId = String(body.folderId || "") || null;
+    let folder: { kind: string; kol_id: string | null } | null = null;
+    if (folderId) {
+      const { data: f } = await supabase
+        .from("mp_folders")
+        .select("kind, kol_id")
+        .eq("id", folderId)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      folder = f;
+    }
+
+    // An explicit kolId wins; otherwise a person-folder linked to a KOL
+    // carries that link along, so filing under "Sam" also keeps Territory
+    // Planning's kol_id in step without a second thing to set.
+    const kolId = String(body.kolId || "") || folder?.kol_id || null;
+
     // Inserted through the caller's own client, so RLS applies exactly as it
     // does for the web app rather than being bypassed with the service role.
     const { data, error } = await supabase
@@ -79,7 +145,8 @@ export async function POST(req: Request) {
         // A recording is by definition a meeting that already happened.
         meeting_type: "other",
         date: new Date().toISOString(),
-        kol_id: String(body.kolId || "") || null,
+        kol_id: kolId,
+        folder_id: folder ? folderId : null,
         attendees,
         debrief: {
           transcript: kept,
@@ -98,11 +165,18 @@ export async function POST(req: Request) {
       );
     }
 
-    // Where the recorder was told, mid-meeting, that these notes should end up.
-    // Done here rather than back in the app because the whole point is that
-    // stopping the recording is the last thing you do — a hand-off that waited
-    // for someone to open a tab and press a button would be the copy and paste
-    // again, wearing a hat.
+    // The durable copy: transcript zipped and filed in Supabase storage under
+    // this meeting's folder. This is the default hand-off now — done
+    // unconditionally, not opt-in like OneNote below.
+    const zipPath = await archiveTranscript(user.id, data.id, folder ? folderId : null, title, kept);
+    if (zipPath) {
+      await supabase.from("mp_meetings").update({ transcript_zip_path: zipPath }).eq("id", data.id);
+    }
+
+    // OneNote is now a manual, optional extra rather than the default
+    // hand-off — only reached when the caller explicitly asks for it (the web
+    // app's "To OneNote" button; the recorder no longer offers this as its
+    // primary destination picker, see desktop/ui/app.js).
     const sectionId = String(body.oneNoteSectionId || "");
     const pageId = String(body.oneNotePageId || "");
     let oneNote: string | null = null;
@@ -130,6 +204,7 @@ export async function POST(req: Request) {
       path: `/meeting-prep/${data.id}?tab=Debrief`,
       actions: result.actions.length,
       ungrounded: result.ungrounded,
+      folderId: folder ? folderId : null,
       oneNote,
     });
   } catch (e) {

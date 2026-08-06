@@ -17,13 +17,14 @@ import { SetupTab } from "@/components/meetingprep/SetupTab";
 import { BriefTab } from "@/components/meetingprep/BriefTab";
 import { GrillTab } from "@/components/meetingprep/GrillTab";
 import { DebriefTab } from "@/components/meetingprep/DebriefTab";
+import { FolderPicker } from "@/components/meetingprep/FolderPicker";
 import {
   useMpMeeting,
   useMpSettings,
   useUserId,
 } from "@/lib/meetingprep/hooks";
 import { useBriefGenerator, type GenerateOpts } from "@/lib/meetingprep/useBriefGenerator";
-import { meetingTypeLabel } from "@/lib/meetingprep/types";
+import { folderMovePatch, meetingTypeLabel } from "@/lib/meetingprep/types";
 import { usePersistedState } from "@/lib/usePersistedState";
 
 const TABS = ["Setup", "Brief", "Grill me", "Debrief"] as const;
@@ -148,6 +149,14 @@ export default function MeetingPage() {
           </h1>
         </div>
         <div className="flex shrink-0 items-center gap-3 pb-0.5">
+          {/* Visible on every tab, not just Setup — moving a meeting to a
+              different person or topic (or filing an uncategorized one) is
+              something you reach for from wherever you happen to be. */}
+          <FolderPicker
+            userId={userId}
+            folderId={meeting.folder_id}
+            onChange={(folder) => save(folderMovePatch(folder))}
+          />
           {/* Autosave indicator — everything on every tab saves as you type. */}
           <p
             className="flex items-center gap-1 text-[11px] font-medium text-muted"

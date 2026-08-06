@@ -139,6 +139,35 @@ export const DEBRIEF_QUESTIONS: { key: string; label: string; placeholder: strin
   },
 ];
 
+export type FolderKind = "person" | "topic";
+
+// A person or topic a recording is filed under (see mp_folders). A meeting
+// with folder_id null is "Uncategorized" — no separate flag needed, the
+// absence is the state.
+export interface MpFolder {
+  id: string;
+  user_id: string;
+  kind: FolderKind;
+  name: string;
+  // Only meaningful for kind "person" — links this folder to a Territory
+  // Planning KOL, so filing a meeting here also keeps kol_id in step.
+  kol_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Patch to apply when a meeting is moved into (or out of) a folder. Carries
+// the folder's KOL link along automatically — filing a recording under
+// "Sam" keeps Territory Planning's kol_id in step without a second thing to
+// set — but only when the folder actually has one; it never clears an
+// existing kol_id a meeting already had for some other reason.
+export function folderMovePatch(folder: MpFolder | null): Partial<MpMeeting> {
+  return {
+    folder_id: folder?.id ?? null,
+    ...(folder?.kol_id ? { kol_id: folder.kol_id } : {}),
+  };
+}
+
 export interface MpMeeting {
   id: string;
   user_id: string;
@@ -149,6 +178,8 @@ export interface MpMeeting {
   format: MeetingFormat;
   location: string;
   kol_id: string | null;
+  folder_id: string | null;
+  transcript_zip_path: string;
   attendees: Attendee[];
   // The fast path: describe the meeting in plain language; extraction fills
   // the structured fields below from it. Feeds the brief either way.

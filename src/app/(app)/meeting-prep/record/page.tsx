@@ -30,7 +30,10 @@ export default function RecordMeetingPage() {
         date: new Date().toISOString(),
         // A recording is by definition a meeting that already happened.
         meeting_type: "other",
+        // kolId already carries the folder's KOL link when one applies —
+        // see MeetingRecorder.save() — so only folder_id needs setting here.
         kol_id: result.kolId ?? null,
+        folder_id: result.folder?.id ?? null,
         // Names given for the voices carry onto the meeting, so the roster is
         // captured once instead of retyped in Setup.
         attendees: (result.attendees || []).map((name) => ({
@@ -84,7 +87,7 @@ export default function RecordMeetingPage() {
           the action items pulled out, and a meeting created to hold it all.
         </p>
       </div>
-      <MeetingRecorder onSave={handleSave} saving={saving} />
+      <MeetingRecorder userId={userId} onSave={handleSave} saving={saving} />
     </>
   );
 }

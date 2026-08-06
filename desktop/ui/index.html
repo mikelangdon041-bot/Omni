@@ -61,19 +61,28 @@
           <input id="meeting-title" type="text" placeholder="Leave blank and AI will name it" spellcheck="false" />
         </label>
 
-        <!-- Where the finished notes go. Open in the same window of time as the
-             title, because that is the window in which you know the answer:
-             the meeting is happening and you can see which project it is. When
-             the notes are written the server puts them at the top of that page
-             itself, so there is nothing left to carry.
-             Hidden entirely unless OneNote is connected — most people have not
-             connected it and an empty dropdown is a question nobody asked. -->
+        <!-- Where the finished meeting is filed. Open in the same window of
+             time as the title, because that is the window in which you know
+             the answer: the meeting is happening and you can see who it's
+             with. Left on Uncategorized, it still saves — the reminder to
+             file it lives on the web app's list, not here. -->
         <label class="title-field" id="destination-field" hidden>
-          Send the notes to
-          <select id="onenote-section">
-            <option value="">Keep them in Omni</option>
+          File under
+          <select id="folder-select">
+            <option value="">Uncategorized</option>
           </select>
         </label>
+
+        <!-- The "+ New person/topic" form. Only one field most of the time —
+             the name — plus an optional KOL link when it's a person. -->
+        <form class="title-field" id="new-folder-form" hidden>
+          <span id="new-folder-heading">New person</span>
+          <input id="new-folder-name" type="text" placeholder="Name" spellcheck="false" />
+          <div class="row">
+            <button class="primary" type="submit" id="new-folder-save">Create</button>
+            <button class="ghost" type="button" id="new-folder-cancel">Cancel</button>
+          </div>
+        </form>
 
         <div class="bar" id="progress" hidden>
           <div class="bar-track"><div class="bar-fill" id="progress-fill"></div></div>

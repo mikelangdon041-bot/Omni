@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { dropCached, getCached, setCached } from "@/lib/cache";
-import type { MpMeeting, MpSettings } from "./types";
+import type { FolderKind, MpFolder, MpMeeting, MpSettings } from "./types";
 
 const supabase = createClient();
 
@@ -280,6 +280,83 @@ export function useMpSettings(userId: string | null) {
   );
 
   return { settings, save };
+}
+
+// Person / topic folders recordings are filed under. Direct client + RLS,
+// same pattern as useMpMeetings — the API route under /api/meeting/folders
+// exists in parallel only for the desktop recorder, which has no JS
+// Supabase client to reach RLS with.
+export function useMpFolders(userId: string | null) {
+  const [folders, setFolders] = useState<MpFolder[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    if (!userId) return;
+    const { data } = await supabase
+      .from("mp_folders")
+      .select("*")
+      .eq("user_id", userId)
+      .order("kind", { ascending: true })
+      .order("name", { ascending: true });
+    setFolders((data as MpFolder[]) || []);
+    setLoading(false);
+  }, [userId]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  // Creating the same name twice (typed again mid-meeting, or by someone
+  // clicking fast) reuses the existing folder instead of erroring — a
+  // unique violation on (user_id, kind, lower(name)) or (user_id, kol_id)
+  // is resolved by looking the existing row back up.
+  const create = useCallback(
+    async (input: { kind: FolderKind; name: string; kolId?: string | null }) => {
+      if (!userId) return null;
+      const name = input.name.trim();
+      if (!name) return null;
+      const { data, error } = await supabase
+        .from("mp_folders")
+        .insert({ user_id: userId, kind: input.kind, name, kol_id: input.kolId || null })
+        .select("*")
+        .single();
+      if (data) {
+        const folder = data as MpFolder;
+        setFolders((prev) =>
+          [...prev, folder].sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name)),
+        );
+        return folder;
+      }
+      if (error?.code === "23505") {
+        const existing = input.kolId
+          ? await supabase.from("mp_folders").select("*").eq("user_id", userId).eq("kol_id", input.kolId).maybeSingle()
+          : await supabase
+              .from("mp_folders")
+              .select("*")
+              .eq("user_id", userId)
+              .eq("kind", input.kind)
+              .ilike("name", name)
+              .maybeSingle();
+        return (existing.data as MpFolder) || null;
+      }
+      return null;
+    },
+    [userId],
+  );
+
+  const rename = useCallback(async (id: string, name: string) => {
+    setFolders((prev) => prev.map((f) => (f.id === id ? { ...f, name } : f)));
+    await supabase.from("mp_folders").update({ name }).eq("id", id);
+  }, []);
+
+  const remove = useCallback(async (id: string) => {
+    // mp_meetings.folder_id references this ON DELETE SET NULL, so meetings
+    // filed here fall back to Uncategorized rather than disappearing.
+    setFolders((prev) => prev.filter((f) => f.id !== id));
+    await supabase.from("mp_folders").delete().eq("id", id);
+  }, []);
+
+  return { folders, loading, refresh, create, rename, remove };
 }
 
 export { useUserId } from "@/lib/territory/hooks";

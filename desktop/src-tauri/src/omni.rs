@@ -120,6 +120,26 @@ impl Client {
         self.post("/api/meeting/transcribe-upload", body).await
     }
 
+    async fn get(&self, path: &str) -> Result<String> {
+        let res = self
+            .http
+            .get(format!("{}{path}", self.base))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .context("Could not reach Omni")?;
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+        if !status.is_success() {
+            let detail = serde_json::from_str::<ApiError>(&text)
+                .ok()
+                .and_then(|e| e.error)
+                .unwrap_or_else(|| format!("Request failed ({status})"));
+            return Err(anyhow!(detail));
+        }
+        Ok(text)
+    }
+
     /// Upload a recording and return its transcript, driving the whole
     /// sign/prepare/chunk/discard sequence.
     pub async fn transcribe(
@@ -318,56 +338,54 @@ impl Client {
     /// Turn the transcript into a saved meeting and return where it lives.
     /// An empty `title` leaves the naming to the same AI prompt that writes
     /// the notes — the server already treats a blank title that way.
+    ///
+    /// `folder_id` is where it's filed — a person or topic folder chosen from
+    /// the same window as the title. Empty means Uncategorized: the meeting
+    /// still saves, with a reminder to file it shown on the web app's list.
+    /// The server zips the transcript into that folder unconditionally — this
+    /// is the default hand-off now, not something OneNote replaces.
     pub async fn capture(
         &self,
         transcript: &str,
         audio_path: &str,
         keep_audio: bool,
         title: &str,
-        onenote_section: &str,
+        folder_id: &str,
     ) -> Result<Captured> {
         let body = json!({
             "transcript": transcript,
             "audioPath": if keep_audio { audio_path } else { "" },
             "title": title,
-            // Empty means "leave them in Omni". The server only reaches for
-            // OneNote when it is given somewhere to put them.
-            "oneNoteSectionId": onenote_section,
+            "folderId": folder_id,
         });
         let text = self.post("/api/meeting/capture", body).await?;
         serde_json::from_str(&text).context("Omni sent an unexpected reply while saving the meeting")
     }
 
-    /// What the destination picker needs: is OneNote connected, which sections
-    /// can be written to, and where did the last one go.
-    ///
-    /// Returned as raw JSON — the window is the only thing that reads it, and
-    /// giving it a Rust shape here would mean maintaining the same list twice.
-    ///
-    /// Not connected is a normal answer, not a failure: most of the time this
-    /// runs the answer is "no", and a picker that errored rather than hiding
-    /// itself would put a red message in front of someone who never asked for
-    /// OneNote in the first place.
-    pub async fn onenote_destinations(&self) -> Result<serde_json::Value> {
-        let status_text = self
-            .post("/api/onenote", json!({ "action": "status" }))
+    /// Every person/topic folder, for the destination picker. Raw JSON — the
+    /// window is the only thing that reads it, and giving it a Rust shape
+    /// here would mean maintaining the same list twice.
+    pub async fn list_folders(&self) -> Result<serde_json::Value> {
+        let text = self.get("/api/meeting/folders").await?;
+        let parsed: serde_json::Value =
+            serde_json::from_str(&text).context("Omni sent an unexpected reply about folders")?;
+        Ok(parsed.get("folders").cloned().unwrap_or(json!([])))
+    }
+
+    /// Create a folder on the spot — "Sam" doesn't exist yet, so the window
+    /// offers "+ New person" the same way the web app's picker does. Reusing
+    /// a name that already exists (typed twice, or by someone quick on the
+    /// dropdown) hands back the existing folder rather than erroring.
+    pub async fn create_folder(&self, kind: &str, name: &str) -> Result<serde_json::Value> {
+        let text = self
+            .post("/api/meeting/folders", json!({ "kind": kind, "name": name }))
             .await?;
-        let status: serde_json::Value = serde_json::from_str(&status_text)
-            .context("Omni sent an unexpected reply about OneNote")?;
-        if status.get("connected").and_then(|v| v.as_bool()) != Some(true) {
-            return Ok(json!({ "connected": false, "sections": [] }));
-        }
-        let sections_text = self
-            .post("/api/onenote", json!({ "action": "sections" }))
-            .await?;
-        let sections: serde_json::Value = serde_json::from_str(&sections_text)
-            .context("Omni sent an unexpected reply about OneNote")?;
-        Ok(json!({
-            "connected": true,
-            "sections": sections.get("sections").cloned().unwrap_or(json!([])),
-            "lastSectionId": status.get("lastSectionId").cloned().unwrap_or(json!(null)),
-            "lastSectionName": status.get("lastSectionName").cloned().unwrap_or(json!(null)),
-        }))
+        let parsed: serde_json::Value =
+            serde_json::from_str(&text).context("Omni sent an unexpected reply about folders")?;
+        parsed
+            .get("folder")
+            .cloned()
+            .ok_or_else(|| anyhow!("Omni did not return the new folder"))
     }
 }
 
