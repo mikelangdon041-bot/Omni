@@ -250,16 +250,25 @@ body {
    Our form fields render at 14px (text-sm) for a compact desktop look;
    force 16px on phones so focusing a field never triggers the zoom in the
    first place. Desktop is untouched.
-   Gated on (pointer: coarse), not just width: the zoom-on-focus bug is a
-   touchscreen-browser behavior, not a narrow-viewport one, and width alone
-   also matched narrow *desktop* surfaces — the Outlook add-in taskpane is
-   ~350px wide with a mouse, and this rule was overriding its intentionally
-   smaller UI back up to 16px everywhere a field existed. */
-@media (max-width: 639px) and (pointer: coarse) {
-  input,
-  textarea,
-  select,
-  .omni-rt {
-    font-size: 16px !important;
+   (pointer: coarse) alone still isn't narrow enough: Windows reports a
+   touch-capable laptop's primary pointer as coarse even while the person is
+   using a mouse, so it was still catching the Outlook add-in taskpane
+   (~350px, mouse-driven) on any touchscreen PC. -webkit-touch-callout is a
+   CSS property, not a media feature — it can't go inside @media itself, it
+   has to gate it via @supports — but it's only implemented on iOS, since
+   every iOS browser is required to run on Apple's WebKit, so it's a real
+   proxy for "this is actually a phone," not just "something here can be
+   touched." No real replacement exists for the underlying 16px rule: Apple
+   still auto-zooms sub-16px fields as of 2026, and there's no viewport-meta
+   or CSS property that suppresses it directly without disabling pinch-zoom
+   entirely (an accessibility cost we don't want). */
+@supports (-webkit-touch-callout: none) {
+  @media (max-width: 639px) and (pointer: coarse) {
+    input,
+    textarea,
+    select,
+    .omni-rt {
+      font-size: 16px !important;
+    }
   }
 }

@@ -495,9 +495,10 @@ export default function OutlookPage() {
                     and bolder than every other label here on purpose — the
                     email context below answers itself, this doesn't. */}
                 <div>
-                  <label htmlFor="note" className="mb-1 block text-sm font-semibold text-ink">
+                  <label htmlFor="note" className="block text-sm font-semibold text-ink">
                     What do you want to say?
                   </label>
+                  <p className="mb-1 text-[11px] text-muted">Anything else I need to know?</p>
                   <textarea
                     id="note"
                     ref={noteRef}
