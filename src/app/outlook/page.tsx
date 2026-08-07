@@ -523,9 +523,9 @@ export default function OutlookPage() {
                     placeholder={
                       'e.g. "say yes but push it to the 12th, and don\'t commit to a budget yet"'
                     }
-                    className="max-h-56 w-full resize-none overflow-y-auto rounded-lg border border-border bg-surface p-2 text-xs leading-relaxed outline-none focus:border-[var(--accent)]"
+                    className="max-h-56 w-full resize-none overflow-y-auto rounded-lg border border-border bg-surface p-1.5 text-[11px] leading-snug outline-none focus:border-[var(--accent)]"
                   />
-                  <p className="mt-0.5 text-[11px] leading-snug text-muted">
+                  <p className="mt-0.5 text-[10px] leading-snug text-muted">
                     Optional. Everything about the email itself, I already have.
                   </p>
                 </div>
@@ -632,10 +632,10 @@ export default function OutlookPage() {
 
                 {!generating && hasResult && (
                   <>
-                    <div className="rounded-xl border border-border bg-surface p-2.5">
+                    <div className="rounded-xl border border-border bg-surface p-2">
                       <label
                         htmlFor="subject"
-                        className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-muted"
+                        className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-muted"
                       >
                         Subject
                       </label>
@@ -646,7 +646,7 @@ export default function OutlookPage() {
                           setResultSubject(e.target.value);
                           queueResultSave({ subject: e.target.value });
                         }}
-                        className="w-full rounded-md border border-border bg-canvas px-2 py-1.5 text-xs font-medium outline-none focus:border-[var(--accent)]"
+                        className="w-full rounded-md border border-border bg-canvas px-2 py-1 text-[11px] font-medium outline-none focus:border-[var(--accent)]"
                       />
                     </div>
 
@@ -657,6 +657,7 @@ export default function OutlookPage() {
                         queueResultSave({ content: html });
                       }}
                       minHeight="min-h-32"
+                      dense
                     />
 
                     <div className="flex gap-2">
@@ -679,7 +680,7 @@ export default function OutlookPage() {
                     <div>
                       <label
                         htmlFor="guidance"
-                        className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-muted"
+                        className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-muted"
                       >
                         Want it different?
                       </label>
@@ -690,7 +691,7 @@ export default function OutlookPage() {
                         onChange={(e) => setGuidance(e.target.value)}
                         rows={1}
                         placeholder='e.g. "shorter, and a bit warmer"'
-                        className="max-h-40 w-full resize-none overflow-y-auto rounded-lg border border-border bg-surface p-2 text-xs leading-relaxed outline-none focus:border-[var(--accent)]"
+                        className="max-h-40 w-full resize-none overflow-y-auto rounded-lg border border-border bg-surface p-1.5 text-[11px] leading-snug outline-none focus:border-[var(--accent)]"
                       />
                       <button
                         onClick={refine}

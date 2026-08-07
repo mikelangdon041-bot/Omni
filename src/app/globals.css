@@ -248,9 +248,14 @@ body {
    is under 16px, and routinely fails to zoom back out on blur — this is the
    "have to pinch out" / "boxes overlap" bug reported throughout the app.
    Our form fields render at 14px (text-sm) for a compact desktop look;
-   force 16px on phones (below Tailwind's sm breakpoint) so focusing a field
-   never triggers the zoom in the first place. Desktop is untouched. */
-@media (max-width: 639px) {
+   force 16px on phones so focusing a field never triggers the zoom in the
+   first place. Desktop is untouched.
+   Gated on (pointer: coarse), not just width: the zoom-on-focus bug is a
+   touchscreen-browser behavior, not a narrow-viewport one, and width alone
+   also matched narrow *desktop* surfaces — the Outlook add-in taskpane is
+   ~350px wide with a mouse, and this rule was overriding its intentionally
+   smaller UI back up to 16px everywhere a field existed. */
+@media (max-width: 639px) and (pointer: coarse) {
   input,
   textarea,
   select,

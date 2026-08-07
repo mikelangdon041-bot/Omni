@@ -77,6 +77,7 @@ export function RichText({
   onFiles,
   autoFocus = false,
   onCopy,
+  dense = false,
 }: {
   value: string;
   onChange: (html: string) => void;
@@ -94,6 +95,9 @@ export function RichText({
    * produce the same paste.
    */
   onCopy?: (e: React.ClipboardEvent<HTMLDivElement>) => void;
+  /** Smaller text, toolbar and padding, for a narrow panel where the default
+   * size reads as oversized next to everything around it. */
+  dense?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const composing = useRef(false);
@@ -377,18 +381,20 @@ export function RichText({
           : "border-border"
       }`}
     >
-      <div className="flex items-center gap-0.5 border-b border-border bg-canvas px-2 py-1.5">
-        <Btn title="Bold (⌘B)" onClick={() => exec("bold")}><Bold size={14} /></Btn>
-        <Btn title="Italic (⌘I)" onClick={() => exec("italic")}><Italic size={14} /></Btn>
+      <div
+        className={`flex items-center gap-0.5 border-b border-border bg-canvas ${dense ? "px-1.5 py-1" : "px-2 py-1.5"}`}
+      >
+        <Btn dense={dense} title="Bold (⌘B)" onClick={() => exec("bold")}><Bold size={dense ? 12 : 14} /></Btn>
+        <Btn dense={dense} title="Italic (⌘I)" onClick={() => exec("italic")}><Italic size={dense ? 12 : 14} /></Btn>
         <span className="mx-1 h-4 w-px bg-border" />
-        <Btn title="Bullet list" onClick={() => exec("insertUnorderedList")}><List size={14} /></Btn>
-        <Btn title="Numbered list" onClick={() => exec("insertOrderedList")}><ListOrdered size={14} /></Btn>
+        <Btn dense={dense} title="Bullet list" onClick={() => exec("insertUnorderedList")}><List size={dense ? 12 : 14} /></Btn>
+        <Btn dense={dense} title="Numbered list" onClick={() => exec("insertOrderedList")}><ListOrdered size={dense ? 12 : 14} /></Btn>
         <span className="mx-1 h-4 w-px bg-border" />
-        <Btn title="Indent (Tab)" onClick={() => exec("indent")}><IndentIncrease size={14} /></Btn>
-        <Btn title="Outdent (⇧Tab)" onClick={() => exec("outdent")}><IndentDecrease size={14} /></Btn>
+        <Btn dense={dense} title="Indent (Tab)" onClick={() => exec("indent")}><IndentIncrease size={dense ? 12 : 14} /></Btn>
+        <Btn dense={dense} title="Outdent (⇧Tab)" onClick={() => exec("outdent")}><IndentDecrease size={dense ? 12 : 14} /></Btn>
         <span className="mx-1 h-4 w-px bg-border" />
-        <Btn title="Link (⌘K) — or right-click a selection" onClick={openLinkBox}>
-          <Link2 size={14} />
+        <Btn dense={dense} title="Link (⌘K) — or right-click a selection" onClick={openLinkBox}>
+          <Link2 size={dense ? 12 : 14} />
         </Btn>
       </div>
       <div className="relative">
@@ -432,7 +438,9 @@ export function RichText({
           onCompositionStart={() => (composing.current = true)}
           onCompositionEnd={() => { composing.current = false; emit(); }}
           data-placeholder={placeholder}
-          className={`omni-rt ${minHeight} px-3 py-2.5 text-sm leading-relaxed outline-none`}
+          className={`omni-rt ${minHeight} outline-none ${
+            dense ? "px-2 py-1.5 text-xs leading-snug" : "px-3 py-2.5 text-sm leading-relaxed"
+          }`}
           style={{ wordBreak: "break-word" }}
         />
 
@@ -579,10 +587,12 @@ function Btn({
   onClick,
   title,
   children,
+  dense = false,
 }: {
   onClick: () => void;
   title: string;
   children: React.ReactNode;
+  dense?: boolean;
 }) {
   return (
     <button
@@ -592,7 +602,9 @@ function Btn({
         e.preventDefault();
         onClick();
       }}
-      className="grid h-7 w-7 place-items-center rounded text-muted transition hover:bg-surface hover:text-ink"
+      className={`grid place-items-center rounded text-muted transition hover:bg-surface hover:text-ink ${
+        dense ? "h-5 w-5" : "h-7 w-7"
+      }`}
     >
       {children}
     </button>
