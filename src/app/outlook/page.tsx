@@ -429,7 +429,7 @@ export default function OutlookPage() {
         onError={() => setOutsideOutlook(true)}
       />
 
-      <main className="mx-auto max-w-md space-y-2 p-2.5 text-ink">
+      <main className="mx-auto w-full max-w-md space-y-2 p-2.5 text-ink">
         <header>
           <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">
             Writing Studio
