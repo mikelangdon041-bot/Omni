@@ -489,29 +489,14 @@ export default function OutlookPage() {
             worth a dead end, so it now only changes the wording. */}
         {userId && email && (
           <>
-            <div className="rounded-xl border border-border bg-surface p-2.5">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                {email.composing ? "What I can see" : "What I'm answering"}
-              </p>
-              <p className="mt-0.5 truncate text-xs font-medium">
-                {email.subject || "(no subject)"}
-              </p>
-              <p className="truncate text-[11px] text-muted">
-                {email.from || "(unknown sender)"}
-              </p>
-              <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted">
-                {email.body.trim() || "(couldn't read the body)"}
-              </p>
-            </div>
-
             {!resultDoc && (
               <>
+                {/* The heart of the pane: the one thing only you know. Bigger
+                    and bolder than every other label here on purpose — the
+                    email context below answers itself, this doesn't. */}
                 <div>
-                  <label
-                    htmlFor="note"
-                    className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-muted"
-                  >
-                    Anything else I need to know?
+                  <label htmlFor="note" className="mb-1 block text-sm font-semibold text-ink">
+                    What do you want to say?
                   </label>
                   <textarea
                     id="note"
@@ -519,11 +504,11 @@ export default function OutlookPage() {
                     value={note}
                     onChange={(e) => setNote(e.target.value)}
                     autoFocus
-                    rows={1}
+                    rows={4}
                     placeholder={
                       'e.g. "say yes but push it to the 12th, and don\'t commit to a budget yet"'
                     }
-                    className="max-h-56 w-full resize-none overflow-y-auto rounded-lg border border-border bg-surface p-1.5 text-[11px] leading-snug outline-none focus:border-[var(--accent)]"
+                    className="max-h-56 w-full resize-none overflow-y-auto rounded-lg border border-border bg-surface p-2 text-xs leading-snug outline-none focus:border-[var(--accent)]"
                   />
                   <p className="mt-0.5 text-[10px] leading-snug text-muted">
                     Optional. Everything about the email itself, I already have.
@@ -705,6 +690,23 @@ export default function OutlookPage() {
                 )}
               </div>
             )}
+
+            {/* Context, not the point — folded down here so the box you
+                actually type into is the first thing on screen, not this. */}
+            <div className="rounded-xl border border-border bg-surface p-2.5">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                {email.composing ? "What I can see" : "What I'm answering"}
+              </p>
+              <p className="mt-0.5 truncate text-xs font-medium">
+                {email.subject || "(no subject)"}
+              </p>
+              <p className="truncate text-[11px] text-muted">
+                {email.from || "(unknown sender)"}
+              </p>
+              <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted">
+                {email.body.trim() || "(couldn't read the body)"}
+              </p>
+            </div>
 
             {/* The other half of the loop, always in reach. Inserting only
                 works in a draft — Outlook has nowhere to put text in a message
