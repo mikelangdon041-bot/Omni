@@ -65,13 +65,27 @@
              time as the title, because that is the window in which you know
              the answer: the meeting is happening and you can see who it's
              with. Left on Uncategorized, it still saves — the reminder to
-             file it lives on the web app's list, not here. -->
-        <label class="title-field" id="destination-field" hidden>
-          File under
-          <select id="folder-select">
-            <option value="">Uncategorized</option>
-          </select>
-        </label>
+             file it lives on the web app's list, not here.
+             Two separate selects rather than one grouped dropdown — a
+             meeting is filed under one or the other, never both, but picking
+             which kind you're even looking for shouldn't take reading through
+             a combined list first. Choosing one clears the other. -->
+        <div class="title-field" id="destination-field" hidden>
+          <div class="row">
+            <label>
+              Person
+              <select id="person-select">
+                <option value="">— none —</option>
+              </select>
+            </label>
+            <label>
+              Topic
+              <select id="topic-select">
+                <option value="">— none —</option>
+              </select>
+            </label>
+          </div>
+        </div>
 
         <!-- The "+ New person/topic" form. Only one field most of the time —
              the name — plus an optional KOL link when it's a person. -->

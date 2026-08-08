@@ -21,7 +21,7 @@ export default function FoldersPage() {
   const confirm = useConfirm();
   const { userId } = useUserId();
   const { meetings } = useMpMeetings(userId);
-  const { folders, rename, remove } = useMpFolders(userId);
+  const { folders, rename, remove, refresh } = useMpFolders(userId);
   const [creatingKind, setCreatingKind] = useState<FolderKind | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
@@ -215,7 +215,12 @@ export default function FoldersPage() {
         userId={userId}
         kind={creatingKind}
         onClose={() => setCreatingKind(null)}
-        onCreated={(f) => router.push(`/meeting-prep/folders/${f.id}`)}
+        // Stays put rather than jumping into the new folder — the modal's
+        // own useMpFolders instance doesn't share state with this page's, so
+        // the new folder wouldn't show up here without a refresh either way,
+        // and staying put is what lets "New person" a second time add the
+        // next one without a detour.
+        onCreated={() => void refresh()}
       />
     </>
   );

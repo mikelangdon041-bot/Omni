@@ -161,8 +161,10 @@ function render() {
   // question worth asking.
   show("destination-field", (recording || working) && !creatingFolderKind);
   show("new-folder-form", (recording || working) && Boolean(creatingFolderKind));
-  if (document.activeElement !== $("folder-select")) {
-    $("folder-select").value = status.folder_id || "";
+  if (document.activeElement !== $("person-select") && document.activeElement !== $("topic-select")) {
+    const current = folders.find((f) => f.id === status.folder_id);
+    $("person-select").value = current?.kind === "person" ? current.id : "";
+    $("topic-select").value = current?.kind === "topic" ? current.id : "";
   }
 
   show("progress", working);
@@ -303,64 +305,63 @@ async function loadFolders() {
   foldersAsked = true;
   try {
     folders = await invoke("list_folders");
-    fillFolderSelect();
+    fillFolderSelects();
     render();
   } catch {
-    // Offline, or Omni is having a day. The picker still shows Uncategorized
+    // Offline, or Omni is having a day. The picker still shows "— none —"
     // and "+ New…" — creating one will just fail with a clear error rather
     // than the whole feature disappearing.
   }
 }
 
-function fillFolderSelect() {
-  const select = $("folder-select");
+// Fills one <select> from the folders of one kind, plus a trailing "+ New…"
+// — shared by both the person and topic dropdowns rather than written twice.
+function fillOneSelect(select, kind, newLabel) {
   const chosen = select.value;
-  select.innerHTML = '<option value="">Uncategorized</option>';
-  const people = folders.filter((f) => f.kind === "person");
-  const topics = folders.filter((f) => f.kind === "topic");
-  const group = (label, items) => {
-    if (items.length === 0) return null;
-    const g = document.createElement("optgroup");
-    g.label = label;
-    for (const f of items) {
-      const option = document.createElement("option");
-      option.value = f.id;
-      option.textContent = f.name;
-      g.appendChild(option);
-    }
-    return g;
-  };
-  const peopleGroup = group("People", people);
-  if (peopleGroup) select.appendChild(peopleGroup);
-  const newPerson = document.createElement("option");
-  newPerson.value = "__new_person__";
-  newPerson.textContent = "+ New person…";
-  select.appendChild(newPerson);
-  const topicsGroup = group("Topics", topics);
-  if (topicsGroup) select.appendChild(topicsGroup);
-  const newTopic = document.createElement("option");
-  newTopic.value = "__new_topic__";
-  newTopic.textContent = "+ New topic…";
-  select.appendChild(newTopic);
+  select.innerHTML = '<option value="">— none —</option>';
+  for (const f of folders.filter((f) => f.kind === kind)) {
+    const option = document.createElement("option");
+    option.value = f.id;
+    option.textContent = f.name;
+    select.appendChild(option);
+  }
+  const create = document.createElement("option");
+  create.value = "__new__";
+  create.textContent = newLabel;
+  select.appendChild(create);
   select.value = folders.some((f) => f.id === chosen) ? chosen : "";
 }
 
-$("folder-select").addEventListener("change", () => {
-  const select = $("folder-select");
-  if (select.value === "__new_person__" || select.value === "__new_topic__") {
-    creatingFolderKind = select.value === "__new_person__" ? "person" : "topic";
-    $("new-folder-heading").textContent =
-      creatingFolderKind === "person" ? "New person" : "New topic";
+function fillFolderSelects() {
+  fillOneSelect($("person-select"), "person", "+ New person…");
+  fillOneSelect($("topic-select"), "topic", "+ New topic…");
+}
+
+// One meeting files under a person OR a topic, never both — matching
+// mp_meetings' single folder_id — so picking one always clears the other,
+// even though they're two separate dropdowns now.
+function chooseFolder(select, other, kind) {
+  if (select.value === "__new__") {
+    creatingFolderKind = kind;
+    $("new-folder-heading").textContent = kind === "person" ? "New person" : "New topic";
     $("new-folder-name").value = "";
     render();
     requestAnimationFrame(() => $("new-folder-name").focus());
     return;
   }
+  other.value = "";
   void invoke("set_folder", {
     id: select.value,
     name: select.selectedOptions[0]?.textContent || "",
   });
-});
+}
+
+$("person-select").addEventListener("change", () =>
+  chooseFolder($("person-select"), $("topic-select"), "person"),
+);
+$("topic-select").addEventListener("change", () =>
+  chooseFolder($("topic-select"), $("person-select"), "topic"),
+);
 
 $("new-folder-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -369,8 +370,14 @@ $("new-folder-form").addEventListener("submit", async (e) => {
   try {
     const folder = await invoke("create_folder", { kind: creatingFolderKind, name });
     folders = [...folders, folder];
-    fillFolderSelect();
-    $("folder-select").value = folder.id;
+    fillFolderSelects();
+    if (folder.kind === "person") {
+      $("person-select").value = folder.id;
+      $("topic-select").value = "";
+    } else {
+      $("topic-select").value = folder.id;
+      $("person-select").value = "";
+    }
     await invoke("set_folder", { id: folder.id, name: folder.name });
   } catch (e) {
     window.alert(String(e));
