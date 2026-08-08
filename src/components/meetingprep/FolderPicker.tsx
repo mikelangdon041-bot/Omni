@@ -22,6 +22,7 @@ import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
+import { useToast } from "@/components/ui/Feedback";
 import { useMpFolders } from "@/lib/meetingprep/hooks";
 import type { FolderKind, MpFolder } from "@/lib/meetingprep/types";
 
@@ -101,6 +102,7 @@ export function CreateFolderModal({
   onCreated: (folder: MpFolder) => void;
 }) {
   const { create } = useMpFolders(userId);
+  const toast = useToast();
   const [name, setName] = useState("");
   const [kolQuery, setKolQuery] = useState("");
   const [kolId, setKolId] = useState("");
@@ -142,9 +144,16 @@ export function CreateFolderModal({
         name: name.trim(),
         kolId: kind === "person" ? kolId || null : null,
       });
-      if (folder) onCreated(folder);
-      reset();
-      onClose();
+      if (folder) {
+        onCreated(folder);
+        reset();
+        onClose();
+      }
+    } catch (e) {
+      // Left open on failure — most likely cause is migration 0030
+      // (mp_folders) hasn't been run against this database yet, and that's
+      // worth reading rather than a modal that just silently closed.
+      toast("error", (e as Error).message || "Could not create the folder");
     } finally {
       setCreating(false);
     }

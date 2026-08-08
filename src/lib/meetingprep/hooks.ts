@@ -339,7 +339,10 @@ export function useMpFolders(userId: string | null) {
               .maybeSingle();
         return (existing.data as MpFolder) || null;
       }
-      return null;
+      // Anything else (most likely: migration 0030 hasn't been run yet, so
+      // mp_folders doesn't exist — "relation does not exist") has to reach
+      // the caller rather than look like a folder was created when it wasn't.
+      throw new Error(error?.message || "Could not create the folder");
     },
     [userId],
   );
