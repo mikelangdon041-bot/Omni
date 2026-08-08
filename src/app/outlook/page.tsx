@@ -112,7 +112,12 @@ export default function OutlookPage() {
   const [officeReady, setOfficeReady] = useState(false);
   const [outsideOutlook, setOutsideOutlook] = useState(false);
   const [email, setEmail] = useState<ReadEmail | null>(null);
-  const [note, setNote] = useState("");
+  // The same two boxes as the workspace's Draft and "Anything else I should
+  // know?" — draftHtml is prefilled with the email once it's read, exactly
+  // the "paste an email and add an instruction" shape the workspace expects
+  // in its one box, just without having to paste it yourself.
+  const [draftHtml, setDraftHtml] = useState("");
+  const [briefHtml, setBriefHtml] = useState("");
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
   const [inserted, setInserted] = useState(false);
@@ -142,8 +147,6 @@ export default function OutlookPage() {
   const [resultSubject, setResultSubject] = useState("");
   const [guidance, setGuidance] = useState("");
 
-  const noteRef = useRef<HTMLTextAreaElement>(null);
-  useAutoGrow(noteRef, note);
   const guidanceRef = useRef<HTMLTextAreaElement>(null);
   useAutoGrow(guidanceRef, guidance);
 
@@ -260,6 +263,24 @@ export default function OutlookPage() {
 
   const reading = !!email && !!userId && !extractDone;
 
+  // The workspace's draft box expects "an email, plus an instruction" as
+  // its normal shape — that's literally its own placeholder text. Prefilling
+  // it with the email read off the open item is that same shape, just
+  // without asking you to paste it: the cursor lands after it, ready for
+  // whatever you want to add.
+  const draftPrefilled = useRef(false);
+  useEffect(() => {
+    if (!email || draftPrefilled.current) return;
+    draftPrefilled.current = true;
+    const header = [
+      email.from && `From: ${email.from}`,
+      email.subject && `Subject: ${email.subject}`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    setDraftHtml(plainToHtml(`${header}\n\n${email.body}`));
+  }, [email]);
+
   // The actual AI call, shared by the first write and every refine after it.
   // `refineGuidance` present means "revise what's on screen"; absent means
   // "write it from the intake". Either way the result lands in state and is
@@ -321,44 +342,33 @@ export default function OutlookPage() {
     }
   }
 
-  // Create the piece and write it, right here. The email goes in the draft box
-  // (it is source material, the thing being answered) and the note goes in the
-  // instructions box, which is exactly the split the prompt already knows how
-  // to read.
+  // Create the piece and write it, right here.
   async function writeReply() {
     if (!email || generating) return;
     setError("");
     if (saveTimer.current) clearTimeout(saveTimer.current);
     pendingRef.current = {};
     try {
-      const header = [
-        email.from && `From: ${email.from}`,
-        email.subject && `Subject: ${email.subject}`,
-      ]
-        .filter(Boolean)
-        .join("\n");
       const doc = await add({
         doc_type: "email",
         mode: "create",
         title: email.subject ? `Re: ${email.subject}` : "Reply",
         subject: email.subject ? `Re: ${email.subject}` : "",
-        original: plainToHtml(`${header}\n\n${email.body}`),
+        // Same fields the workspace's Draft and "Anything else I should
+        // know?" boxes save to — the email is already IN the draft (see the
+        // prefill effect above), so there's no separate wrapping instruction
+        // needed here any more; the brief is purely the extra detail, exactly
+        // like the workspace.
+        original: draftHtml,
         context: {
           ...emptyContext(),
-          // Source material plus an instruction, not a draft of theirs to
-          // preserve — so the AI writes the reply rather than proofreading the
-          // email it was sent.
           fidelity,
           tone,
           audience,
           length,
           styleIds,
           recipient: email.from,
-          brief: plainToHtml(
-            note.trim()
-              ? `Write a reply to the email below. ${note.trim()}`
-              : "Write a reply to the email below.",
-          ),
+          brief: briefHtml,
         },
       });
       if (!doc) throw new Error("Couldn't create the piece");
@@ -491,29 +501,41 @@ export default function OutlookPage() {
           <>
             {!resultDoc && (
               <>
-                {/* The heart of the pane: the one thing only you know. Bigger
-                    and bolder than every other label here on purpose — the
-                    email context below answers itself, this doesn't. */}
+                {/* The two boxes the workspace itself uses — Draft and
+                    "Anything else I should know?" — not a reinterpretation of
+                    them. This one is bigger and comes first on purpose: it's
+                    the one thing only you know, prefilled with the email so
+                    it starts in the exact "email plus an instruction" shape
+                    the workspace already knows how to read. */}
                 <div>
-                  <label htmlFor="note" className="block text-sm font-semibold text-ink">
+                  <label className="mb-1 block text-sm font-semibold text-ink">
                     What do you want to say?
                   </label>
-                  <p className="mb-1 text-[11px] text-muted">Anything else I need to know?</p>
-                  <textarea
-                    id="note"
-                    ref={noteRef}
-                    value={note}
-                    onChange={(e) => setNote(e.target.value)}
+                  <RichText
+                    dense
                     autoFocus
-                    rows={4}
-                    placeholder={
-                      'e.g. "say yes but push it to the 12th, and don\'t commit to a budget yet"'
-                    }
-                    className="max-h-56 w-full resize-none overflow-y-auto rounded-lg border border-border bg-surface p-2 text-xs leading-snug outline-none focus:border-[var(--accent)]"
+                    value={draftHtml}
+                    onChange={setDraftHtml}
+                    placeholder="Your reply, or just what you want it to say — I'll work out which it is."
+                    minHeight="min-h-28"
                   />
                   <p className="mt-0.5 text-[10px] leading-snug text-muted">
-                    Optional. Everything about the email itself, I already have.
+                    Starts with the email already in here. Add your reply, or
+                    just say what you want it to say.
                   </p>
+                </div>
+
+                <div>
+                  <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    Anything else I should know?
+                  </p>
+                  <RichText
+                    dense
+                    value={briefHtml}
+                    onChange={setBriefHtml}
+                    placeholder="Who it's for, what's at stake, what to change, anything to avoid…"
+                    minHeight="min-h-12"
+                  />
                 </div>
 
                 {/* Everything the workspace would ask, asked here instead — the
