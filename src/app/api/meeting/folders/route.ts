@@ -8,8 +8,7 @@ export const runtime = "nodejs";
 // destination picker (see desktop/src-tauri/src/omni.rs — list_folders /
 // create_folder).
 //
-//   GET  -> every folder, alphabetical within kind, with the linked KOL's
-//           name resolved so the picker doesn't need a second round trip.
+//   GET  -> every folder, alphabetical within kind.
 //   POST -> create a folder, or hand back the existing one if the name
 //           (case-insensitive) already exists — so typing "Sam" mid-meeting
 //           twice reuses the folder instead of erroring.
@@ -17,26 +16,25 @@ export async function GET(req: Request) {
   const { supabase, user } = await routeAuth(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  // No embedded kols(...) join here — this route's only caller (the desktop
+  // recorder's destination picker) never reads a KOL name, and a PostgREST
+  // embed is one more thing that can fail the whole request over data
+  // nothing downstream uses.
   const { data, error } = await supabase
     .from("mp_folders")
-    .select("id, kind, name, kol_id, kols(first_name, last_name)")
+    .select("id, kind, name, kol_id")
     .eq("user_id", user.id)
     .order("kind", { ascending: true })
     .order("name", { ascending: true });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  const folders = (data || []).map((f) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const kol = (f as any).kols as { first_name: string; last_name: string } | null;
-    return {
-      id: f.id as string,
-      kind: f.kind as "person" | "topic",
-      name: f.name as string,
-      kolId: f.kol_id as string | null,
-      kolName: kol ? `${kol.first_name} ${kol.last_name}`.trim() : null,
-    };
-  });
+  const folders = (data || []).map((f) => ({
+    id: f.id as string,
+    kind: f.kind as "person" | "topic",
+    name: f.name as string,
+    kolId: f.kol_id as string | null,
+  }));
 
   return NextResponse.json({ folders });
 }

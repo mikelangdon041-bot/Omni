@@ -61,6 +61,11 @@ let devices = { inputs: [], outputs: [] };
 // and render() must never be the thing that touches it first.
 let folders = [];
 let foldersAsked = false;
+// Which phase we last fetched folders for — resets `foldersAsked` on every
+// fresh recording rather than once per app launch, so a folder created on
+// the website while this app sat in the tray shows up next time, not only
+// after a restart.
+let lastPhase = null;
 // "+ New person" / "+ New topic" chosen from the select — which kind, so the
 // form knows what it's creating and can send the right label.
 let creatingFolderKind = null;
@@ -150,9 +155,13 @@ function render() {
     $("meeting-title").value = status.title || "";
   }
 
-  // Asked for the first time a recording could actually use them, not at
-  // startup: this app is meant to sit in the tray costing nothing, and most
-  // launches never record at all.
+  // Asked fresh for every new recording, not once per app launch: this app
+  // can sit in the tray for days, and a folder created on the website in the
+  // meantime has to show up next time without restarting the recorder.
+  if (recording && lastPhase !== "recording" && lastPhase !== "working") {
+    foldersAsked = false;
+  }
+  lastPhase = status.phase;
   if (recording || working) void loadFolders();
 
   // Same window of time as the title. Shown whenever a recording is live or
@@ -306,11 +315,16 @@ async function loadFolders() {
   try {
     folders = await invoke("list_folders");
     fillFolderSelects();
+    $("folders-error").hidden = true;
     render();
-  } catch {
-    // Offline, or Omni is having a day. The picker still shows "— none —"
-    // and "+ New…" — creating one will just fail with a clear error rather
-    // than the whole feature disappearing.
+  } catch (e) {
+    // Worth saying rather than swallowing: an empty picker and a picker that
+    // failed to load look identical otherwise, and a silent one reads as
+    // "you have no folders" when the real answer is "this couldn't reach
+    // Omni." Tries again fresh on the next recording, same as any other load.
+    $("folders-error").textContent = `Could not load your people/topics: ${e}`;
+    $("folders-error").hidden = false;
+    refit();
   }
 }
 
