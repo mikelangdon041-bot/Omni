@@ -263,21 +263,31 @@ export default function OutlookPage() {
 
   const reading = !!email && !!userId && !extractDone;
 
-  // The workspace's draft box expects "an email, plus an instruction" as
-  // its normal shape — that's literally its own placeholder text. Prefilling
-  // it with the email read off the open item is that same shape, just
-  // without asking you to paste it: the cursor lands after it, ready for
-  // whatever you want to add.
+  // The workspace's draft box expects "an email, plus an instruction" as its
+  // normal shape — that's literally its own placeholder text. Prefilling it
+  // with the email read off the open item is that same shape, just without
+  // asking you to paste it: the cursor lands after it, ready for whatever
+  // you want to add.
+  // Only when there's something to answer, though. On a new message being
+  // composed, "the open item's body" is your own outgoing draft — usually
+  // just your signature so far — and stuffing that into the box you're about
+  // to write your actual message in isn't source material, it's noise. A
+  // blank box is the correct starting point there.
   const draftPrefilled = useRef(false);
   useEffect(() => {
     if (!email || draftPrefilled.current) return;
     draftPrefilled.current = true;
+    if (email.composing) return;
     const header = [
       email.from && `From: ${email.from}`,
       email.subject && `Subject: ${email.subject}`,
     ]
       .filter(Boolean)
       .join("\n");
+    // Guarded by the ref above to run once per email, the same shape as the
+    // extraction effect just above it — the rule can't see that guard is
+    // enough on its own without the async wrapper that one happens to have.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDraftHtml(plainToHtml(`${header}\n\n${email.body}`));
   }, [email]);
 
@@ -349,11 +359,20 @@ export default function OutlookPage() {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     pendingRef.current = {};
     try {
+      // "Re:" belongs on an answer, not on a message you're writing from
+      // scratch — composing already has whatever subject you've typed, if
+      // any, and it isn't a reply to prefix.
+      const isReply = !email.composing;
+      const subjectLine = email.subject
+        ? isReply
+          ? `Re: ${email.subject}`
+          : email.subject
+        : "";
       const doc = await add({
         doc_type: "email",
         mode: "create",
-        title: email.subject ? `Re: ${email.subject}` : "Reply",
-        subject: email.subject ? `Re: ${email.subject}` : "",
+        title: subjectLine || (isReply ? "Reply" : "New message"),
+        subject: subjectLine,
         // Same fields the workspace's Draft and "Anything else I should
         // know?" boxes save to — the email is already IN the draft (see the
         // prefill effect above), so there's no separate wrapping instruction
@@ -520,8 +539,9 @@ export default function OutlookPage() {
                     minHeight="min-h-28"
                   />
                   <p className="mt-0.5 text-[10px] leading-snug text-muted">
-                    Starts with the email already in here. Add your reply, or
-                    just say what you want it to say.
+                    {email.composing
+                      ? "Blank on purpose — this is your message, not a reply."
+                      : "Starts with the email already in here. Add your reply, or just say what you want it to say."}
                   </p>
                 </div>
 
