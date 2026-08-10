@@ -255,6 +255,7 @@ async function openSettings() {
   $("capture-mic").checked = status.capture_mic;
   $("capture-system").checked = status.capture_system;
   $("keep-audio").checked = status.keep_audio;
+  $("keep-transcript").checked = status.keep_transcript;
   $("open-when-done").checked = status.open_when_done;
   $("start-at-login").checked = status.start_at_login;
   $("hotkey").value = status.hotkey;
@@ -438,6 +439,7 @@ $("settings-save").addEventListener("click", async () => {
         capture_mic: $("capture-mic").checked,
         capture_system: $("capture-system").checked,
         keep_audio: $("keep-audio").checked,
+        keep_transcript: $("keep-transcript").checked,
         open_when_done: $("open-when-done").checked,
         start_at_login: $("start-at-login").checked,
         hotkey: $("hotkey").value,

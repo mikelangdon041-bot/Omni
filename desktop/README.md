@@ -61,9 +61,10 @@ costs more requests rather than a timeout.
 In the browser, creating the meeting is client-side: the record page asks for
 the notes, shows them for review, and inserts the row when you press Save. A
 tray app has no review screen, so this endpoint does both halves and applies the
-review defaults — keep the transcript, cut the opening small talk, keep every
+review defaults — drop the transcript, cut the opening small talk, keep every
 follow-up. All of it is editable on the meeting page, which is where it sends
-you.
+you. "Keep the transcript in Omni" in Settings opts back in, the same way the
+audio does.
 
 ## Signing in
 

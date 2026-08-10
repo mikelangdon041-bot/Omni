@@ -83,8 +83,9 @@ export default function RecordMeetingPage() {
           Upload or record a meeting
         </h1>
         <p className="mt-1 text-sm text-muted">
-          Either way you get the same thing: a transcript, nested-bullet notes,
-          the action items pulled out, and a meeting created to hold it all.
+          Either way you get the same thing: nested-bullet notes, the action
+          items pulled out, and a meeting created to hold it all. The
+          transcript is only saved if you ask for it on the review screen.
         </p>
       </div>
       <MeetingRecorder userId={userId} onSave={handleSave} saving={saving} />

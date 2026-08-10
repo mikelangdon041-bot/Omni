@@ -14,8 +14,9 @@
 // Audio is never kept. Recorded segments go to Whisper and are dropped, the
 // local crash vault is wiped the moment recording stops, and an uploaded file
 // is deleted server-side as soon as it has been read — on the failure paths
-// too. The transcript is the only intermediate artifact, and the last step
-// lets you delete that as well once the notes are in hand.
+// too. The transcript is the only intermediate artifact, and it is dropped as
+// well by default once the notes are in hand — the last step lets you opt into
+// keeping it.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -167,7 +168,10 @@ export function MeetingRecorder({
   const [hasMeetingAudio, setHasMeetingAudio] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [result, setResult] = useState<CaptureResult | null>(null);
-  const [keepTranscript, setKeepTranscript] = useState(true);
+  // Off by default: the notes are the point, and the raw transcript is the
+  // most sensitive thing here. Ticking it is a per-meeting decision made on
+  // the review screen, so it is deliberately not remembered between meetings.
+  const [keepTranscript, setKeepTranscript] = useState(false);
   const [upload, setUpload] = useState<UploadProgress | null>(null);
   const [fileName, setFileName] = useState("");
   const [audioPath, setAudioPath] = useState("");
@@ -513,7 +517,7 @@ export function MeetingRecorder({
       });
       setTrimSmallTalk(true);
       setNotesPct(100);
-      setKeepTranscript(true);
+      setKeepTranscript(false);
       setPhase("review");
     } catch (e) {
       setError((e as Error).message);
@@ -948,7 +952,28 @@ export function MeetingRecorder({
           )}
         </section>
 
-        {result.smallTalk && (
+        <section className="rounded-xl border border-border bg-surface p-4 shadow-sm">
+          <label className="flex cursor-pointer items-start gap-2.5 text-sm">
+            <input
+              type="checkbox"
+              checked={keepTranscript}
+              onChange={(e) => setKeepTranscript(e.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
+            />
+            <span>
+              Also keep the full transcript ({result.transcript.length.toLocaleString()}{" "}
+              characters)
+              <span className="mt-0.5 block text-xs text-muted">
+                Off by default — only the notes and follow-ups above are saved.
+                Tick this to keep the raw text alongside them.
+              </span>
+            </span>
+          </label>
+        </section>
+
+        {/* Only worth asking once the transcript is being kept — there is
+            nothing to trim otherwise. */}
+        {result.smallTalk && keepTranscript && (
           <section className="rounded-xl border border-border bg-surface p-4 shadow-sm">
             <label className="flex cursor-pointer items-start gap-2.5 text-sm">
               <input
@@ -956,9 +981,8 @@ export function MeetingRecorder({
                 checked={trimSmallTalk}
                 onChange={(e) => setTrimSmallTalk(e.target.checked)}
                 className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
-                disabled={!keepTranscript}
               />
-              <span className={keepTranscript ? "" : "opacity-50"}>
+              <span>
                 Cut the opening {result.smallTalk.description} from the transcript
                 <span className="mt-0.5 block text-xs text-muted">
                   The first{" "}
@@ -971,24 +995,6 @@ export function MeetingRecorder({
             </label>
           </section>
         )}
-
-        <section className="rounded-xl border border-border bg-surface p-4 shadow-sm">
-          <label className="flex cursor-pointer items-start gap-2.5 text-sm">
-            <input
-              type="checkbox"
-              checked={keepTranscript}
-              onChange={(e) => setKeepTranscript(e.target.checked)}
-              className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
-            />
-            <span>
-              Keep the full transcript ({result.transcript.length.toLocaleString()}{" "}
-              characters)
-              <span className="mt-0.5 block text-xs text-muted">
-                Untick and only these notes are saved.
-              </span>
-            </span>
-          </label>
-        </section>
 
         <div className="flex justify-end gap-2">
           <Button variant="ghost" onClick={() => void discardEverything()}>
@@ -1124,7 +1130,8 @@ export function MeetingRecorder({
       <p className="flex items-start gap-2 px-1 text-xs text-muted">
         <ShieldCheck size={14} className="mt-0.5 shrink-0 text-[var(--accent)]" />
         The audio is deleted as soon as it has been transcribed — it is never
-        stored. You choose afterwards whether to keep even the transcript.
+        stored. The transcript isn&apos;t kept either unless you ask for it on
+        the review screen; by default only the notes are saved.
       </p>
 
       <Modal

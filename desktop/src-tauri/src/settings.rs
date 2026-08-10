@@ -38,6 +38,10 @@ pub struct Settings {
     /// Keep the audio on the meeting instead of deleting it after
     /// transcription. Off by default, matching the web app.
     pub keep_audio: bool,
+    /// Keep the transcript on the meeting instead of dropping it once the
+    /// notes are written. Off by default, matching the web app's review
+    /// screen — the notes are what gets saved unless you ask for more.
+    pub keep_transcript: bool,
     pub hotkey: String,
     /// Open the finished meeting in the browser when the upload completes.
     pub open_when_done: bool,
@@ -57,6 +61,7 @@ impl Default for Settings {
             capture_mic: true,
             capture_system: true,
             keep_audio: false,
+            keep_transcript: false,
             hotkey: DEFAULT_HOTKEY.to_string(),
             open_when_done: true,
             start_at_login: true,

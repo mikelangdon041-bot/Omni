@@ -77,6 +77,7 @@ pub struct Status {
     capture_mic: bool,
     capture_system: bool,
     keep_audio: bool,
+    keep_transcript: bool,
     open_when_done: bool,
     start_at_login: bool,
     mic_device_id: String,
@@ -183,6 +184,7 @@ impl AppState {
             capture_mic: settings.capture_mic,
             capture_system: settings.capture_system,
             keep_audio: settings.keep_audio,
+            keep_transcript: settings.keep_transcript,
             open_when_done: settings.open_when_done,
             start_at_login: settings.start_at_login,
             mic_device_id: settings.mic_device_id.clone(),
@@ -443,7 +445,14 @@ async fn upload_and_capture(
     };
 
     client
-        .capture(&transcript, &audio_path, settings.keep_audio, &title, &folder_id)
+        .capture(
+            &transcript,
+            &audio_path,
+            settings.keep_audio,
+            settings.keep_transcript,
+            &title,
+            &folder_id,
+        )
         .await
         .map_err(|e| e.to_string())
 }
@@ -611,6 +620,7 @@ pub struct SettingsPatch {
     capture_mic: bool,
     capture_system: bool,
     keep_audio: bool,
+    keep_transcript: bool,
     open_when_done: bool,
     start_at_login: bool,
     hotkey: String,
@@ -649,6 +659,7 @@ fn save_settings(app: AppHandle, patch: SettingsPatch) -> Result<(), String> {
         settings.capture_mic = patch.capture_mic;
         settings.capture_system = patch.capture_system;
         settings.keep_audio = patch.keep_audio;
+        settings.keep_transcript = patch.keep_transcript;
         settings.open_when_done = patch.open_when_done;
         settings.start_at_login = patch.start_at_login;
         settings.hotkey = if patch.hotkey.trim().is_empty() {
@@ -679,6 +690,7 @@ fn save_settings(app: AppHandle, patch: SettingsPatch) -> Result<(), String> {
         s.capture_mic = settings.capture_mic;
         s.capture_system = settings.capture_system;
         s.keep_audio = settings.keep_audio;
+        s.keep_transcript = settings.keep_transcript;
         s.open_when_done = settings.open_when_done;
         s.hotkey = settings.hotkey;
     });

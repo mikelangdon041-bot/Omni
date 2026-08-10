@@ -62,7 +62,7 @@ async function archiveTranscript(
 // meeting has to exist by the time it opens your browser.
 //
 // So this endpoint runs the same capture prompt and then writes the row, with
-// the review-screen defaults applied rather than asked about: keep the
+// the review-screen defaults applied rather than asked about: drop the
 // transcript, cut the opening small talk, keep every follow-up. All of it is
 // editable on the meeting page afterwards, which is where the recorder sends
 // you.
@@ -92,8 +92,11 @@ export async function POST(req: Request) {
     const marker = result.smallTalk.firstSubstantiveLine.trim();
     const cutAt = result.smallTalk.found && marker ? transcript.indexOf(marker) : -1;
     const trimSmallTalk = body.trimSmallTalk !== false;
+    // Opt-in, matching the review screen: the notes are what gets saved, and
+    // the transcript only comes with them when the caller explicitly asks. An
+    // older recorder build that doesn't send the flag gets the safer answer.
     const kept =
-      body.keepTranscript === false
+      body.keepTranscript !== true
         ? ""
         : cutAt > 0 && trimSmallTalk
           ? transcript.slice(cutAt)
@@ -166,8 +169,9 @@ export async function POST(req: Request) {
     }
 
     // The durable copy: transcript zipped and filed in Supabase storage under
-    // this meeting's folder. This is the default hand-off now — done
-    // unconditionally, not opt-in like OneNote below.
+    // this meeting's folder. Only reached when a transcript was kept —
+    // `archiveTranscript` no-ops on the empty string, so dropping the
+    // transcript drops the archive with it rather than filing a blank zip.
     const zipPath = await archiveTranscript(user.id, data.id, folder ? folderId : null, title, kept);
     if (zipPath) {
       await supabase.from("mp_meetings").update({ transcript_zip_path: zipPath }).eq("id", data.id);

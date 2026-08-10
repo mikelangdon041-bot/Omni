@@ -3,9 +3,9 @@
 //
 //   cargo run --example e2e -- <omni-url> <username> <password> <file.mp3> [keep]
 //
-// "keep" exercises the branch that stores the audio on the meeting instead of
-// deleting it after transcription, which is otherwise only reachable by
-// ticking a box.
+// "keep" exercises the branch that stores the audio and the transcript on the
+// meeting instead of discarding them once the notes are written, which is
+// otherwise only reachable by ticking a box.
 //
 // Same modules the tray app uses, so a pass here means the app's own path
 // works; it just skips the window and the hotkey. Worth having because the
@@ -43,7 +43,11 @@ async fn main() -> anyhow::Result<()> {
     println!("   -> transcript:\n{}", indent(&transcript));
 
     println!("4. writing the notes and creating the meeting");
-    let captured = client.capture(&transcript, &audio_path, keep).await?;
+    // Keeping the transcript rides on the same flag: the point of this run is
+    // to see the whole artifact, and the meeting is thrown away afterwards.
+    let captured = client
+        .capture(&transcript, &audio_path, keep, keep, "", "")
+        .await?;
     println!("   -> {} ({})", captured.title, captured.id);
     println!("\nOpen it at: {url}{}", captured.path);
 

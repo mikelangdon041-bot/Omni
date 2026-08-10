@@ -342,19 +342,22 @@ impl Client {
     /// `folder_id` is where it's filed — a person or topic folder chosen from
     /// the same window as the title. Empty means Uncategorized: the meeting
     /// still saves, with a reminder to file it shown on the web app's list.
-    /// The server zips the transcript into that folder unconditionally — this
-    /// is the default hand-off now, not something OneNote replaces.
+    /// The transcript is only stored — and zipped into that folder — when
+    /// `keep_transcript` says so. Left off, which is the default, the meeting
+    /// keeps the notes and follow-ups and the raw text is dropped.
     pub async fn capture(
         &self,
         transcript: &str,
         audio_path: &str,
         keep_audio: bool,
+        keep_transcript: bool,
         title: &str,
         folder_id: &str,
     ) -> Result<Captured> {
         let body = json!({
             "transcript": transcript,
             "audioPath": if keep_audio { audio_path } else { "" },
+            "keepTranscript": keep_transcript,
             "title": title,
             "folderId": folder_id,
         });
