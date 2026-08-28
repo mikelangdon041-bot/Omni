@@ -339,9 +339,11 @@ impl Client {
     /// An empty `title` leaves the naming to the same AI prompt that writes
     /// the notes — the server already treats a blank title that way.
     ///
-    /// `folder_id` is where it's filed — a person or topic folder chosen from
-    /// the same window as the title. Empty means Uncategorized: the meeting
-    /// still saves, with a reminder to file it shown on the web app's list.
+    /// The two folder ids are where it's filed — who the meeting was with and
+    /// what it was about, both chosen from the same window as the title, and
+    /// independent of each other. Either can be empty; both empty means
+    /// Uncategorized, which still saves, with a reminder to file it shown on
+    /// the web app's list.
     /// The transcript is only stored — and zipped into that folder — when
     /// `keep_transcript` says so. Left off, which is the default, the meeting
     /// keeps the notes and follow-ups and the raw text is dropped.
@@ -352,14 +354,16 @@ impl Client {
         keep_audio: bool,
         keep_transcript: bool,
         title: &str,
-        folder_id: &str,
+        person_folder_id: &str,
+        topic_folder_id: &str,
     ) -> Result<Captured> {
         let body = json!({
             "transcript": transcript,
             "audioPath": if keep_audio { audio_path } else { "" },
             "keepTranscript": keep_transcript,
             "title": title,
-            "folderId": folder_id,
+            "folderId": person_folder_id,
+            "topicFolderId": topic_folder_id,
         });
         let text = self.post("/api/meeting/capture", body).await?;
         serde_json::from_str(&text).context("Omni sent an unexpected reply while saving the meeting")

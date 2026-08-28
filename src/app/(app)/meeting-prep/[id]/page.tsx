@@ -154,8 +154,9 @@ export default function MeetingPage() {
               something you reach for from wherever you happen to be. */}
           <FolderPicker
             userId={userId}
-            folderId={meeting.folder_id}
-            onChange={(folder) => save(folderMovePatch(folder))}
+            personFolderId={meeting.person_folder_id}
+            topicFolderId={meeting.topic_folder_id}
+            onChange={(kind, folder) => save(folderMovePatch(kind, folder))}
           />
           {/* Autosave indicator — everything on every tab saves as you type. */}
           <p

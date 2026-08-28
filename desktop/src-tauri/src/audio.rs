@@ -40,6 +40,13 @@ const TICK: Duration = Duration::from_millis(100);
 /// A source that runs ahead of wall clock is drifting, not useful. Cap its
 /// backlog so a misreporting device cannot grow the queue without limit.
 const MAX_BACKLOG: usize = RATE * 3;
+/// Peak below this counts as nothing being said, for the "has this meeting
+/// ended?" clock the app stops on. Well above a microphone's room tone (a
+/// quiet room sits under 0.01) and well below speech, which peaks past 0.1.
+/// Erring high would end a meeting mid-sentence; erring low only means an
+/// office with a loud fan never auto-stops, which costs nothing but a
+/// keypress.
+const SILENCE_FLOOR: f32 = 0.03;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct DeviceInfo {
@@ -362,6 +369,10 @@ pub struct Recorder {
     level: Arc<AtomicU32>,
     /// Samples written so far, so elapsed time reflects the actual recording.
     written: Arc<AtomicU64>,
+    /// How long the mix has been below `SILENCE_FLOOR`, in milliseconds. Reset
+    /// by any audible block, so it always reads "how long since the last thing
+    /// anybody said" rather than a total.
+    quiet_ms: Arc<AtomicU64>,
 }
 
 impl Recorder {
@@ -408,14 +419,20 @@ impl Recorder {
 
         let level = Arc::new(AtomicU32::new(0));
         let written = Arc::new(AtomicU64::new(0));
+        let quiet_ms = Arc::new(AtomicU64::new(0));
         let mixing = Arc::new(AtomicBool::new(true));
         let queues: Vec<Arc<Mutex<VecDeque<f32>>>> =
             sources.iter().map(|s| s.queue.clone()).collect();
 
         let mixer = thread::Builder::new().name("omni-mixer".into()).spawn({
-            let (mixing, path, level, written) =
-                (mixing.clone(), path.clone(), level.clone(), written.clone());
-            move || mix_loop(path, queues, mixing, level, written)
+            let (mixing, path, level, written, quiet_ms) = (
+                mixing.clone(),
+                path.clone(),
+                level.clone(),
+                written.clone(),
+                quiet_ms.clone(),
+            );
+            move || mix_loop(path, queues, mixing, level, written, quiet_ms)
         })?;
 
         Ok(Self {
@@ -427,6 +444,7 @@ impl Recorder {
             started: Instant::now(),
             level,
             written,
+            quiet_ms,
         })
     }
 
@@ -436,6 +454,13 @@ impl Recorder {
 
     pub fn level(&self) -> u32 {
         self.level.load(Ordering::Relaxed)
+    }
+
+    /// Seconds since anything audible was recorded. Counts from the start of
+    /// the recording when nothing has been heard yet, which is the honest
+    /// answer: a recording of a meeting nobody joined is still silence.
+    pub fn quiet_seconds(&self) -> u64 {
+        self.quiet_ms.load(Ordering::Relaxed) / 1000
     }
 
     /// A source that failed to open at all, reported so the UI can say which
@@ -503,6 +528,7 @@ fn mix_loop(
     mixing: Arc<AtomicBool>,
     level: Arc<AtomicU32>,
     written: Arc<AtomicU64>,
+    quiet_ms: Arc<AtomicU64>,
 ) -> Result<()> {
     let mut encoder = Builder::new().ok_or_else(|| anyhow!("Could not start the MP3 encoder"))?;
     encoder
@@ -556,6 +582,15 @@ fn mix_loop(
                 peak = peak.max(sample.abs());
             }
             level.store((peak * 100.0) as u32, Ordering::Relaxed);
+            // Measured off the mixed block, so either source speaking counts —
+            // and measured here rather than per device, because it is the
+            // meeting that has gone quiet, not one microphone.
+            let block_ms = (need as u64 * 1000) / RATE as u64;
+            if peak >= SILENCE_FLOOR {
+                quiet_ms.store(0, Ordering::Relaxed);
+            } else {
+                quiet_ms.fetch_add(block_ms, Ordering::Relaxed);
+            }
 
             encode_block(&mut encoder, &block, &mut mp3)?;
             file.write_all(&mp3)?;

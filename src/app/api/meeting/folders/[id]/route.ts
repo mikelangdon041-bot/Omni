@@ -4,9 +4,10 @@ import { routeAuth } from "@/lib/supabase/route";
 export const runtime = "nodejs";
 
 // Rename a folder, relink it to a different KOL, or delete it. Deleting
-// leaves its meetings in place — mp_meetings.folder_id references this row
-// ON DELETE SET NULL, so they fall back to Uncategorized rather than
-// disappearing.
+// leaves its meetings in place — both mp_meetings.person_folder_id and
+// .topic_folder_id reference this row ON DELETE SET NULL, so a meeting loses
+// this label and keeps the other one, or falls back to Uncategorized when it
+// had no other, rather than disappearing.
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { supabase, user } = await routeAuth(req);

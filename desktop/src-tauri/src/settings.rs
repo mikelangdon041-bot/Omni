@@ -49,6 +49,25 @@ pub struct Settings {
     /// launch something for is not a hotkey, and the meeting has usually
     /// started by the time you notice.
     pub start_at_login: bool,
+
+    // --- Knowing when you are done ---------------------------------------
+    // Starting a recording is one keypress; stopping it is the one people
+    // forget, and a recording nobody stopped runs until the disk or the
+    // battery notices. These are the three ways the app works it out itself.
+    /// Stop and write the meeting up once nothing audible has reached the
+    /// recorder for this many minutes — the far end hung up, or you walked
+    /// away. 0 turns it off.
+    pub stop_when_silent_minutes: u32,
+    /// Stop when the screen locks, the display sleeps, or the machine
+    /// suspends. Whatever the meeting was, it is not on this screen any more.
+    pub stop_when_screen_off: bool,
+    /// Say something once one recording has been running this many hours,
+    /// even with people still talking — long enough that "is this still a
+    /// meeting?" is worth asking. 0 turns it off.
+    pub long_recording_hours: u32,
+    /// ...and ask again this often afterwards, because the recording you
+    /// forgot about is the one whose first reminder you also missed.
+    pub long_recording_repeat_minutes: u32,
 }
 
 impl Default for Settings {
@@ -65,6 +84,10 @@ impl Default for Settings {
             hotkey: DEFAULT_HOTKEY.to_string(),
             open_when_done: true,
             start_at_login: true,
+            stop_when_silent_minutes: 5,
+            stop_when_screen_off: true,
+            long_recording_hours: 2,
+            long_recording_repeat_minutes: 30,
         }
     }
 }

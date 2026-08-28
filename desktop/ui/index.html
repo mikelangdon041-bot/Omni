@@ -64,22 +64,22 @@
         <!-- Where the finished meeting is filed. Open in the same window of
              time as the title, because that is the window in which you know
              the answer: the meeting is happening and you can see who it's
-             with. Left on Uncategorized, it still saves — the reminder to
-             file it lives on the web app's list, not here.
-             Two separate selects rather than one grouped dropdown — a
-             meeting is filed under one or the other, never both, but picking
-             which kind you're even looking for shouldn't take reading through
-             a combined list first. Choosing one clears the other. -->
+             with. Left empty, it still saves — the reminder to file it lives
+             on the web app's list, not here.
+             Two independent slots: who it was with, and what it was about.
+             A 1:1 with Priya is both, and having to choose meant the topic
+             folders only ever collected the meetings with nobody attached.
+             Either can be left on "none". -->
         <div class="title-field" id="destination-field" hidden>
           <div class="row">
             <label>
-              Person
+              Who it's with
               <select id="person-select">
                 <option value="">— none —</option>
               </select>
             </label>
             <label>
-              Topic
+              What it's about
               <select id="topic-select">
                 <option value="">— none —</option>
               </select>
@@ -196,6 +196,45 @@
         Shortcut
         <input id="hotkey" type="text" spellcheck="false" placeholder="Ctrl+Shift+R" />
         <small class="hint">Works anywhere in Windows. Modifiers plus one key, e.g. Ctrl+Shift+R or Alt+F9.</small>
+      </label>
+
+      <!-- Knowing when you're done. Starting a recording is one keypress;
+           stopping it is the one that gets forgotten, and a recording nobody
+           stopped runs until the disk or the battery notices. -->
+      <label class="check">
+        <input type="checkbox" id="stop-when-silent" />
+        <span>
+          <b>Stop when it goes quiet</b>
+          <small>The call ended and nobody said so. Whatever was recorded is still written up.</small>
+        </span>
+      </label>
+      <label>
+        Minutes of quiet before it stops
+        <input type="number" id="silent-minutes" min="1" max="240" step="1" />
+      </label>
+
+      <label class="check">
+        <input type="checkbox" id="stop-when-screen-off" />
+        <span>
+          <b>Stop when the screen goes</b>
+          <small>Locked, asleep, or the lid shut — whatever the meeting was, it isn't on this screen.</small>
+        </span>
+      </label>
+
+      <label class="check">
+        <input type="checkbox" id="long-nudge" />
+        <span>
+          <b>Say something on a long recording</b>
+          <small>Nothing stops. It just asks, and keeps asking, in case you forgot this was running.</small>
+        </span>
+      </label>
+      <label>
+        Hours before the first reminder
+        <input type="number" id="nudge-hours" min="1" max="24" step="1" />
+      </label>
+      <label>
+        Then remind me every (minutes)
+        <input type="number" id="nudge-repeat" min="5" max="240" step="5" />
       </label>
 
       <label class="check">

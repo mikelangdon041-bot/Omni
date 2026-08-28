@@ -14,7 +14,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { useConfirm } from "@/components/ui/Feedback";
 import { CreateFolderModal } from "@/components/meetingprep/FolderPicker";
 import { useMpFolders, useMpMeetings, useUserId } from "@/lib/meetingprep/hooks";
-import type { FolderKind, MpFolder } from "@/lib/meetingprep/types";
+import { isUnfiled, type FolderKind, type MpFolder } from "@/lib/meetingprep/types";
 
 export default function FoldersPage() {
   const router = useRouter();
@@ -30,8 +30,13 @@ export default function FoldersPage() {
     const map = new Map<string, number>();
     let uncategorized = 0;
     for (const m of meetings) {
-      if (m.folder_id) map.set(m.folder_id, (map.get(m.folder_id) || 0) + 1);
-      else uncategorized += 1;
+      // A meeting filed under both a person and a topic counts in both: it is
+      // genuinely in both, and crediting only one would make the other look
+      // emptier than it is.
+      for (const id of [m.person_folder_id, m.topic_folder_id]) {
+        if (id) map.set(id, (map.get(id) || 0) + 1);
+      }
+      if (isUnfiled(m)) uncategorized += 1;
     }
     return { byFolder: map, uncategorized };
   }, [meetings]);
@@ -56,7 +61,7 @@ export default function FoldersPage() {
       await confirm({
         title: `Delete the "${f.name}" folder?`,
         message: n
-          ? `${n} meeting${n === 1 ? "" : "s"} inside will move to Uncategorized. The meetings themselves aren't deleted.`
+          ? `${n} meeting${n === 1 ? "" : "s"} lose this label. Any with no other folder move to Uncategorized. The meetings themselves aren't deleted.`
           : "This folder is empty.",
         confirmLabel: "Delete folder",
         danger: true,

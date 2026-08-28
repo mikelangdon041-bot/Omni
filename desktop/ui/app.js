@@ -170,10 +170,14 @@ function render() {
   // question worth asking.
   show("destination-field", (recording || working) && !creatingFolderKind);
   show("new-folder-form", (recording || working) && Boolean(creatingFolderKind));
-  if (document.activeElement !== $("person-select") && document.activeElement !== $("topic-select")) {
-    const current = folders.find((f) => f.id === status.folder_id);
-    $("person-select").value = current?.kind === "person" ? current.id : "";
-    $("topic-select").value = current?.kind === "topic" ? current.id : "";
+  // Each slot independently, and never over one being used: this runs on every
+  // status event, which is four times a second while recording.
+  for (const [id, chosen] of [
+    ["person-select", status.person_folder_id],
+    ["topic-select", status.topic_folder_id],
+  ]) {
+    if (document.activeElement === $(id)) continue;
+    $(id).value = folders.some((f) => f.id === chosen) ? chosen : "";
   }
 
   show("progress", working);
@@ -190,7 +194,9 @@ function render() {
     note.textContent = status.message ? `“${status.message}”` : "";
     note.classList.add("good");
   } else if (recording) {
-    note.textContent = capturingLine();
+    // The silence clock takes precedence over what is being captured: one is
+    // a setting you already know, the other is about to end the recording.
+    note.textContent = quietLine() || capturingLine();
   } else if (working) {
     note.textContent = "You can close this window. It keeps going in the tray.";
   } else {
@@ -211,6 +217,20 @@ function render() {
   $("hotkey-hint").textContent = status.hotkey;
   $("who").textContent = status.username;
   refit();
+}
+
+/** What the silence clock is up to, once it has been quiet long enough to be
+    worth saying. Nothing before a minute: a pause between sentences is not
+    news, and a line that appeared every time somebody stopped talking would be
+    ignored by the time it mattered. */
+function quietLine() {
+  const limit = (status.stop_when_silent_minutes || 0) * 60;
+  const quiet = status.quiet_seconds || 0;
+  if (!limit || quiet < 60) return "";
+  const left = Math.ceil((limit - quiet) / 60);
+  return left > 0
+    ? `Nothing heard for ${Math.floor(quiet / 60)} min. Stops and writes up in ${left} min.`
+    : "Nothing heard for a while. Stopping and writing it up.";
 }
 
 /** Say plainly what will and will not be captured — this is the setting that
@@ -259,6 +279,15 @@ async function openSettings() {
   $("open-when-done").checked = status.open_when_done;
   $("start-at-login").checked = status.start_at_login;
   $("hotkey").value = status.hotkey;
+  // Each rule is a checkbox plus a number, and zero is how the Rust side
+  // stores "off" — so the box reflects whether there is a number at all, and
+  // the field keeps a sensible one to switch back on with.
+  $("stop-when-silent").checked = status.stop_when_silent_minutes > 0;
+  $("silent-minutes").value = status.stop_when_silent_minutes || 5;
+  $("stop-when-screen-off").checked = status.stop_when_screen_off;
+  $("long-nudge").checked = status.long_recording_hours > 0;
+  $("nudge-hours").value = status.long_recording_hours || 2;
+  $("nudge-repeat").value = status.long_recording_repeat_minutes || 30;
   $("url").value = status.omni_url;
   fillDeviceSelects();
   showingSettings = true;
@@ -352,10 +381,9 @@ function fillFolderSelects() {
   fillOneSelect($("topic-select"), "topic", "+ New topic…");
 }
 
-// One meeting files under a person OR a topic, never both — matching
-// mp_meetings' single folder_id — so picking one always clears the other,
-// even though they're two separate dropdowns now.
-function chooseFolder(select, other, kind) {
+// The two slots are independent: a meeting is filed under a person, a topic,
+// both, or neither, and picking one never disturbs the other.
+function chooseFolder(select, kind) {
   if (select.value === "__new__") {
     creatingFolderKind = kind;
     $("new-folder-heading").textContent = kind === "person" ? "New person" : "New topic";
@@ -364,19 +392,16 @@ function chooseFolder(select, other, kind) {
     requestAnimationFrame(() => $("new-folder-name").focus());
     return;
   }
-  other.value = "";
   void invoke("set_folder", {
+    kind,
     id: select.value,
-    name: select.selectedOptions[0]?.textContent || "",
+    // The empty option's label is "— none —", which is not a folder name.
+    name: select.value ? select.selectedOptions[0]?.textContent || "" : "",
   });
 }
 
-$("person-select").addEventListener("change", () =>
-  chooseFolder($("person-select"), $("topic-select"), "person"),
-);
-$("topic-select").addEventListener("change", () =>
-  chooseFolder($("topic-select"), $("person-select"), "topic"),
-);
+$("person-select").addEventListener("change", () => chooseFolder($("person-select"), "person"));
+$("topic-select").addEventListener("change", () => chooseFolder($("topic-select"), "topic"));
 
 $("new-folder-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -386,14 +411,10 @@ $("new-folder-form").addEventListener("submit", async (e) => {
     const folder = await invoke("create_folder", { kind: creatingFolderKind, name });
     folders = [...folders, folder];
     fillFolderSelects();
-    if (folder.kind === "person") {
-      $("person-select").value = folder.id;
-      $("topic-select").value = "";
-    } else {
-      $("topic-select").value = folder.id;
-      $("person-select").value = "";
-    }
-    await invoke("set_folder", { id: folder.id, name: folder.name });
+    // Only its own slot: creating a topic mid-meeting must not unfile the
+    // person the meeting is already with.
+    $(folder.kind === "person" ? "person-select" : "topic-select").value = folder.id;
+    await invoke("set_folder", { kind: folder.kind, id: folder.id, name: folder.name });
   } catch (e) {
     window.alert(String(e));
   } finally {
@@ -443,6 +464,13 @@ $("settings-save").addEventListener("click", async () => {
         open_when_done: $("open-when-done").checked,
         start_at_login: $("start-at-login").checked,
         hotkey: $("hotkey").value,
+        // Whole positive numbers only: these cross to Rust as u32, and a
+        // blank or negative box would fail the whole save rather than the one
+        // field. Unchecked sends 0, which is how each rule is turned off.
+        stop_when_silent_minutes: $("stop-when-silent").checked ? minutes("silent-minutes", 5) : 0,
+        stop_when_screen_off: $("stop-when-screen-off").checked,
+        long_recording_hours: $("long-nudge").checked ? minutes("nudge-hours", 2) : 0,
+        long_recording_repeat_minutes: minutes("nudge-repeat", 30),
       },
     });
     showingSettings = false;
@@ -454,6 +482,12 @@ $("settings-save").addEventListener("click", async () => {
     error.hidden = false;
   }
 });
+
+/** One number box, as a whole number of at least 1. */
+function minutes(id, fallback) {
+  const value = Math.round(Number($(id).value));
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
 
 $("sign-out").addEventListener("click", async () => {
   await invoke("sign_out");

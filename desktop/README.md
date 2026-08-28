@@ -16,6 +16,29 @@ It starts with Windows and sits in the tray, because a shortcut you have to
 remember to launch something for is not a shortcut, and by the time you notice
 the meeting has started.
 
+## Knowing when you are done
+
+Starting a recording is one keypress. Stopping it is the one that gets
+forgotten, and a recording nobody stopped runs until the disk or the battery
+notices — so the app works it out itself, three ways, all of them in Settings:
+
+- **It went quiet.** Five minutes with nothing audible on either source and the
+  recording stops and is written up. Silence is measured off the mixed track, so
+  either side speaking counts, and the bar is set well above a microphone's room
+  tone and well below speech: an office with a loud fan simply never auto-stops,
+  which costs a keypress rather than a meeting.
+- **The screen went.** Locked, asleep, or suspended — whatever the meeting was,
+  it is not on this screen any more. Windows says so immediately, which is why
+  this is worth having on top of the silence clock (see `session.rs`).
+- **It has been going a long time.** After two hours, and every thirty minutes
+  after that, a notification says how long it has been running. Nothing stops:
+  people talking for three hours is a long meeting, not a mistake. It only asks.
+
+Every automatic stop is a normal stop — the recording uploads, gets transcribed
+and becomes notes, exactly as it would have if you had pressed the hotkey — and
+says in a notification why it happened, because a recording that ended without
+being asked to has to be visible or it reads as a lost meeting.
+
 ## What it captures
 
 Two sources, mixed to one mono track:
@@ -65,6 +88,25 @@ review defaults — drop the transcript, cut the opening small talk, keep every
 follow-up. All of it is editable on the meeting page, which is where it sends
 you. "Keep the transcript in Omni" in Settings opts back in, the same way the
 audio does.
+
+## Where the meeting is filed
+
+While a recording is running — and right through the upload, up to the moment
+the notes are written — the window offers two dropdowns: who the meeting is
+with, and what it is about. They are independent. A 1:1 with Priya is both, and
+back when it was one folder or the other, the topic folders only ever collected
+the meetings with nobody attached to them.
+
+Either can be left empty. Both empty files it as Uncategorized, which still
+saves, with a reminder to file it on the web app's list. Both survive from one
+recording to the next, because a destination is where meetings go rather than
+something belonging to one of them; the title does not, because it is.
+
+`+ New person` / `+ New topic` at the bottom of each dropdown creates one on the
+spot, since stopping to open a browser tab would defeat a one-hotkey recorder.
+On the website the same two slots nest: open a person's folder and their
+meetings are grouped by topic, with the ones that never got one gathered at the
+end.
 
 ## Signing in
 
@@ -126,6 +168,7 @@ src-tauri/src/
   audio.rs           WASAPI capture, mixing, MP3 encoding
   auth.rs            Supabase sign-in, credential store
   omni.rs            the upload/transcribe/capture protocol
+  session.rs         a hidden window, listening for the screen going dark
   settings.rs        remembered devices, shortcut, preferences
 ```
 

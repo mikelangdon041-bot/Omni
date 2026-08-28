@@ -46,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
     // Keeping the transcript rides on the same flag: the point of this run is
     // to see the whole artifact, and the meeting is thrown away afterwards.
     let captured = client
-        .capture(&transcript, &audio_path, keep, keep, "", "")
+        .capture(&transcript, &audio_path, keep, keep, "", "", "")
         .await?;
     println!("   -> {} ({})", captured.title, captured.id);
     println!("\nOpen it at: {url}{}", captured.path);

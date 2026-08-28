@@ -22,6 +22,7 @@
 pub mod audio;
 pub mod auth;
 pub mod omni;
+mod session;
 mod settings;
 
 use std::path::PathBuf;
@@ -70,6 +71,9 @@ pub struct Status {
     seconds: u64,
     /// Peak level 0-100 while recording, for the meter.
     level: u32,
+    /// How long the recording has heard nothing. Shown so the window can say
+    /// what the app is about to do rather than surprising you with it.
+    quiet_seconds: u64,
     signed_in: bool,
     username: String,
     omni_url: String,
@@ -82,20 +86,29 @@ pub struct Status {
     start_at_login: bool,
     mic_device_id: String,
     system_device_id: String,
+    stop_when_silent_minutes: u32,
+    stop_when_screen_off: bool,
+    long_recording_hours: u32,
+    long_recording_repeat_minutes: u32,
     /// URL of the last finished meeting, so "Open it" works after the fact.
     last_meeting: String,
     /// Editable from the window at any point between the hotkey starting a
     /// recording and the notes actually being written — typed early, typed
     /// while it uploads, or left blank for the AI to name it instead.
     title: String,
-    /// Which person or topic folder the finished meeting should be filed
-    /// under, chosen from the same window and in the same window of time as
-    /// the title. Empty means Uncategorized — it still saves, with a
-    /// reminder to file it shown on the web app's list.
-    folder_id: String,
-    /// The folder's name, so the window can show what is selected without
-    /// asking the server what that id means.
-    folder_name: String,
+    /// Who the meeting was with and what it was about — two folders rather
+    /// than one, because a meeting is usually both (Priya, and a 1:1) and
+    /// having to choose meant the topic folders only ever collected the
+    /// meetings with nobody attached. Either can be left empty; both empty
+    /// means Uncategorized, which still saves, with a reminder to file it
+    /// shown on the web app's list. Chosen from the same window and in the
+    /// same window of time as the title.
+    person_folder_id: String,
+    topic_folder_id: String,
+    /// The folders' names, so the window can show what is selected without
+    /// asking the server what those ids mean.
+    person_folder_name: String,
+    topic_folder_name: String,
     /// Recordings found on disk that never became meetings — the app was
     /// killed, the machine restarted, or an upload failed. Offered back rather
     /// than left in a folder nobody would think to look in.
@@ -177,6 +190,7 @@ impl AppState {
             percent: 0,
             seconds: 0,
             level: 0,
+            quiet_seconds: 0,
             signed_in,
             username: settings.username.clone(),
             omni_url: settings.normalized_url(),
@@ -189,10 +203,16 @@ impl AppState {
             start_at_login: settings.start_at_login,
             mic_device_id: settings.mic_device_id.clone(),
             system_device_id: settings.system_device_id.clone(),
+            stop_when_silent_minutes: settings.stop_when_silent_minutes,
+            stop_when_screen_off: settings.stop_when_screen_off,
+            long_recording_hours: settings.long_recording_hours,
+            long_recording_repeat_minutes: settings.long_recording_repeat_minutes,
             last_meeting: String::new(),
             title: String::new(),
-            folder_id: String::new(),
-            folder_name: String::new(),
+            person_folder_id: String::new(),
+            topic_folder_id: String::new(),
+            person_folder_name: String::new(),
+            topic_folder_name: String::new(),
             orphans: Vec::new(),
         };
         Self {
@@ -250,6 +270,18 @@ fn mmss(seconds: u64) -> String {
     format!("{:02}:{:02}", seconds / 60, seconds % 60)
 }
 
+/// "2 hours", "2h 30m" — for a notification, where 02:30:00 reads as a
+/// stopwatch rather than as how long you have been in this meeting.
+fn human_duration(seconds: u64) -> String {
+    let hours = seconds / 3600;
+    let minutes = (seconds % 3600) / 60;
+    match (hours, minutes) {
+        (0, m) => format!("{m} minutes"),
+        (h, 0) => format!("{h} hour{}", if h == 1 { "" } else { "s" }),
+        (h, m) => format!("{h}h {m:02}m"),
+    }
+}
+
 fn recording_path(app: &AppHandle) -> PathBuf {
     let dir = app
         .path()
@@ -294,14 +326,29 @@ fn start_recording(app: &AppHandle) -> Result<(), String> {
         s.percent = 0;
         s.last_meeting = String::new();
         s.title = String::new();
-        // `folder_id` deliberately survives. A title belongs to one meeting;
-        // a destination is where meetings go, and re-picking the same folder
-        // every time is the clicking this was built to remove. Change it in
-        // the window whenever one meeting belongs somewhere else.
+        s.quiet_seconds = 0;
+        // Both folders deliberately survive. A title belongs to one meeting;
+        // a destination is where meetings go, and re-picking the same person
+        // and topic every time is the clicking this was built to remove.
+        // Change either in the window whenever one meeting belongs elsewhere.
     });
 
     // Tick the elapsed time and level so the tray tooltip and the window both
-    // show a recording that is visibly alive.
+    // show a recording that is visibly alive — and, on the same tick, watch
+    // for the two ways a meeting ends without anybody stopping the recording:
+    // it went quiet a long time ago, or it has been running long enough that
+    // whether it is still a meeting is worth asking out loud.
+    //
+    // The rules are read once, here, rather than every tick: they are chosen
+    // in a Settings screen nobody opens mid-meeting, and a recording that
+    // changed its own rules halfway through would be harder to explain than
+    // one that used what was set when it started.
+    let silence_limit = settings.stop_when_silent_minutes as u64 * 60;
+    let nudge_every = settings.long_recording_repeat_minutes.max(1) as u64 * 60;
+    let mut next_nudge =
+        (settings.long_recording_hours > 0).then(|| settings.long_recording_hours as u64 * 3600);
+    let hotkey = settings.hotkey.clone();
+
     let app = app.clone();
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_millis(250));
@@ -310,13 +357,15 @@ fn start_recording(app: &AppHandle) -> Result<(), String> {
             let recorder = state.recorder.lock().unwrap();
             recorder
                 .as_ref()
-                .map(|r| (r.seconds() as u64, r.level(), r.first_error()))
+                .map(|r| (r.seconds() as u64, r.level(), r.quiet_seconds(), r.first_error()))
         };
-        let Some((seconds, level, error)) = reading else { break };
+        // No recorder means this recording is over, however it ended.
+        let Some((seconds, level, quiet, error)) = reading else { break };
         set_status(&app, |s| {
             if s.phase == Phase::Recording {
                 s.seconds = seconds;
                 s.level = level;
+                s.quiet_seconds = quiet;
                 // A device that failed to open means half the meeting is
                 // missing. Say so now, while there is time to do something.
                 if let Some(error) = error {
@@ -324,9 +373,71 @@ fn start_recording(app: &AppHandle) -> Result<(), String> {
                 }
             }
         });
+
+        // Quiet for long enough is a meeting that ended without anyone
+        // pressing anything: the far end hung up, or you walked away once the
+        // call was over. Written up rather than discarded — the recording up
+        // to that point is the meeting.
+        if silence_limit > 0 && quiet >= silence_limit {
+            auto_stop(
+                &app,
+                &format!(
+                    "Nothing was heard for {} minutes, so the recording stopped and is being written up.",
+                    silence_limit / 60
+                ),
+            );
+            break;
+        }
+
+        // Long-running is not a fault, so this only asks — and asks again,
+        // because the recording you forgot about is the one whose first
+        // reminder you also missed.
+        if let Some(at) = next_nudge {
+            if seconds >= at {
+                notify(
+                    &app,
+                    "Still recording",
+                    &format!(
+                        "{} so far. Press {hotkey} to stop and write it up, or carry on and this will ask again later.",
+                        human_duration(seconds)
+                    ),
+                );
+                next_nudge = Some(at + nudge_every);
+            }
+        }
     });
 
     Ok(())
+}
+
+/// Stop the way the hotkey would, from something that is not a person: a
+/// silence that has gone on too long, or a screen that went black.
+///
+/// Says why, because a recording that ended without being asked to has to be
+/// visible or it reads as a lost meeting. Does nothing when there is no
+/// recording, or when a stop is already being processed — the same guard the
+/// hotkey uses, so a lock screen arriving during an upload cannot start a
+/// second one.
+fn auto_stop(app: &AppHandle, why: &str) {
+    {
+        let state = app.state::<AppState>();
+        if state.recorder.lock().unwrap().is_none() {
+            return;
+        }
+        let mut busy = state.busy.lock().unwrap();
+        if *busy {
+            return;
+        }
+        *busy = true;
+    }
+    notify(app, "Recording stopped", why);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        stop_recording(app.clone()).await;
+        let state = app.state::<AppState>();
+        let mut busy = state.busy.lock().unwrap();
+        *busy = false;
+    });
 }
 
 async fn stop_recording(app: AppHandle) {
@@ -437,11 +548,16 @@ async fn upload_and_capture(
     });
 
     // Read now rather than earlier: this is the last moment a title typed —
-    // or a folder picked — while the upload was running still makes it in.
-    let (title, folder_id) = {
+    // or a person or topic picked — while the upload was running still makes
+    // it in.
+    let (title, person_folder_id, topic_folder_id) = {
         let state = app.state::<AppState>();
         let status = state.status.lock().unwrap();
-        (status.title.clone(), status.folder_id.clone())
+        (
+            status.title.clone(),
+            status.person_folder_id.clone(),
+            status.topic_folder_id.clone(),
+        )
     };
 
     client
@@ -451,7 +567,8 @@ async fn upload_and_capture(
             settings.keep_audio,
             settings.keep_transcript,
             &title,
-            &folder_id,
+            &person_folder_id,
+            &topic_folder_id,
         )
         .await
         .map_err(|e| e.to_string())
@@ -624,6 +741,10 @@ pub struct SettingsPatch {
     open_when_done: bool,
     start_at_login: bool,
     hotkey: String,
+    stop_when_silent_minutes: u32,
+    stop_when_screen_off: bool,
+    long_recording_hours: u32,
+    long_recording_repeat_minutes: u32,
 }
 
 /// Keep the Windows run-at-login entry in step with the setting. Best effort:
@@ -667,6 +788,20 @@ fn save_settings(app: AppHandle, patch: SettingsPatch) -> Result<(), String> {
         } else {
             patch.hotkey.trim().to_string()
         };
+        // Clamped rather than trusted: these arrive as numbers typed into a
+        // box, and "stop after 0 minutes of quiet" would end every recording
+        // the moment nobody was mid-word. Zero still turns each off — the
+        // window sends it deliberately, from the checkbox beside it.
+        settings.stop_when_silent_minutes = match patch.stop_when_silent_minutes {
+            0 => 0,
+            m => m.clamp(1, 240),
+        };
+        settings.stop_when_screen_off = patch.stop_when_screen_off;
+        settings.long_recording_hours = match patch.long_recording_hours {
+            0 => 0,
+            h => h.clamp(1, 24),
+        };
+        settings.long_recording_repeat_minutes = patch.long_recording_repeat_minutes.clamp(5, 240);
         settings::save(&settings).map_err(|e| e.to_string())?;
         previous
     };
@@ -693,6 +828,10 @@ fn save_settings(app: AppHandle, patch: SettingsPatch) -> Result<(), String> {
         s.keep_transcript = settings.keep_transcript;
         s.open_when_done = settings.open_when_done;
         s.hotkey = settings.hotkey;
+        s.stop_when_silent_minutes = settings.stop_when_silent_minutes;
+        s.stop_when_screen_off = settings.stop_when_screen_off;
+        s.long_recording_hours = settings.long_recording_hours;
+        s.long_recording_repeat_minutes = settings.long_recording_repeat_minutes;
     });
     Ok(())
 }
@@ -723,9 +862,10 @@ fn cancel_recording(app: AppHandle) {
         s.seconds = 0;
         s.percent = 0;
         s.level = 0;
+        s.quiet_seconds = 0;
         s.title = String::new();
-        // `folder_id` survives, same as a normal stop — it's where meetings
-        // go, not something tied to the one that just got thrown away.
+        // Both folders survive, same as a normal stop — they are where
+        // meetings go, not something tied to the one just thrown away.
     });
 }
 
@@ -737,15 +877,22 @@ fn set_title(app: AppHandle, title: String) {
     set_status(&app, |s| s.title = title);
 }
 
-// The same idea for where the meeting ends up. Both halves are stored: the id
-// is what the server needs, the name is what the window shows, and keeping
-// the name here means selecting a destination costs no extra round trip to
-// turn an opaque id back into words.
+// The same idea for where the meeting ends up, once per slot: `kind` is
+// "person" or "topic", and the two are independent — filing under Priya does
+// not clear the 1:1. Both halves of each are stored: the id is what the server
+// needs, the name is what the window shows, and keeping the name here means
+// selecting a destination costs no extra round trip to turn an opaque id back
+// into words.
 #[tauri::command]
-fn set_folder(app: AppHandle, id: String, name: String) {
+fn set_folder(app: AppHandle, kind: String, id: String, name: String) {
     set_status(&app, |s| {
-        s.folder_id = id;
-        s.folder_name = name;
+        if kind == "topic" {
+            s.topic_folder_id = id;
+            s.topic_folder_name = name;
+        } else {
+            s.person_folder_id = id;
+            s.person_folder_name = name;
+        }
     });
 }
 
@@ -1053,6 +1200,39 @@ pub fn run() {
                 );
                 notify(&handle, "Omni Recorder", &message);
                 set_status(&handle, move |s| s.message = message);
+            }
+
+            // Windows says when the screen locks, the display sleeps, or the
+            // machine suspends. Any of those means the meeting is not on this
+            // screen any more, so the recording is stopped and written up
+            // rather than left running into the night. Registered once, for
+            // the life of the app; it only ever acts on a live recording.
+            {
+                let handle = handle.clone();
+                session::watch(move |away| {
+                    let enabled = {
+                        let state = handle.state::<AppState>();
+                        let settings = state.settings.lock().unwrap();
+                        settings.stop_when_screen_off
+                    };
+                    if !enabled {
+                        return;
+                    }
+                    auto_stop(
+                        &handle,
+                        match away {
+                            session::Away::Locked => {
+                                "The screen locked, so the recording stopped and is being written up."
+                            }
+                            session::Away::Suspending => {
+                                "This PC went to sleep, so the recording stopped and is being written up."
+                            }
+                            session::Away::ScreenOff => {
+                                "The screen went dark, so the recording stopped and is being written up."
+                            }
+                        },
+                    );
+                });
             }
 
             // A recording sitting in the folder means the last one never

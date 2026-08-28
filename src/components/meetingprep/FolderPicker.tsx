@@ -1,18 +1,23 @@
 "use client";
 
-// Where a meeting is filed: a person, a topic, or nothing ("Uncategorized").
-// One dropdown, grouped, with "+ New…" at the bottom of each group so
-// creating a folder never requires leaving wherever this is dropped — the
-// meeting detail page, the meeting list, and the recorder's review step all
-// use the same pieces so the picker behaves identically everywhere.
+// Where a meeting is filed: who it was with, and what it was about. Two
+// independent slots — "Priya" and "1:1" — because a meeting is usually both,
+// and making it a choice meant topic folders only ever collected the meetings
+// nobody was attached to.
 //
-//   FolderSelect      — the <select> itself. Takes a preloaded folder list,
+// Two selects rather than one grouped dropdown: picking which kind you are
+// even looking for should not take reading a combined list first, and once
+// both can be set at once there is nothing left for a single control to say.
+// The desktop recorder's picker is the same shape (see desktop/ui/app.js).
+//
+//   FolderSlotSelect  — one <select>, one kind. Takes a preloaded folder list,
 //                        so a page with many rows (the meeting list) fetches
 //                        folders once rather than once per row.
+//   FolderPairSelect  — the person and topic slots together.
 //   CreateFolderModal — the "+ New person/topic" form, shared so there is
 //                        exactly one place that knows how to create one.
-//   FolderPicker      — FolderSelect + CreateFolderModal wired together and
-//                        self-sufficient (fetches its own folder list) —
+//   FolderPicker      — FolderPairSelect + CreateFolderModal wired together
+//                        and self-sufficient (fetches its own folder list) —
 //                        the one to reach for anywhere there's a single
 //                        picker, like the meeting detail page header.
 
@@ -28,8 +33,7 @@ import type { FolderKind, MpFolder } from "@/lib/meetingprep/types";
 
 const supabase = createClient();
 
-export const NEW_PERSON = "__new_person__";
-export const NEW_TOPIC = "__new_topic__";
+export const NEW_FOLDER = "__new__";
 
 interface KolOption {
   id: string;
@@ -37,55 +41,95 @@ interface KolOption {
   detail: string;
 }
 
-export function FolderSelect({
+const EMPTY_LABEL: Record<FolderKind, string> = {
+  person: "No person",
+  topic: "No topic",
+};
+
+const NEW_LABEL: Record<FolderKind, string> = {
+  person: "+ New person…",
+  topic: "+ New topic…",
+};
+
+export function FolderSlotSelect({
   folders,
+  kind,
   folderId,
   onChange,
   onRequestCreate,
   className,
 }: {
   folders: MpFolder[];
+  kind: FolderKind;
   folderId: string | null;
   onChange: (folder: MpFolder | null) => void;
   onRequestCreate: (kind: FolderKind) => void;
   className?: string;
 }) {
-  const people = folders.filter((f) => f.kind === "person");
-  const topics = folders.filter((f) => f.kind === "topic");
+  const options = folders.filter((f) => f.kind === kind);
 
   return (
     <select
       value={folderId ?? ""}
       onChange={(e) => {
         const v = e.target.value;
-        if (v === NEW_PERSON) return onRequestCreate("person");
-        if (v === NEW_TOPIC) return onRequestCreate("topic");
+        if (v === NEW_FOLDER) return onRequestCreate(kind);
         onChange(folders.find((f) => f.id === v) ?? null);
       }}
       className={
         className ||
         "rounded-md border border-border bg-surface px-2 py-1.5 text-xs text-muted outline-none transition focus:border-[var(--accent)]"
       }
-      title="Move to a person or topic folder"
+      title={kind === "person" ? "Who this meeting was with" : "What this meeting was about"}
+      aria-label={kind === "person" ? "Person" : "Topic"}
     >
-      <option value="">Uncategorized</option>
-      <optgroup label="People">
-        {people.map((f) => (
-          <option key={f.id} value={f.id}>
-            {f.name}
-          </option>
-        ))}
-        <option value={NEW_PERSON}>+ New person…</option>
-      </optgroup>
-      <optgroup label="Topics">
-        {topics.map((f) => (
-          <option key={f.id} value={f.id}>
-            {f.name}
-          </option>
-        ))}
-        <option value={NEW_TOPIC}>+ New topic…</option>
-      </optgroup>
+      <option value="">{EMPTY_LABEL[kind]}</option>
+      {options.map((f) => (
+        <option key={f.id} value={f.id}>
+          {f.name}
+        </option>
+      ))}
+      <option value={NEW_FOLDER}>{NEW_LABEL[kind]}</option>
     </select>
+  );
+}
+
+/** Both slots. `onChange` is told which one moved, because clearing one sends
+    a null that still has to say what it emptied. */
+export function FolderPairSelect({
+  folders,
+  personFolderId,
+  topicFolderId,
+  onChange,
+  onRequestCreate,
+  className,
+}: {
+  folders: MpFolder[];
+  personFolderId: string | null;
+  topicFolderId: string | null;
+  onChange: (kind: FolderKind, folder: MpFolder | null) => void;
+  onRequestCreate: (kind: FolderKind) => void;
+  className?: string;
+}) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <FolderSlotSelect
+        folders={folders}
+        kind="person"
+        folderId={personFolderId}
+        onChange={(f) => onChange("person", f)}
+        onRequestCreate={onRequestCreate}
+        className={className}
+      />
+      <FolderSlotSelect
+        folders={folders}
+        kind="topic"
+        folderId={topicFolderId}
+        onChange={(f) => onChange("topic", f)}
+        onRequestCreate={onRequestCreate}
+        className={className}
+      />
+    </span>
   );
 }
 
@@ -174,7 +218,7 @@ export function CreateFolderModal({
           label={kind === "person" ? "Their name" : "Topic name"}
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder={kind === "person" ? "Sam Rivera" : "Compliance"}
+          placeholder={kind === "person" ? "Sam Rivera" : "1:1"}
           autoFocus
         />
         {kind === "person" && (
@@ -231,13 +275,15 @@ export function CreateFolderModal({
 
 export function FolderPicker({
   userId,
-  folderId,
+  personFolderId,
+  topicFolderId,
   onChange,
   className,
 }: {
   userId: string | null;
-  folderId: string | null;
-  onChange: (folder: MpFolder | null) => void;
+  personFolderId: string | null;
+  topicFolderId: string | null;
+  onChange: (kind: FolderKind, folder: MpFolder | null) => void;
   className?: string;
 }) {
   const { folders } = useMpFolders(userId);
@@ -245,9 +291,10 @@ export function FolderPicker({
 
   return (
     <>
-      <FolderSelect
+      <FolderPairSelect
         folders={folders}
-        folderId={folderId}
+        personFolderId={personFolderId}
+        topicFolderId={topicFolderId}
         onChange={onChange}
         onRequestCreate={setCreatingKind}
         className={className}
@@ -256,7 +303,7 @@ export function FolderPicker({
         userId={userId}
         kind={creatingKind}
         onClose={() => setCreatingKind(null)}
-        onCreated={onChange}
+        onCreated={(folder) => onChange(folder.kind, folder)}
       />
     </>
   );

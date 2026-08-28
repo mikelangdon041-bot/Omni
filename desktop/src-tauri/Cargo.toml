@@ -47,7 +47,22 @@ futures-util = "0.3"
 # capture devices, and this machine has no Stereo Mix or virtual cable, so
 # there is no device-shaped way to reach what the speakers are playing.
 wasapi = "0.23"
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com"] }
+# Win32 beyond what WASAPI needs: a hidden window that hears the screen
+# locking, the display sleeping, and the machine suspending, so a meeting
+# nobody stopped does not record into the night (see session.rs).
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  # WNDCLASSW and RegisterClassW live behind this one: the class carries an
+  # HBRUSH and an HCURSOR, which are GDI types, however little a window that
+  # never paints anything needs either.
+  "Win32_Graphics_Gdi",
+  "Win32_System_Com",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Power",
+  "Win32_System_RemoteDesktop",
+  "Win32_System_SystemServices",
+  "Win32_UI_WindowsAndMessaging",
+] }
 
 # The upload is bounded by network, not disk, so the recording is encoded as
 # it is captured rather than written as WAV and converted afterwards.

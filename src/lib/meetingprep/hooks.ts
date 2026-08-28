@@ -353,8 +353,9 @@ export function useMpFolders(userId: string | null) {
   }, []);
 
   const remove = useCallback(async (id: string) => {
-    // mp_meetings.folder_id references this ON DELETE SET NULL, so meetings
-    // filed here fall back to Uncategorized rather than disappearing.
+    // Both folder columns on mp_meetings reference this ON DELETE SET NULL,
+    // so a meeting filed here keeps its other label and only falls back to
+    // Uncategorized when it had none.
     setFolders((prev) => prev.filter((f) => f.id !== id));
     await supabase.from("mp_folders").delete().eq("id", id);
   }, []);

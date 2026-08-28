@@ -116,27 +116,34 @@ export async function POST(req: Request) {
       String(body.hint || "").trim() ||
       "Recorded meeting";
 
-    // Where this meeting is filed — a person or topic folder chosen mid-
-    // recording, or nothing, which lands it in "Uncategorized" (folder_id
-    // null) with a reminder to file it later. Resolved server-side, not
-    // trusted from the body, so a stale or foreign id can't attach a meeting
-    // to someone else's folder.
-    const folderId = String(body.folderId || "") || null;
-    let folder: { kind: string; kol_id: string | null } | null = null;
-    if (folderId) {
-      const { data: f } = await supabase
+    // Where this meeting is filed — who it was with and what it was about,
+    // both chosen mid-recording, either or both left empty. Nothing at all
+    // lands it in "Uncategorized" with a reminder to file it later.
+    //
+    // Every id is resolved server-side rather than trusted from the body, so a
+    // stale or foreign one can't attach a meeting to someone else's folder —
+    // and each is filed by the kind the row actually has, not by which field
+    // it arrived in. `folderId` is the older recorder's single destination and
+    // can still be a topic; it lands in the right slot either way.
+    const asked = [String(body.folderId || ""), String(body.topicFolderId || "")].filter(Boolean);
+    let personFolder: { id: string; kol_id: string | null } | null = null;
+    let topicFolder: { id: string } | null = null;
+    if (asked.length) {
+      const { data: rows } = await supabase
         .from("mp_folders")
-        .select("kind, kol_id")
-        .eq("id", folderId)
-        .eq("user_id", user.id)
-        .maybeSingle();
-      folder = f;
+        .select("id, kind, kol_id")
+        .in("id", asked)
+        .eq("user_id", user.id);
+      for (const f of rows || []) {
+        if (f.kind === "person") personFolder = { id: f.id as string, kol_id: f.kol_id as string | null };
+        else topicFolder = { id: f.id as string };
+      }
     }
 
     // An explicit kolId wins; otherwise a person-folder linked to a KOL
     // carries that link along, so filing under "Sam" also keeps Territory
     // Planning's kol_id in step without a second thing to set.
-    const kolId = String(body.kolId || "") || folder?.kol_id || null;
+    const kolId = String(body.kolId || "") || personFolder?.kol_id || null;
 
     // Inserted through the caller's own client, so RLS applies exactly as it
     // does for the web app rather than being bypassed with the service role.
@@ -149,7 +156,8 @@ export async function POST(req: Request) {
         meeting_type: "other",
         date: new Date().toISOString(),
         kol_id: kolId,
-        folder_id: folder ? folderId : null,
+        person_folder_id: personFolder?.id ?? null,
+        topic_folder_id: topicFolder?.id ?? null,
         attendees,
         debrief: {
           transcript: kept,
@@ -172,7 +180,16 @@ export async function POST(req: Request) {
     // this meeting's folder. Only reached when a transcript was kept —
     // `archiveTranscript` no-ops on the empty string, so dropping the
     // transcript drops the archive with it rather than filing a blank zip.
-    const zipPath = await archiveTranscript(user.id, data.id, folder ? folderId : null, title, kept);
+    // Filed under the person when there is one, the topic otherwise: a zip
+    // lives at exactly one path, and "whose meeting was it" is the question
+    // someone digging through storage by hand is asking.
+    const zipPath = await archiveTranscript(
+      user.id,
+      data.id,
+      personFolder?.id ?? topicFolder?.id ?? null,
+      title,
+      kept,
+    );
     if (zipPath) {
       await supabase.from("mp_meetings").update({ transcript_zip_path: zipPath }).eq("id", data.id);
     }
@@ -208,7 +225,9 @@ export async function POST(req: Request) {
       path: `/meeting-prep/${data.id}?tab=Debrief`,
       actions: result.actions.length,
       ungrounded: result.ungrounded,
-      folderId: folder ? folderId : null,
+      folderId: personFolder?.id ?? topicFolder?.id ?? null,
+      personFolderId: personFolder?.id ?? null,
+      topicFolderId: topicFolder?.id ?? null,
       oneNote,
     });
   } catch (e) {

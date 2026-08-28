@@ -69,8 +69,11 @@ export interface CaptureResult {
   nameMap?: Record<string, string>;
   /** Territory KOL this meeting was linked to at capture time. */
   kolId?: string;
-  /** Person or topic folder chosen before saving. Null files it as Uncategorized. */
-  folder?: MpFolder | null;
+  /** Who the meeting was with, chosen before saving. Null leaves it unfiled. */
+  personFolder?: MpFolder | null;
+  /** What it was about. Independent of the person — a meeting is usually both,
+      and neither means Uncategorized. */
+  topicFolder?: MpFolder | null;
   /** Where the recording was kept, when the user chose to keep it. */
   audioPath?: string;
 }
@@ -195,7 +198,8 @@ export function MeetingRecorder({
   const [titleOverride, setTitleOverride] = useState("");
   const [kolQuery, setKolQuery] = useState("");
   const [kolId, setKolId] = useState("");
-  const [folder, setFolder] = useState<MpFolder | null>(null);
+  const [personFolder, setPersonFolder] = useState<MpFolder | null>(null);
+  const [topicFolder, setTopicFolder] = useState<MpFolder | null>(null);
   const [kolOptions, setKolOptions] = useState<{ id: string; label: string; detail: string }[]>([]);
   // Capture settings are remembered. Re-ticking the same boxes before every
   // meeting is exactly the kind of friction that stops people recording.
@@ -547,8 +551,9 @@ export function MeetingRecorder({
       // search only if that search was left empty — filing under "Sam"
       // shouldn't silently override a different person you explicitly
       // linked in the field above.
-      kolId: kolId || folder?.kol_id || undefined,
-      folder,
+      kolId: kolId || personFolder?.kol_id || undefined,
+      personFolder,
+      topicFolder,
       audioPath: audioPath || undefined,
       actions: result.actions.filter((a) => a.selected),
       transcript: keepTranscript ? trimmed : "",
@@ -732,16 +737,18 @@ export function MeetingRecorder({
               placeholder="Leave blank and I'll name it from what was said"
             />
 
-            {/* Where this lands — a person or topic folder, chosen now while
-                it's fresh, same as the desktop recorder's picker. Left on
-                Uncategorized, it still saves; the reminder to file it lives
-                on the meeting list and the Folders page, not here. */}
+            {/* Where this lands — who it was with and what it was about,
+                chosen now while it's fresh, same as the desktop recorder's
+                picker. Either can be left empty; with both empty it still
+                saves, and the reminder to file it lives on the meeting list
+                and the Folders page, not here. */}
             <div>
               <label className="mb-1 block text-xs font-medium text-muted">File under</label>
               <FolderPicker
                 userId={userId}
-                folderId={folder?.id ?? null}
-                onChange={setFolder}
+                personFolderId={personFolder?.id ?? null}
+                topicFolderId={topicFolder?.id ?? null}
+                onChange={(kind, f) => (kind === "person" ? setPersonFolder(f) : setTopicFolder(f))}
                 className="w-full rounded-md border border-border bg-canvas px-2 py-1.5 text-sm outline-none transition focus:border-[var(--accent)]"
               />
             </div>

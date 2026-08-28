@@ -142,7 +142,7 @@ export const DEBRIEF_QUESTIONS: { key: string; label: string; placeholder: strin
 export type FolderKind = "person" | "topic";
 
 // A person or topic a recording is filed under (see mp_folders). A meeting
-// with folder_id null is "Uncategorized" — no separate flag needed, the
+// with neither slot set is "Uncategorized" — no separate flag needed, the
 // absence is the state.
 export interface MpFolder {
   id: string;
@@ -156,16 +156,39 @@ export interface MpFolder {
   updated_at: string;
 }
 
-// Patch to apply when a meeting is moved into (or out of) a folder. Carries
-// the folder's KOL link along automatically — filing a recording under
+// Patch to apply when a meeting is moved into (or out of) one of its two
+// slots. `kind` rather than reading it off the folder, because clearing a slot
+// passes null and the null still has to know which of the two it is emptying.
+//
+// Carries the folder's KOL link along automatically — filing a recording under
 // "Sam" keeps Territory Planning's kol_id in step without a second thing to
 // set — but only when the folder actually has one; it never clears an
 // existing kol_id a meeting already had for some other reason.
-export function folderMovePatch(folder: MpFolder | null): Partial<MpMeeting> {
+export function folderMovePatch(
+  kind: FolderKind,
+  folder: MpFolder | null,
+): Partial<MpMeeting> {
+  const slot: Partial<MpMeeting> =
+    kind === "person" ? { person_folder_id: folder?.id ?? null } : { topic_folder_id: folder?.id ?? null };
   return {
-    folder_id: folder?.id ?? null,
+    ...slot,
     ...(folder?.kol_id ? { kol_id: folder.kol_id } : {}),
   };
+}
+
+// Filed nowhere at all. Uncategorized is the absence of both slots, not a
+// folder of its own, so this is the one place that spelling lives.
+export function isUnfiled(m: Pick<MpMeeting, "person_folder_id" | "topic_folder_id">): boolean {
+  return !m.person_folder_id && !m.topic_folder_id;
+}
+
+// Whether a meeting belongs to one folder, in either slot — a person folder's
+// view and a topic folder's view ask the same question of the same meeting.
+export function inFolder(
+  m: Pick<MpMeeting, "person_folder_id" | "topic_folder_id">,
+  folderId: string,
+): boolean {
+  return m.person_folder_id === folderId || m.topic_folder_id === folderId;
 }
 
 export interface MpMeeting {
@@ -178,7 +201,10 @@ export interface MpMeeting {
   format: MeetingFormat;
   location: string;
   kol_id: string | null;
-  folder_id: string | null;
+  // The two slots a meeting is filed under: who it was with, and what it was
+  // about. Independent — either, both, or neither (Uncategorized).
+  person_folder_id: string | null;
+  topic_folder_id: string | null;
   transcript_zip_path: string;
   attendees: Attendee[];
   // The fast path: describe the meeting in plain language; extraction fills

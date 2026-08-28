@@ -24,7 +24,7 @@ import { Input, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { useConfirm } from "@/components/ui/Feedback";
 import { createClient } from "@/lib/supabase/client";
-import { CreateFolderModal, FolderSelect } from "@/components/meetingprep/FolderPicker";
+import { CreateFolderModal, FolderPairSelect } from "@/components/meetingprep/FolderPicker";
 import {
   useMpFolders,
   useMpMeetings,
@@ -34,6 +34,7 @@ import {
 import {
   DEFAULT_BRIEF_SECTIONS,
   folderMovePatch,
+  isUnfiled,
   meetingTypeLabel,
   orderSections,
   type CustomSection,
@@ -57,8 +58,8 @@ export default function MeetingPrepPage() {
   // a second click.
   const [creatingFolderFor, setCreatingFolderFor] = useState<MpMeeting | null>(null);
 
-  async function moveFolder(m: MpMeeting, folder: MpFolder | null) {
-    await supabase.from("mp_meetings").update(folderMovePatch(folder)).eq("id", m.id);
+  async function moveFolder(m: MpMeeting, kind: FolderKind, folder: MpFolder | null) {
+    await supabase.from("mp_meetings").update(folderMovePatch(kind, folder)).eq("id", m.id);
     await refresh();
   }
   // Every meeting on the list, so "what have I got next week" and "start a prep
@@ -115,7 +116,7 @@ export default function MeetingPrepPage() {
   // still being prepped and have nothing to file yet. It's specifically a
   // recording that finished (a transcript or notes exist) with nowhere to go.
   const uncategorizedRecorded = meetings.filter(
-    (m) => !m.folder_id && ((m.debrief?.transcript || "").trim() || (m.debrief?.notesHtml || "").trim()),
+    (m) => isUnfiled(m) && ((m.debrief?.transcript || "").trim() || (m.debrief?.notesHtml || "").trim()),
   ).length;
 
   return (
@@ -253,7 +254,7 @@ export default function MeetingPrepPage() {
           setCreatingFolderFor(null);
         }}
         onCreated={(folder) => {
-          if (creatingFolderFor) void moveFolder(creatingFolderFor, folder);
+          if (creatingFolderFor) void moveFolder(creatingFolderFor, folder.kind, folder);
         }}
       />
     </>
@@ -273,12 +274,17 @@ function MeetingList({
   meetings: MpMeeting[];
   folders: MpFolder[];
   onOpen: (id: string) => void;
-  onMoveFolder: (m: MpMeeting, folder: MpFolder | null) => void;
+  onMoveFolder: (m: MpMeeting, kind: FolderKind, folder: MpFolder | null) => void;
   onRequestCreateFolder: (kind: FolderKind, m: MpMeeting) => void;
   onDelete: (m: MpMeeting) => void;
 }) {
   if (meetings.length === 0) return null;
   const folderName = (id: string | null) => folders.find((f) => f.id === id)?.name || null;
+  // Both names when it's filed under both, either one on its own when it
+  // isn't. One chip rather than two: on a card this size the second badge
+  // costs more room than the separator does.
+  const filedAs = (m: MpMeeting) =>
+    [folderName(m.person_folder_id), folderName(m.topic_folder_id)].filter(Boolean).join(" · ");
   return (
     <section>
       <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">
@@ -358,22 +364,21 @@ function MeetingList({
                       detail page and the recorder use, dropped here so a
                       meeting can be filed without opening it. */}
                   <div
-                    className="mt-2 flex items-center gap-1.5"
+                    className="mt-2 flex flex-wrap items-center gap-1.5"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <span
                       className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                        m.folder_id
-                          ? "bg-canvas text-muted"
-                          : "bg-amber-50 text-amber-700"
+                        isUnfiled(m) ? "bg-amber-50 text-amber-700" : "bg-canvas text-muted"
                       }`}
                     >
-                      {folderName(m.folder_id) || "Uncategorized"}
+                      {filedAs(m) || "Uncategorized"}
                     </span>
-                    <FolderSelect
+                    <FolderPairSelect
                       folders={folders}
-                      folderId={m.folder_id}
-                      onChange={(folder) => onMoveFolder(m, folder)}
+                      personFolderId={m.person_folder_id}
+                      topicFolderId={m.topic_folder_id}
+                      onChange={(kind, folder) => onMoveFolder(m, kind, folder)}
                       onRequestCreate={(kind) => onRequestCreateFolder(kind, m)}
                       className="rounded-md border border-transparent bg-transparent px-1 py-0.5 text-[10px] text-muted opacity-0 outline-none transition group-hover:opacity-100 focus:opacity-100 focus:border-[var(--accent)]"
                     />
