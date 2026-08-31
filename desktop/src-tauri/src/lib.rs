@@ -28,7 +28,7 @@ mod settings;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIcon, TrayIconBuilder, TrayIconEvent};
@@ -124,9 +124,69 @@ pub struct Orphan {
     minutes: u64,
 }
 
+/// What a failed save leaves beside the mp3 so that retrying it is free.
+///
+/// Transcribing is the slow, paid half of turning a recording into a meeting,
+/// and it has always already succeeded by the time the save itself can fail —
+/// a deployment that has drifted behind the database, a dropped connection, a
+/// session that expired while the upload ran. Without this, "Send it to Omni"
+/// pays to transcribe the same forty-five minutes a second time.
+///
+/// Held only for a recording that has not become a meeting yet, and deleted
+/// the moment one does, so this is a retry buffer rather than a kept
+/// transcript — what gets stored server-side is still off by default.
+#[derive(Serialize, Deserialize)]
+struct Held {
+    transcript: String,
+    /// Where the uploaded audio landed, when keeping the audio is on. Empty
+    /// otherwise, and re-sent as it is so a retry re-uploads nothing either.
+    audio_path: String,
+}
+
+fn held_path(audio: &std::path::Path) -> PathBuf {
+    // ".pending.json", so the extension is "json" and `find_orphans` — which
+    // only counts mp3s — never mistakes one of these for a recording.
+    audio.with_extension("pending.json")
+}
+
+fn read_held(audio: &std::path::Path) -> Option<Held> {
+    let text = std::fs::read_to_string(held_path(audio)).ok()?;
+    let held: Held = serde_json::from_str(&text).ok()?;
+    (!held.transcript.trim().is_empty()).then_some(held)
+}
+
+fn write_held(audio: &std::path::Path, transcript: &str, audio_path: &str) {
+    let held = Held {
+        transcript: transcript.to_string(),
+        audio_path: audio_path.to_string(),
+    };
+    if let Ok(text) = serde_json::to_string(&held) {
+        let _ = std::fs::write(held_path(audio), text);
+    }
+}
+
+/// Drop a recording and anything held for it. Always both: a transcript left
+/// behind after its mp3 is gone would be a meeting's contents sitting in a
+/// folder with nothing left to send it with.
+fn forget_recording(audio: &std::path::Path) {
+    let _ = std::fs::remove_file(audio);
+    let _ = std::fs::remove_file(held_path(audio));
+}
+
+/// Whether a scan is allowed to tidy up after itself as it goes.
+enum Stubs {
+    /// Delete the tiny files that are a start which never got anywhere.
+    Prune,
+    /// Leave every file alone. Used the moment a save fails: that path tells
+    /// you on screen that the recording is kept, and a recording of about a
+    /// second is exactly the size the prune rule would delete out from under
+    /// that promise.
+    Keep,
+}
+
 /// Anything left in the recordings folder is by definition unfinished: a
 /// recording is deleted the moment its meeting exists.
-fn find_orphans(app: &AppHandle) -> Vec<Orphan> {
+fn find_orphans(app: &AppHandle, stubs: Stubs) -> Vec<Orphan> {
     let dir = app
         .path()
         .app_local_data_dir()
@@ -145,7 +205,9 @@ fn find_orphans(app: &AppHandle) -> Vec<Orphan> {
         let Ok(meta) = entry.metadata() else { continue };
         // A file with nothing in it is a start that never got anywhere.
         if meta.len() < 8_000 {
-            let _ = std::fs::remove_file(&path);
+            if matches!(stubs, Stubs::Prune) {
+                forget_recording(&path);
+            }
             continue;
         }
         let modified = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
@@ -484,7 +546,7 @@ async fn stop_recording(app: AppHandle) {
     match upload_and_capture(&app, &settings, &recording.path).await {
         Ok(captured) => {
             let url = format!("{}{}", settings.normalized_url(), captured.path);
-            let _ = std::fs::remove_file(&recording.path);
+            forget_recording(&recording.path);
             let title = captured.title.clone();
             set_status(&app, |s| {
                 s.phase = Phase::Done;
@@ -532,14 +594,26 @@ async fn upload_and_capture(
         }
     };
 
-    let (transcript, _speakers, audio_path) = client
-        .transcribe(audio, settings.keep_audio, &progress)
-        .await
-        .map_err(|e| e.to_string())?;
+    // A retry after a failed save picks the transcript back up where it was
+    // left rather than paying to transcribe the same audio again; see `Held`.
+    let (transcript, audio_path) = match read_held(audio) {
+        Some(held) => (held.transcript, held.audio_path),
+        None => {
+            let (transcript, _speakers, audio_path) = client
+                .transcribe(audio, settings.keep_audio, &progress)
+                .await
+                .map_err(|e| e.to_string())?;
 
-    if transcript.trim().is_empty() {
-        return Err("No speech was picked up in that recording.".into());
-    }
+            if transcript.trim().is_empty() {
+                return Err("No speech was picked up in that recording.".into());
+            }
+
+            // Written before the save is attempted, because the save is the
+            // step that fails.
+            write_held(audio, &transcript, &audio_path);
+            (transcript, audio_path)
+        }
+    };
 
     set_status(app, |s| {
         s.phase = Phase::Working;
@@ -584,12 +658,20 @@ fn fail(app: &AppHandle, message: String) {
         let settings = state.settings.lock().unwrap();
         auth::has_stored_session(&settings.username)
     };
+    // A failure is usually the exact moment a recording became an orphan: the
+    // save broke and the mp3 is still on disk. Re-reading the folder here is
+    // what puts the meeting you just lost at the top of the "Unfinished
+    // recording" banner. Without it the list is whatever was there when the
+    // app launched, so the window answers a failed save by offering you a
+    // recording from three weeks ago.
+    let orphans = find_orphans(app, Stubs::Keep);
     let for_status = message.clone();
     set_status(app, move |s| {
         s.signed_in = still_signed_in;
         s.phase = if still_signed_in { Phase::Error } else { Phase::Setup };
         s.message = for_status;
         s.percent = 0;
+        s.orphans = orphans;
     });
     notify(app, "Omni Recorder", &message);
     show_window(app);
@@ -963,9 +1045,9 @@ async fn recover(app: AppHandle, path: String) -> Result<(), String> {
     match upload_and_capture(&app, &settings, &file).await {
         Ok(captured) => {
             let url = format!("{}{}", settings.normalized_url(), captured.path);
-            let _ = std::fs::remove_file(&file);
+            forget_recording(&file);
             let title = captured.title.clone();
-            let orphans = find_orphans(&app);
+            let orphans = find_orphans(&app, Stubs::Prune);
             let for_status = url.clone();
             set_status(&app, move |s| {
                 s.phase = Phase::Done;
@@ -999,9 +1081,9 @@ fn discard_orphan(app: AppHandle, path: String) {
         .unwrap_or_else(|_| std::env::temp_dir())
         .join("recordings");
     if file.starts_with(&dir) {
-        let _ = std::fs::remove_file(&file);
+        forget_recording(&file);
     }
-    let orphans = find_orphans(&app);
+    let orphans = find_orphans(&app, Stubs::Prune);
     set_status(&app, move |s| s.orphans = orphans);
 }
 
@@ -1238,7 +1320,7 @@ pub fn run() {
             // A recording sitting in the folder means the last one never
             // became a meeting. Surface it now: on disk and unmentioned is the
             // same as lost.
-            let orphans = find_orphans(&handle);
+            let orphans = find_orphans(&handle, Stubs::Prune);
             let recovered = !orphans.is_empty();
             set_status(&handle, move |s| s.orphans = orphans);
 
