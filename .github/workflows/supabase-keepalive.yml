@@ -1,0 +1,50 @@
+name: Supabase keepalive
+
+# Keeps omni's Supabase project awake. Free-tier projects pause after 7 days without
+# activity; this runs a real SQL statement every 3 days and reports the project's status.
+#
+# omni is deliberately isolated: this workflow holds ONE token, for omni's login only, and
+# nothing here is shared with or linked to the other Supabase accounts. Do not add other
+# projects to this file — they have their own workflow in their own repo.
+#
+# CAVEAT: GitHub disables scheduled workflows on repositories with no pushes for 60 days.
+# If omni goes quiet for two months, re-enable this from the Actions tab.
+
+on:
+  schedule:
+    - cron: '43 6 */3 * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping the omni database
+        env:
+          TOKEN: ${{ secrets.SUPABASE_TOKEN_OMNI }}
+          REF: kgahynbyfkljxxuygcjk
+        run: |
+          set -uo pipefail
+
+          if [ -z "${TOKEN:-}" ]; then
+            echo "::error::secret SUPABASE_TOKEN_OMNI is not set"
+            exit 1
+          fi
+
+          code=$(curl -s -o /tmp/q.json -w '%{http_code}' -m 45 -X POST \
+            "https://api.supabase.com/v1/projects/$REF/database/query" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H 'Content-Type: application/json' \
+            -d '{"query":"select now() as pinged_at","read_only":true}')
+
+          status=$(curl -s -m 30 "https://api.supabase.com/v1/projects/$REF" \
+            -H "Authorization: Bearer $TOKEN" \
+            | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
+          status=${status:-UNKNOWN}
+
+          if [ "$code" = "200" ] || [ "$code" = "201" ]; then
+            echo "ok  omni  ($status)"
+          else
+            echo "::error::omni — query HTTP $code, project status $status"
+            exit 1
+          fi
