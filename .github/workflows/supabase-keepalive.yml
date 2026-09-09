@@ -1,7 +1,7 @@
 name: Supabase keepalive
 
-# Keeps omni's Supabase project awake. Free-tier projects pause after 7 days
-# without activity.
+# Keeps omni's Supabase project awake, and un-pauses it if it slips through
+# anyway. Free-tier projects pause after 7 days without activity.
 #
 # WHAT DIDN'T WORK: the first version ran a real SQL statement through the
 # Management API (api.supabase.com). It succeeded every time and three of the
@@ -17,7 +17,14 @@ name: Supabase keepalive
 #   2. An auth token request with invalid credentials, making GoTrue read
 #      auth.users and reject them. 400 is the success case.
 #
-# The Management API is used only to REPORT status.
+# SELF-HEALING: those probes are a theory, not a guarantee. So before probing,
+# this checks the project's real status through the Management API, and if it
+# has gone INACTIVE it calls /restore and waits for it to come back. That caps
+# the damage from a pause at one cycle (3 days) rather than "until the app is
+# noticed to be broken", even if the keepalive theory turns out to be wrong.
+#
+# A run that had to restore stays GREEN and logs a ::warning::. A red run means
+# something restoring did not fix.
 #
 # omni is deliberately isolated: one token, one anon key, its own account.
 # Do not add other projects here -- they have their own workflow in their repo.
@@ -33,8 +40,9 @@ on:
 jobs:
   ping:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - name: Ping the omni project
+      - name: Ping the omni project, restoring it if it paused
         env:
           TOKEN: ${{ secrets.SUPABASE_TOKEN_OMNI }}
           ANON: ${{ secrets.SUPABASE_ANON_OMNI }}
@@ -56,26 +64,72 @@ jobs:
             esac
           }
 
+          status_of() {
+            local s
+            if [ -z "${TOKEN:-}" ]; then echo UNKNOWN; return; fi
+            s=$(curl -s -m 30 "https://api.supabase.com/v1/projects/$REF" \
+                  -H "Authorization: Bearer $TOKEN" </dev/null \
+                | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
+            echo "${s:-UNKNOWN}"
+          }
+
+          wait_active() {
+            local s i
+            for i in $(seq 1 30); do
+              sleep 10
+              s=$(status_of)
+              if [ "$s" = "ACTIVE_HEALTHY" ]; then echo "$s"; return 0; fi
+            done
+            echo "${s:-UNKNOWN}"
+            return 1
+          }
+
+          status=$(status_of)
+          restored=no
+
+          # A paused project cannot be pinged awake -- it has to be restored.
+          case "$status" in
+            INACTIVE|PAUSE_FAILED)
+              echo "::warning::omni is $status — restoring it"
+              code=$(curl -s -o "$RUNNER_TEMP/restore.out" -w '%{http_code}' -m 60 \
+                -X POST "https://api.supabase.com/v1/projects/$REF/restore" \
+                -H "Authorization: Bearer $TOKEN" \
+                -H 'Content-Type: application/json' -d '{}' </dev/null)
+              case "$code" in
+                200|201|202|204)
+                  restored=yes
+                  status=$(wait_active) || true
+                  echo "restore  omni  → $status"
+                  echo "### omni was restored this run" >> "$GITHUB_STEP_SUMMARY"
+                  ;;
+                *)
+                  echo "::error::omni — restore failed (HTTP $code): $(head -c 300 "$RUNNER_TEMP/restore.out")"
+                  exit 1
+                  ;;
+              esac
+              ;;
+            COMING_UP|RESTORING|RESTARTING|UPGRADING|RESIZING)
+              echo "::warning::omni is $status — waiting for it to settle"
+              status=$(wait_active) || true
+              ;;
+          esac
+
           rest=$(curl -s -o /dev/null -w '%{http_code}' -m 30 \
             -H "apikey: $ANON" -H "Authorization: Bearer $ANON" \
-            "https://$REF.supabase.co/rest/v1/$TABLE?select=*&limit=1")
+            "https://$REF.supabase.co/rest/v1/$TABLE?select=*&limit=1" </dev/null)
 
           auth=$(curl -s -o /dev/null -w '%{http_code}' -m 30 -X POST \
             -H "apikey: $ANON" -H "Authorization: Bearer $ANON" \
             -H 'Content-Type: application/json' \
             -d '{"email":"keepalive-probe@example.invalid","password":"not-a-real-password"}' \
-            "https://$REF.supabase.co/auth/v1/token?grant_type=password")
-
-          status=UNKNOWN
-          if [ -n "${TOKEN:-}" ]; then
-            status=$(curl -s -m 30 "https://api.supabase.com/v1/projects/$REF" \
-              -H "Authorization: Bearer $TOKEN" \
-              | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
-            status=${status:-UNKNOWN}
-          fi
+            "https://$REF.supabase.co/auth/v1/token?grant_type=password" </dev/null)
 
           if reached "$rest" && reached "$auth"; then
             echo "ok  omni  (rest $rest, auth $auth, $status)"
+          elif [ "$restored" = yes ]; then
+            # We did the right thing and the platform is still bringing it up.
+            # Not a failure -- the next run in 3 days is the real check.
+            echo "::warning::omni — restored but still coming up (rest $rest, auth $auth, $status)"
           else
             echo "::error::omni — rest $rest, auth $auth, status $status"
             exit 1
