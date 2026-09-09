@@ -1,14 +1,29 @@
 name: Supabase keepalive
 
-# Keeps omni's Supabase project awake. Free-tier projects pause after 7 days without
-# activity; this runs a real SQL statement every 3 days and reports the project's status.
+# Keeps omni's Supabase project awake. Free-tier projects pause after 7 days
+# without activity.
 #
-# omni is deliberately isolated: this workflow holds ONE token, for omni's login only, and
-# nothing here is shared with or linked to the other Supabase accounts. Do not add other
-# projects to this file — they have their own workflow in their own repo.
+# WHAT DIDN'T WORK: the first version ran a real SQL statement through the
+# Management API (api.supabase.com). It succeeded every time and three of the
+# other projects paused anyway on 2026-09-09, two days after a green run.
+# Management API traffic does not reset the pause clock -- Supabase counts
+# requests to the PROJECT, and api.supabase.com is a different service.
 #
-# CAVEAT: GitHub disables scheduled workflows on repositories with no pushes for 60 days.
-# If omni goes quiet for two months, re-enable this from the Actions tab.
+# So both probes below hit kgahynbyfkljxxuygcjk.supabase.co, the same host the
+# app uses, with the same public key the browser ships:
+#
+#   1. A PostgREST read -- ordinary application traffic. RLS may filter it to
+#      [], which is fine; Postgres still ran the query.
+#   2. An auth token request with invalid credentials, making GoTrue read
+#      auth.users and reject them. 400 is the success case.
+#
+# The Management API is used only to REPORT status.
+#
+# omni is deliberately isolated: one token, one anon key, its own account.
+# Do not add other projects here -- they have their own workflow in their repo.
+#
+# CAVEAT: GitHub disables scheduled workflows on repos with no pushes for 60
+# days. If omni goes quiet that long, re-enable from the Actions tab.
 
 on:
   schedule:
@@ -19,32 +34,49 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping the omni database
+      - name: Ping the omni project
         env:
           TOKEN: ${{ secrets.SUPABASE_TOKEN_OMNI }}
+          ANON: ${{ secrets.SUPABASE_ANON_OMNI }}
           REF: kgahynbyfkljxxuygcjk
+          TABLE: activities
         run: |
           set -uo pipefail
 
-          if [ -z "${TOKEN:-}" ]; then
-            echo "::error::secret SUPABASE_TOKEN_OMNI is not set"
+          if [ -z "${ANON:-}" ]; then
+            echo "::error::secret SUPABASE_ANON_OMNI is not set"
             exit 1
           fi
 
-          code=$(curl -s -o /tmp/q.json -w '%{http_code}' -m 45 -X POST \
-            "https://api.supabase.com/v1/projects/$REF/database/query" \
-            -H "Authorization: Bearer $TOKEN" \
+          reached() {
+            case "$1" in
+              000|"") return 1 ;;
+              5*)     return 1 ;;
+              *)      return 0 ;;
+            esac
+          }
+
+          rest=$(curl -s -o /dev/null -w '%{http_code}' -m 30 \
+            -H "apikey: $ANON" -H "Authorization: Bearer $ANON" \
+            "https://$REF.supabase.co/rest/v1/$TABLE?select=*&limit=1")
+
+          auth=$(curl -s -o /dev/null -w '%{http_code}' -m 30 -X POST \
+            -H "apikey: $ANON" -H "Authorization: Bearer $ANON" \
             -H 'Content-Type: application/json' \
-            -d '{"query":"select now() as pinged_at","read_only":true}')
+            -d '{"email":"keepalive-probe@example.invalid","password":"not-a-real-password"}' \
+            "https://$REF.supabase.co/auth/v1/token?grant_type=password")
 
-          status=$(curl -s -m 30 "https://api.supabase.com/v1/projects/$REF" \
-            -H "Authorization: Bearer $TOKEN" \
-            | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
-          status=${status:-UNKNOWN}
+          status=UNKNOWN
+          if [ -n "${TOKEN:-}" ]; then
+            status=$(curl -s -m 30 "https://api.supabase.com/v1/projects/$REF" \
+              -H "Authorization: Bearer $TOKEN" \
+              | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
+            status=${status:-UNKNOWN}
+          fi
 
-          if [ "$code" = "200" ] || [ "$code" = "201" ]; then
-            echo "ok  omni  ($status)"
+          if reached "$rest" && reached "$auth"; then
+            echo "ok  omni  (rest $rest, auth $auth, $status)"
           else
-            echo "::error::omni — query HTTP $code, project status $status"
+            echo "::error::omni — rest $rest, auth $auth, status $status"
             exit 1
           fi
