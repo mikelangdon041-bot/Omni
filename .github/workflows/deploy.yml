@@ -1,0 +1,106 @@
+name: Deploy to production
+
+# Every push to main ships omni.
+#
+# WHY THIS EXISTS: deploying used to be a command somebody had to remember at
+# the end of a session, and it was forgotten for 23 days once and 10 days
+# another time. Both times the code was right and the thing people were using
+# was wrong -- the recorder ran against a backend that had moved on, and a fixed
+# Outlook add-in went on serving Outlook the broken build. A deploy nobody has
+# to remember is the only kind that happens.
+#
+# WHY NOT VERCEL'S OWN GIT INTEGRATION: it authorizes through the GitHub
+# identity attached to the Vercel account (zbalmuth), and this repo belongs to
+# mikelangdon041-bot. `vercel git connect` refuses with "You need admin or write
+# access", and the only fixes are granting one account rights over the other's
+# repo or re-pointing the Vercel account. Deploying from inside the repo needs
+# neither: the workflow already runs as this repo, and the only thing it has to
+# carry across is a token.
+#
+# SETUP -- three repository secrets, once, at
+# Settings -> Secrets and variables -> Actions -> New repository secret:
+#
+#   VERCEL_TOKEN       vercel.com/account/tokens -> Create Token, scoped to the
+#                      "zaks-projects" team. This is the credential; treat it
+#                      like a password.
+#   VERCEL_ORG_ID      the `orgId` in .vercel/project.json (gitignored, so it
+#   VERCEL_PROJECT_ID  the `projectId` in the same file)
+#
+# The two IDs only name the project -- they cannot deploy to it on their own --
+# but this repo is public, so they are kept out of the tree with the token
+# rather than inlined here.
+#
+# Until all three exist every run SKIPS rather than fails, so an unfinished
+# setup never turns the Actions tab red.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A second push while a deploy is in flight makes the first one pointless.
+# Better cancelled than racing the newer commit to the same alias.
+concurrency:
+  group: production-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      # `secrets` is not one of the contexts a job-level `if:` can read, so the
+      # gate has to be a step and every step after it has to name the gate.
+      - name: Check the secrets are in place
+        id: gate
+        run: |
+          missing=
+          [ -n "${VERCEL_TOKEN:-}" ]      || missing="$missing VERCEL_TOKEN"
+          [ -n "${VERCEL_ORG_ID:-}" ]     || missing="$missing VERCEL_ORG_ID"
+          [ -n "${VERCEL_PROJECT_ID:-}" ] || missing="$missing VERCEL_PROJECT_ID"
+          if [ -n "$missing" ]; then
+            echo "::warning::not deploying — missing secret(s):$missing. See the setup note at the top of this workflow."
+            echo "### Skipped — missing secret(s):$missing" >> "$GITHUB_STEP_SUMMARY"
+            echo "ready=no" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=yes" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.ready == 'yes'
+
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.ready == 'yes'
+        with:
+          node-version: 20
+          cache: npm
+
+      # `pull` writes the project link and the production environment that
+      # `build` then compiles against -- the same env the dashboard holds, so
+      # nothing about the build here differs from a deploy run by hand.
+      - name: Pull the production environment
+        if: steps.gate.outputs.ready == 'yes'
+        run: npx vercel@latest pull --yes --environment=production --token="$VERCEL_TOKEN"
+
+      - name: Build
+        if: steps.gate.outputs.ready == 'yes'
+        run: npx vercel@latest build --prod --token="$VERCEL_TOKEN"
+
+      # --prebuilt uploads what was just built rather than building again on
+      # Vercel: one build per push, and a red run here means a broken build
+      # stayed off production instead of being discovered from the app.
+      - name: Deploy
+        if: steps.gate.outputs.ready == 'yes'
+        run: |
+          url=$(npx vercel@latest deploy --prebuilt --prod --token="$VERCEL_TOKEN")
+          echo "deployed: $url"
+          {
+            echo "### Deployed to production"
+            echo ""
+            echo "- $url"
+            echo "- https://omni-nine-navy.vercel.app (the alias the Outlook add-in loads)"
+          } >> "$GITHUB_STEP_SUMMARY"
