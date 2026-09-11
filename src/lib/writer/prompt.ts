@@ -228,7 +228,8 @@ ${notes}`;
     ctx.recipient && `Recipient: ${ctx.recipient}`,
     ctx.ask && `What the writer is asking for / wants to happen: ${ctx.ask}`,
     ctx.keyPoints && `Key points that MUST be included:\n${ctx.keyPoints}`,
-    ctx.background && `Background / context:\n${ctx.background}`,
+    ctx.background &&
+      `BACKGROUND — context for the piece, not a draft of it and not text to quote back. When this is a message the user was sent, it is the thing they are answering: take the sender's name, the topic, the dates and any commitments straight from it, answer the points it actually raises, and never restate or rewrite it:\n${ctx.background}`,
     // Findings from a web look-up run just before this call. Sourced, so it can
     // be used as fact — unlike anything the model would otherwise be inventing.
     ctx.researchNotes &&
@@ -261,6 +262,10 @@ ${(a.priorVersions || [])
         .join("\n\n")}`
     : "";
 
+  // An empty box next to a loaded inbox means "just reply to this", not "I
+  // forgot". Said plainly, because the alternative reading produces a blank
+  // template with somewhere for the user to fill their own point in.
+  const nothingTyped = !a.input.trim() && !notes.trim();
   const task = refining
     ? `Here is the current draft, including any edits the user has made to it by hand. Revise THIS text, keeping everything they didn't ask you to change.
 
@@ -270,7 +275,9 @@ Current draft:
 ${a.previous}
 
 What they want changed this round: ${a.guidance || "(none — light general polish)"}${standingBlock}${versionsBlock}`
-    : `Here is everything the user put in the box. Work out what it is and deliver what they want.\n\nWhat the user wrote:\n${a.input || notes}`;
+    : nothingTyped
+      ? `The user typed nothing beyond the intake above, which is a complete request rather than a missing one: write the piece from what is there. If the intake holds a message they were sent, write their reply to it and answer the points it actually raises. Do not ask them what they want to say, and do not leave blanks for them to fill in.`
+      : `Here is everything the user put in the box. Work out what it is and deliver what they want.\n\nWhat the user wrote:\n${a.input || notes}`;
 
   // The picker if it was touched, otherwise whatever the note asks for in plain
   // words. LEGACY_LENGTH_ACTIONS are read here too: length used to be sayable

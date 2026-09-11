@@ -279,18 +279,36 @@ export default function OutlookPage() {
         : { mine: "", quoted: "" },
     [email, settings],
   );
-  // What the pane writes FROM, and what it only writes AGAINST:
-  //   a message you were sent      → the email is the material
-  //   a draft you have typed into  → your words are, and the thread below is
-  //                                  background rather than something to rewrite
-  //   a reply you haven't touched  → the thread is the material, exactly as if
-  //                                  you had opened it in the reading pane
+  // One rule decides where everything goes: the box holds YOUR words, and only
+  // ever your words.
+  //
+  //   what you typed in Outlook   → the box (it is your draft; edit it there)
+  //   the message being answered  → `source`: read, shown, and handed to the
+  //                                 model as what the reply is written against
+  //
+  // Pasting the email you are answering into the box you type in is the same
+  // mistake as ignoring it, just facing the other way. It buries the one line
+  // only you can write under forty lines you did not, it makes "what do you
+  // want to say?" a lie, and it invites the model to rewrite somebody else's
+  // email instead of replying to it. The add-in can read the message; that is
+  // the entire point of it being in Outlook.
   const typed = email?.composing ? mine.trim() : "";
-  const background = typed ? quoted : "";
+  const source = !email
+    ? ""
+    : email.composing
+      ? quoted
+      : [email.from && `From: ${email.from}`, email.subject && `Subject: ${email.subject}`]
+          .filter(Boolean)
+          .concat(["", email.body])
+          .join("\n")
+          .trim();
   const recipient = (email?.composing ? email.to : email?.from) || "";
-  // Nothing in either box is nothing to write from, and a model handed nothing
-  // writes a blank template for someone else to fill in. Better to say so.
-  const hasIntake = !!htmlToPlain(draftHtml).trim() || !!htmlToPlain(briefHtml).trim();
+  // A message to answer is on its own enough to write from — "just reply to
+  // this" is a complete request, and the empty box is the normal state for it.
+  // Nothing at all, though, and a model handed nothing writes a blank template
+  // for somebody else to fill in. Better to say so than to send it.
+  const hasIntake =
+    !!htmlToPlain(draftHtml).trim() || !!htmlToPlain(briefHtml).trim() || !!source.trim();
 
   // Read the dials off the email itself. Who it is from and how it is written
   // already answer most of "what tone, what audience" — asking you to pick them
@@ -300,21 +318,23 @@ export default function OutlookPage() {
   const extracted = useRef(false);
   useEffect(() => {
     if (!email || !userId || !settings || extracted.current) return;
-    // Your own words, not the forty lines of thread under them: a quoted email
-    // would otherwise pick the tone for a reply you have already written half
-    // of, and "how much license do I have with this draft" would be answered
-    // about somebody else's writing.
-    const material = email.composing ? typed || quoted : email.body;
+    // Your own words where there are any, the message being answered where
+    // there are not. Never both: a forty-line thread would otherwise pick the
+    // tone for a reply you have already written half of, and "how much license
+    // do I have with this draft" would be answered about somebody else's
+    // writing.
+    const material = typed || source;
     if (!material.trim() && !email.subject.trim()) return;
     extracted.current = true;
     void (async () => {
       try {
-        const header = [
-          email.subject && `Subject: ${email.subject}`,
-          email.composing ? email.to && `To: ${email.to}` : email.from && `From: ${email.from}`,
-        ]
-          .filter(Boolean)
-          .join("\n");
+        // Only while composing: `source` already opens with the sender and the
+        // subject when it is a message that arrived.
+        const header = email.composing
+          ? [email.subject && `Subject: ${email.subject}`, email.to && `To: ${email.to}`]
+              .filter(Boolean)
+              .join("\n")
+          : "";
         const res = await fetch("/api/writer/ai", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -322,7 +342,7 @@ export default function OutlookPage() {
           body: JSON.stringify({
             action: "extract",
             docType: "email",
-            brief: `${header}\n\n${material}`.slice(0, 20000),
+            brief: (header ? `${header}\n\n${material}` : material).slice(0, 20000),
           }),
         });
         const { extracted: ex } = await res.json();
@@ -364,38 +384,23 @@ export default function OutlookPage() {
 
   const reading = !!email && !!userId && !extractDone;
 
-  // The workspace's draft box expects "an email, plus an instruction" as its
-  // normal shape — that's literally its own placeholder text. Prefilling it
-  // with what the add-in can already see is that same shape, just without
-  // asking you to paste it: the cursor lands after it, ready for whatever you
-  // want to add.
-  //
-  // This used to bail out on anything being composed, on the theory that an
-  // outgoing draft is only ever your own signature so far. True of a blank new
-  // message; false of every reply anyone has half-written. And when it was
-  // wrong it was wrong silently — the model got nothing but the note in the
-  // second box, and answered with a blank template for someone to fill in. So
-  // the body is read either way now, and the split decides what lands in the
-  // box rather than a guess about which button you pressed.
+  // The box starts with your own half-written draft, if Outlook has one, and
+  // otherwise empty — see the rule above. It has been wrong in both directions
+  // now: first it ignored a draft you had typed and answered from nothing at
+  // all, then it pasted the whole of somebody else's email into the box you
+  // were meant to type your instruction in. Neither is "what do you want to
+  // say?", and the second one looks like the add-in cannot read the message it
+  // is sitting inside.
   const draftPrefilled = useRef(false);
   useEffect(() => {
     if (!email || !settings || draftPrefilled.current) return;
     draftPrefilled.current = true;
-    const material = email.composing ? typed || quoted : email.body;
-    if (!material.trim()) return;
-    // A message you were sent arrives as body text alone, so the sender and
-    // the subject go back on top of it. A quoted thread already carries its own
-    // header block, and your own words need neither.
-    const header = email.composing
-      ? ""
-      : [email.from && `From: ${email.from}`, email.subject && `Subject: ${email.subject}`]
-          .filter(Boolean)
-          .join("\n");
+    if (!typed) return;
     // Guarded by the ref above to run once per email, the same shape as the
     // extraction effect just above it — the rule can't see that guard is
     // enough on its own without the async wrapper that one happens to have.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setDraftHtml(plainToHtml(header ? `${header}\n\n${material}` : material));
+    setDraftHtml(plainToHtml(typed));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [email, settings]);
 
@@ -448,10 +453,10 @@ export default function OutlookPage() {
             length,
             styleIds,
             recipient,
-            // The thread being answered, when the box holds your own words
-            // instead of it. Handed over as background on purpose: it is what
-            // the reply has to make sense against, not a draft to rewrite.
-            background,
+            // The message being answered. Handed over as background on
+            // purpose: it is what the reply has to make sense against, not a
+            // draft to improve and not something to quote back.
+            background: source,
             brief: htmlToPlain(target.context.brief),
           },
           styles: styleTexts,
@@ -521,7 +526,7 @@ export default function OutlookPage() {
         length,
         styleIds,
         recipient,
-        background,
+        background: source,
         brief: briefHtml,
       };
       const doc = rewriting
@@ -622,17 +627,19 @@ export default function OutlookPage() {
           autoFocus={!resultDoc}
           value={draftHtml}
           onChange={setDraftHtml}
-          placeholder="Your reply, or just what you want it to say — I'll work out which it is."
+          placeholder={
+            source && !typed
+              ? "e.g. 'reply saying I can do Thursday but not Tuesday' — or leave it empty and I'll just answer it"
+              : "Your reply, or just what you want it to say — I'll work out which it is."
+          }
           minHeight="min-h-28"
         />
         <p className="mt-0.5 text-[10px] leading-snug text-muted">
-          {!email.composing
-            ? "Starts with the email already in here. Add your reply, or just say what you want it to say."
-            : typed
-              ? "Starts with what you've already typed in Outlook, without your signature or the thread below it. Leave it as notes and I'll write the real thing."
-              : quoted
-                ? "Starts with the message you're replying to. Add your reply, or just say what you want it to say."
-                : "Nothing typed in Outlook yet, so this is where you say it."}
+          {typed
+            ? "What you'd already typed in Outlook, without your signature or the thread below it. Leave it as notes and I'll write the real thing."
+            : source
+              ? "I've read the message — say what you want to come back with, or leave this empty and I'll just answer it."
+              : "Nothing in the message yet, so this is where you say it."}
         </p>
       </div>
 
@@ -947,14 +954,36 @@ export default function OutlookPage() {
                     : "(no recipient yet)"
                   : email.from || "(unknown sender)"}
               </p>
-              <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted">
-                {(email.composing ? typed || quoted : email.body).trim() ||
-                  "(nothing in the message yet)"}
-              </p>
-              {email.composing && typed && quoted && (
+              {source ? (
+                <>
+                  <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted">
+                    {source}
+                  </p>
+                  {/* The message is not in the box any more, so this panel is
+                      the only place left to check what was actually read. Two
+                      clamped lines say "it has it"; the rest is one click away
+                      rather than forty lines standing between you and the
+                      button. */}
+                  <details className="mt-1">
+                    <summary className="cursor-pointer list-none text-[10px] font-medium text-[var(--accent)]">
+                      Show the whole message ▾
+                    </summary>
+                    <div className="mt-1 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg border border-border bg-canvas p-2 text-[11px] leading-relaxed text-muted">
+                      {source}
+                    </div>
+                  </details>
+                </>
+              ) : (
+                <p className="mt-1 text-[11px] leading-relaxed text-muted">
+                  {typed
+                    ? "Nothing underneath it — a new message rather than a reply."
+                    : "(nothing in the message yet)"}
+                </p>
+              )}
+              {typed && source && (
                 <p className="mt-1 text-[10px] leading-snug text-muted">
-                  Plus the thread underneath, which I&apos;ll write against but
-                  won&apos;t rewrite.
+                  Your own draft is up in the box; this is the thread under it,
+                  which I&apos;ll write against but won&apos;t rewrite.
                 </p>
               )}
             </div>
