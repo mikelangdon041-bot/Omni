@@ -224,6 +224,29 @@ export const LENGTHS: { key: string; label: string }[] = [
   { key: "longer", label: "📈 Longer" },
 ];
 
+/**
+ * The same dial, for a piece that does not exist yet.
+ *
+ * Every option above is measured against a draft — shorter, longer, about the
+ * same as WHAT. Offered before anything has been written they are not just
+ * unhelpful, they are unanswerable, and picking one sends the model a ratio of
+ * nothing. Asking for a length up front is a real thing to want, so it is asked
+ * in absolute terms instead.
+ */
+export const TARGET_LENGTHS: { key: string; label: string }[] = [
+  { key: "as_is", label: "⚖️ However long it needs" },
+  { key: "brief", label: "🤏 A few lines" },
+  { key: "standard", label: "📄 A normal email" },
+  { key: "detailed", label: "📚 Thorough" },
+];
+
+/** What a relative request means when there is nothing yet to be relative to. */
+export const RELATIVE_TO_ABSOLUTE: Record<string, string> = {
+  shorter: "brief",
+  much_shorter: "brief",
+  longer: "detailed",
+};
+
 // Emoji are display-only. The chip VALUES above are what the AI sees (and are
 // the allowed enum for tone/audience extraction), so they must stay untouched —
 // decorate the label at render time with chipOptions() instead.

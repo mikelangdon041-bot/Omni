@@ -3,6 +3,8 @@
 // without standing up a request and a session. The chat prompt lives next door
 // in chatPrompt.ts for the same reason.
 
+import { RELATIVE_TO_ABSOLUTE } from "./types";
+
 export interface GenerateArgs {
   docType: string;
   /** Everything the user put in the one box. */
@@ -85,6 +87,14 @@ const LENGTH_RULES: Record<string, string> = {
     "LENGTH: cut it to half its length or less. Keep only the sentences that earn their place.",
   longer:
     "LENGTH: expand it, but only with substance the user actually provided. Never pad with filler or restatement.",
+  // Absolute targets, for a piece that does not exist yet. Every rule above is
+  // measured against a draft, and "a quarter shorter than nothing" is not an
+  // instruction.
+  brief:
+    "LENGTH: a few lines. Three or four sentences, one point, made and finished — no preamble and no closing summary.",
+  standard: "LENGTH: an ordinary email. Two or three short paragraphs.",
+  detailed:
+    "LENGTH: room to cover it properly. Every paragraph still has to earn its place — length is permission, not a target to fill.",
 };
 
 const LENGTH_FACTORS: Record<string, number> = {
@@ -141,6 +151,8 @@ function wordCount(s: string): number {
 function lengthRuleFor(key: string, source: string): string {
   const base = LENGTH_RULES[key];
   if (!base) return "";
+  // An absolute target has nothing to count against, and says its own size.
+  if (!LENGTH_FACTORS[key]) return base;
   const n = wordCount(source);
   if (n < 40) return base;
   const target = Math.round(n * LENGTH_FACTORS[key]);
@@ -229,7 +241,10 @@ ${notes}`;
     ctx.ask && `What the writer is asking for / wants to happen: ${ctx.ask}`,
     ctx.keyPoints && `Key points that MUST be included:\n${ctx.keyPoints}`,
     ctx.background &&
-      `BACKGROUND — context for the piece, not a draft of it and not text to quote back. When this is a message the user was sent, it is the thing they are answering: take the sender's name, the topic, the dates and any commitments straight from it, answer the points it actually raises, and never restate or rewrite it:\n${ctx.background}`,
+      `BACKGROUND — context for the piece, not a draft of it and not text to quote back. When this is a message the user was sent, it is the thing they are answering: take the sender's name, the topic, the dates and any commitments straight from it, answer the points it actually raises, and never restate or rewrite it.
+WHEN IT IS LAID OUT AS NUMBERED MESSAGES they are one thread, newest first, and exactly one is marked as the one being answered. Reply to THAT message and greet ITS sender. The rest is history: read it for context, do not answer it, do not greet the people in it, and never attribute what one person wrote to another — getting this wrong puts somebody else's name on the greeting and somebody else's words in their mouth.
+EVERYONE SHOWN AS A RECIPIENT IS READING THIS REPLY. Speak to them directly rather than about them, and never offer to pass something on, forward it, or relay a message to somebody who is already on the email — they will read it themselves, in this reply.
+${ctx.background}`,
     // Findings from a web look-up run just before this call. Sourced, so it can
     // be used as fact — unlike anything the model would otherwise be inventing.
     ctx.researchNotes &&
@@ -296,6 +311,11 @@ What they want changed this round: ${a.guidance || "(none — light general poli
     if (SHORTEN_HINT.test(asked)) lengthKey = "shorter";
     else if (LENGTHEN_HINT.test(asked)) lengthKey = "longer";
   }
+  // "Shorter" before anything has been written is a ratio of nothing. With no
+  // words to be shorter THAN, read the request as the absolute size it meant.
+  const measurable = (a.previous || a.input || notes).trim();
+  if (!measurable && RELATIVE_TO_ABSOLUTE[lengthKey])
+    lengthKey = RELATIVE_TO_ABSOLUTE[lengthKey];
   // Measured against whatever is actually being shortened: the current draft on
   // a refine pass, otherwise what the user put in the box.
   const lengthRule = lengthRuleFor(lengthKey, a.previous || a.input || notes);
@@ -355,6 +375,7 @@ HARD RULES
 - If key points are listed, include every one.
 - Names: address the recipient by name whenever it can be inferred from anything provided (the pasted email's sender, the recipient field, the background). NEVER output a placeholder like [Name] or [Recipient].${a.noGreeting ? "" : ' If no name is inferable, open naturally without one (e.g. "Hi," / "Hi there,") or skip the greeting if the format doesn\'t need it.'}
 - Only use [square brackets] for a genuinely missing hard fact (a date, a number) the user must fill in — never for names or things you can infer.
+- Do not invent a relationship. Thanks, praise, warmth, "it's a genuine pleasure partnering with you" and the like are only yours to write towards people the user actually told you to say them to. Never add a paragraph addressed to somebody who merely appears in the thread, and never characterise a working relationship the user has not described.
 - Never hand back a fill-in-the-blank template. "[Add your message here]", "[insert the details]", "[your main point]" and the like are not writing, they are a form for somebody else to complete. If what you were given is genuinely too thin to make a piece from, write the short honest version of what they did give you.
 - Avoid AI tells: no "I hope this email finds you well", no "delve", no "moreover"/"furthermore" scaffolding, no exclamation stacking, no bullet lists the user didn't ask for, and no closing paragraph that restates what you already said.
 ${a.noGreeting ? '- NO GREETING: do not open with a salutation of any kind (no "Hi Sarah,", no "Hello,", no "Dear …"). Start on the first real sentence of the message.\n' : ""}${lengthRule ? `- ${lengthRule}\n` : ""}${TYPE_NOTES[a.docType] || TYPE_NOTES.other}
