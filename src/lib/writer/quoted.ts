@@ -25,6 +25,8 @@
 // keeps its own name on it, and exactly one of them is marked as the one being
 // answered.
 
+import { stripSignature } from "./signature";
+
 /** The parts of a compose body, separated. */
 export interface SplitBody {
   /** What the person has typed themselves, signature removed. */
@@ -219,11 +221,16 @@ function parseMessage(segment: string[]): ThreadMessage {
     }
   }
 
-  const body = segment
-    .slice(i)
-    .map((line) => line.replace(/^\s*>+\s?/, ""))
-    .join("\n")
-    .trim();
+  // Its sender's signature comes off here too. Every message in the thread
+  // carries one, so a four-message thread otherwise pays four times over for
+  // four street addresses and four notes about printing — none of which the
+  // reply is ever written from.
+  const body = stripSignature(
+    segment
+      .slice(i)
+      .map((line) => line.replace(/^\s*>+\s?/, ""))
+      .join("\n"),
+  );
   return { from: cleanName(from), to: people(to), cc: people(cc), sent, subject, body };
 }
 
@@ -237,46 +244,14 @@ function people(raw: string): string {
 }
 
 /**
- * The end of the person's own text and the start of their signature, or -1.
- *
- * Matched against the signature they saved in settings rather than guessed at:
- * a heuristic that hunts for "a block that looks like a sign-off" eventually
- * eats a real closing paragraph, and losing a sentence someone wrote is a worse
- * failure than leaving a signature in. Their name is usually the first line of
- * it, but an image or a "Thanks," can come first, so the first few lines are
- * each tried and the earliest one that matches wins.
- */
-function signatureStart(lines: string[], signature: string): number {
-  const needles = signature
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l.length >= 4)
-    .slice(0, 3)
-    .map((l) => l.toLowerCase());
-  if (!needles.length) return -1;
-
-  let found = -1;
-  for (const needle of needles) {
-    // Last occurrence, not the first: a name that appears in the body ("as
-    // Zak mentioned") is not where the signature starts.
-    for (let i = lines.length - 1; i >= 0; i--) {
-      if (lines[i].trim().toLowerCase() === needle) {
-        if (found === -1 || i < found) found = i;
-        break;
-      }
-    }
-  }
-  return found;
-}
-
-/**
  * Split a message body into the person's own words and the thread below them.
  *
- * `signature` is their saved signature as plain text; pass "" when they haven't
- * set one and it is left alone, since without a copy to compare against there
- * is no safe way to tell a signature from a closing paragraph. Passing "" is
- * also right for a message that arrived: the signature in it belongs to whoever
- * sent it, and it is part of what they wrote.
+ * The signature comes off either way — see lib/writer/signature.ts for why it
+ * is now guessed at rather than only matched. `signature` is the copy they
+ * saved in Omni's settings, as plain text, and when there is one it is matched
+ * exactly and the higher of the two cuts wins. Passing "" is fine and is the
+ * right call for a message that arrived: the signature in that one is the
+ * sender's, and it is guessed at like any other.
  */
 export function splitComposeBody(body: string, signature = ""): SplitBody {
   const lines = (body || "").split(/\r?\n/);
@@ -285,10 +260,7 @@ export function splitComposeBody(body: string, signature = ""): SplitBody {
   const mineLines = cut === -1 ? lines : lines.slice(0, cut);
   const quoted = cut === -1 ? "" : lines.slice(cut).join("\n").trim();
 
-  const sig = signature ? signatureStart(mineLines, signature) : -1;
-  const kept = sig === -1 ? mineLines : mineLines.slice(0, sig);
-
-  return { mine: kept.join("\n").trim(), quoted };
+  return { mine: stripSignature(mineLines.join("\n"), signature), quoted };
 }
 
 /** Every message in a quoted thread, newest first. */

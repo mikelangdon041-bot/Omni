@@ -149,10 +149,10 @@ export default function OutlookPage() {
   const [officeReady, setOfficeReady] = useState(false);
   const [outsideOutlook, setOutsideOutlook] = useState(false);
   const [email, setEmail] = useState<ReadEmail | null>(null);
-  // The same two boxes as the workspace's Draft and "Anything else I should
-  // know?" — draftHtml is prefilled with the email once it's read, exactly
-  // the "paste an email and add an instruction" shape the workspace expects
-  // in its one box, just without having to paste it yourself.
+  // The box you type in, and nothing else. It starts empty and STAYS empty
+  // until you put something in it — see the note above `source` for why this
+  // is the one rule here that must never be relaxed again. Everything the
+  // add-in can read for itself travels separately, in `typed` and `source`.
   const [draftHtml, setDraftHtml] = useState("");
   const [briefHtml, setBriefHtml] = useState("");
   const [generating, setGenerating] = useState(false);
@@ -322,19 +322,25 @@ export default function OutlookPage() {
   const [targetIdx, setTargetIdx] = useState(0);
   const pick = messages.length ? Math.min(targetIdx, messages.length - 1) : 0;
   const target = messages[pick];
-  // One rule decides where everything goes: the box holds YOUR words, and only
-  // ever your words.
+  // ONE RULE, and it has now been got wrong in three different ways: NOTHING
+  // THE ADD-IN READS EVER GOES IN THE BOX. The box is empty until the person
+  // types in it.
   //
-  //   what you typed in Outlook   → the box (it is your draft; edit it there)
-  //   the message being answered  → `source`: read, shown, and handed to the
-  //                                 model as what the reply is written against
+  //   the message being answered  → `source`  → the model, as background
+  //   what they typed in Outlook  → `typed`   → the model, as the draft
+  //   what they type in this pane → the box   → the model, as the instruction
   //
-  // Pasting the email you are answering into the box you type in is the same
-  // mistake as ignoring it, just facing the other way. It buries the one line
-  // only you can write under forty lines you did not, it makes "what do you
-  // want to say?" a lie, and it invites the model to rewrite somebody else's
-  // email instead of replying to it. The add-in can read the message; that is
-  // the entire point of it being in Outlook.
+  // All three reach the model. Only the third one is ever on screen in the box.
+  //
+  // The two failures it has had are the same failure: first it ignored the
+  // half-written draft and answered from nothing, then it pasted the email —
+  // signature, thread and all — into the box and called that reading it. A
+  // prefilled box cannot be typed in. "Make it longer" and "just edit what I
+  // wrote" are the normal things to want to say, and there is nowhere to say
+  // them when the box already holds forty lines of somebody else's email. The
+  // add-in can read the message by itself; that is the entire point of it being
+  // in Outlook, and it is exactly why the reading does not need to be shown
+  // back to you in the one place you were meant to write.
   const source = useMemo(() => {
     const thread = threadForPrompt(messages, pick);
     if (!thread || !email?.composing) return thread;
@@ -357,10 +363,14 @@ export default function OutlookPage() {
   const lengthOptions = typed ? LENGTHS : TARGET_LENGTHS;
   // A message to answer is on its own enough to write from — "just reply to
   // this" is a complete request, and the empty box is the normal state for it.
-  // Nothing at all, though, and a model handed nothing writes a blank template
-  // for somebody else to fill in. Better to say so than to send it.
+  // So is a draft already half-written in Outlook. Nothing at all, though, and
+  // a model handed nothing writes a blank template for somebody else to fill
+  // in. Better to say so than to send it.
   const hasIntake =
-    !!htmlToPlain(draftHtml).trim() || !!htmlToPlain(briefHtml).trim() || !!source.trim();
+    !!htmlToPlain(draftHtml).trim() ||
+    !!htmlToPlain(briefHtml).trim() ||
+    !!typed.trim() ||
+    !!source.trim();
 
   // Read the dials off the email itself. Who it is from and how it is written
   // already answer most of "what tone, what audience" — asking you to pick them
@@ -444,33 +454,17 @@ export default function OutlookPage() {
 
   const reading = !!email && !!userId && !extractDone;
 
-  // The box starts with your own half-written draft, if Outlook has one, and
-  // otherwise empty — see the rule above. It has been wrong in both directions
-  // now: first it ignored a draft you had typed and answered from nothing at
-  // all, then it pasted the whole of somebody else's email into the box you
-  // were meant to type your instruction in. Neither is "what do you want to
-  // say?", and the second one looks like the add-in cannot read the message it
-  // is sitting inside.
-  const draftPrefilled = useRef(false);
-  useEffect(() => {
-    if (!email || !settings || draftPrefilled.current) return;
-    draftPrefilled.current = true;
-    if (!typed) return;
-    // Guarded by the ref above to run once per email, the same shape as the
-    // extraction effect just above it — the rule can't see that guard is
-    // enough on its own without the async wrapper that one happens to have.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setDraftHtml(plainToHtml(typed));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [email, settings]);
+  // There is deliberately no effect here putting anything into the box. The
+  // read lands in `typed` and `source` and goes straight to the model from
+  // there; see the rule above `source`.
 
   // The pane reads the message once, when it opens. Open it on an empty reply,
   // then type in Outlook, and it is still holding the read from before you
   // typed — which from in here is indistinguishable from the add-in ignoring
-  // you. Offered only while there is nothing to write from, the one state where
-  // re-reading cannot overwrite something you typed in this panel.
+  // you. Always offered now: with nothing ever prefilled, a re-read cannot
+  // overwrite a word you typed in this panel, so the button no longer has to
+  // hide itself the moment there is something to lose.
   function rereadMessage() {
-    draftPrefilled.current = false;
     extracted.current = false;
     setExtractDone(false);
     setAutoFilled([]);
@@ -579,11 +573,18 @@ export default function OutlookPage() {
           ? `Re: ${email.subject}`
           : email.subject
         : "";
-      // Same fields the workspace's Draft and "Anything else I should know?"
-      // boxes save to — what is being answered is already IN the draft (see
-      // the prefill effect above), so there's no separate wrapping instruction
-      // needed here any more; the brief is purely the extra detail, exactly
-      // like the workspace.
+      // The three inputs, sorted into the two fields the workspace's Draft and
+      // "Anything else I should know?" boxes already save to.
+      //
+      // When Outlook has a half-written draft, THAT is the draft — the box is
+      // you talking about it ("make it longer", "just fix the grammar"), which
+      // is the brief. With no draft in Outlook the box is the only thing you
+      // have said, so it is the draft itself, exactly as the workspace reads
+      // its one box. Either way the thread stays in `background`: context for
+      // the reply, never something to rewrite.
+      const boxText = htmlToPlain(draftHtml).trim();
+      const original = typed ? plainToHtml(typed) : draftHtml;
+      const brief = typed && boxText ? `${draftHtml}${briefHtml}` : briefHtml;
       const context = {
         ...emptyContext(),
         fidelity,
@@ -593,32 +594,32 @@ export default function OutlookPage() {
         styleIds,
         recipient,
         background: source,
-        brief: briefHtml,
+        brief,
       };
       const doc = rewriting
-        ? { ...rewriting, subject: subjectLine, original: draftHtml, context }
+        ? { ...rewriting, subject: subjectLine, original, context }
         : await add({
             doc_type: "email",
             mode: "create",
             title: subjectLine || (isReply ? "Reply" : "New message"),
             subject: subjectLine,
-            original: draftHtml,
+            original,
             context,
           });
       if (!doc) throw new Error("Couldn't create the piece");
       if (rewriting)
         await supabase
           .from("writer_docs")
-          .update({ subject: subjectLine, original: draftHtml, context })
+          .update({ subject: subjectLine, original, context })
           .eq("id", doc.id);
       setResultDoc(doc);
       setResultContent("");
       // A subject typed by hand survives a rewrite; a fresh piece takes the
       // one the thread already has.
       if (!rewriting) applySubject(doc.subject);
-      // A write from the intake starts the history over: the note in the box
-      // travels as the brief, not as a standing instruction on top of itself.
-      const note = htmlToPlain(briefHtml).trim();
+      // A write from the intake starts the history over: what was asked travels
+      // as the brief, not as a standing instruction on top of itself.
+      const note = htmlToPlain(brief).trim();
       setAsked(note ? [note] : []);
       await runGenerate(doc);
     } catch (e) {
@@ -767,10 +768,10 @@ export default function OutlookPage() {
 
       {/* The two boxes the workspace itself uses — Draft and "Anything else I
           should know?" — not a reinterpretation of them. This one is bigger
-          and comes first on purpose: it's the one thing only you know,
-          prefilled with what the add-in can see so it starts in the exact
-          "email plus an instruction" shape the workspace already knows how to
-          read. */}
+          and comes first on purpose: it's the one thing only you know. It is
+          also EMPTY on purpose. Everything the add-in can read is read below,
+          not pasted in here — a box with the email already in it is a box you
+          cannot type "make it longer" into. */}
       <div>
         <label className="mb-1 block text-sm font-semibold text-ink">
           What do you want to say?
@@ -781,15 +782,17 @@ export default function OutlookPage() {
           value={draftHtml}
           onChange={setDraftHtml}
           placeholder={
-            source && !typed
-              ? "e.g. 'reply saying I can do Thursday but not Tuesday' — or leave it empty and I'll just answer it"
-              : "Your reply, or just what you want it to say — I'll work out which it is."
+            typed
+              ? "e.g. 'make it longer' or 'just tidy up what I wrote' — I've got your draft"
+              : source
+                ? "e.g. 'reply saying I can do Thursday but not Tuesday' — or leave it empty and I'll just answer it"
+                : "Your message, or just what you want it to say — I'll work out which it is."
           }
           minHeight="min-h-28"
         />
         <p className="mt-0.5 text-[10px] leading-snug text-muted">
           {typed
-            ? "What you'd already typed in Outlook, without your signature or the thread below it. Leave it as notes and I'll write the real thing."
+            ? "I've already got the draft you started in Outlook — it's down below. This box is for what to do with it."
             : source
               ? "I've read the message — say what you want to come back with, or leave this empty and I'll just answer it."
               : "Nothing in the message yet, so this is where you say it."}
@@ -897,25 +900,24 @@ export default function OutlookPage() {
               ? "Write it"
               : "Write the reply"}
       </button>
-      {hasIntake ? (
+      <div className="space-y-1.5">
         <p className="text-[11px] leading-snug text-muted">
-          Writes it right here, then you can edit it or drop it into your reply
-          below.
+          {hasIntake
+            ? "Writes it right here, then you can edit it or drop it into your reply below."
+            : "There's nothing here to write from yet — say what you want it to say above, or write a line or two in Outlook and read it back in."}
         </p>
-      ) : (
-        <div className="space-y-1.5">
-          <p className="text-[11px] leading-snug text-muted">
-            There&apos;s nothing here to write from yet — say what you want it to
-            say above, or write a line or two in Outlook and read it back in.
-          </p>
-          <button
-            onClick={rereadMessage}
-            className="rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-medium text-muted transition hover:text-ink"
-          >
-            Re-read my message
-          </button>
-        </div>
-      )}
+        {/* Always available: the pane reads the message once, when it opens, so
+            anything typed in Outlook afterwards is invisible to it until this
+            is pressed. It used to hide itself as soon as there was anything to
+            write from, because re-reading would have overwritten the box —
+            nothing is prefilled any more, so there is nothing left to lose. */}
+        <button
+          onClick={rereadMessage}
+          className="rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-medium text-muted transition hover:text-ink"
+        >
+          Re-read my message
+        </button>
+      </div>
     </>
   );
 
@@ -1167,6 +1169,26 @@ export default function OutlookPage() {
                   Everyone on it: {onThread}
                 </p>
               )}
+              {/* The draft you started in Outlook. It goes to the model as the
+                  draft — but it is shown HERE, read-only, rather than loaded
+                  into the box, so the box stays free for "make it longer".
+                  Without this there would be no way to tell a draft that was
+                  read from one that was missed, which is the complaint that
+                  put it in the box in the first place. */}
+              {typed && (
+                <details className="mt-1.5 rounded-lg border border-border bg-canvas p-1.5">
+                  <summary className="cursor-pointer list-none text-[10px] font-semibold uppercase tracking-wide text-[var(--accent)]">
+                    Your draft, read from Outlook ▾
+                  </summary>
+                  <p className="mt-1 whitespace-pre-wrap text-[11px] leading-relaxed text-muted">
+                    {typed}
+                  </p>
+                  <p className="mt-1 text-[10px] leading-snug text-muted">
+                    Your signature and the thread below it are left off. Edit it
+                    in Outlook, then press &ldquo;Re-read my message&rdquo;.
+                  </p>
+                </details>
+              )}
               {messages.length ? (
                 <>
                   <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted">
@@ -1216,8 +1238,8 @@ export default function OutlookPage() {
               )}
               {typed && source && (
                 <p className="mt-1 text-[10px] leading-snug text-muted">
-                  Your own draft is up in the box; this is the thread under it,
-                  which I&apos;ll write against but won&apos;t rewrite.
+                  I write your draft against this thread; the thread itself I
+                  never rewrite or quote back.
                 </p>
               )}
             </div>
