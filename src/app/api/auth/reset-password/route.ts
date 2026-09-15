@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { generateTempPassword, normalizeUsername, usernameToEmail } from "@/lib/auth";
+import { forgetAllOutlookKeys } from "@/lib/outlook-keys";
 
 export const runtime = "nodejs";
 
@@ -32,6 +33,9 @@ export async function POST(req: Request) {
   if (error) {
     return NextResponse.json({ error: "Could not reset password." }, { status: 500 });
   }
+  // A reset means the old password is in doubt, and the Outlook pane's saved
+  // sign-in was minted on the strength of it — so it goes too.
+  await forgetAllOutlookKeys(profile.id).catch(() => {});
 
   return NextResponse.json({ ok: true, username, tempPassword });
 }

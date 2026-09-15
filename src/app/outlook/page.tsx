@@ -36,6 +36,7 @@ import {
   useWriterSettings,
   useWriterStyles,
 } from "@/lib/writer/hooks";
+import { useOutlookSignIn } from "@/lib/outlook-remember";
 import {
   AUDIENCE_CHIPS,
   FIDELITY_OPTIONS,
@@ -140,14 +141,21 @@ function useAutoGrow(ref: React.RefObject<HTMLTextAreaElement | null>, value: st
 }
 
 export default function OutlookPage() {
-  const { userId } = useUserId();
+  const { userId, loading: userLoading } = useUserId();
   const { docs, add, refresh } = useWriterDocs(userId);
   const { settings } = useWriterSettings(userId);
 
   const { styles } = useWriterStyles(userId);
 
   const [officeReady, setOfficeReady] = useState(false);
+  // Office.onReady has fired, so the mailbox — and the saved sign-in in its
+  // roaming settings — can be read.
+  const [hostReady, setHostReady] = useState(false);
   const [outsideOutlook, setOutsideOutlook] = useState(false);
+  // Outlook moves this pane's browser storage whenever Office or WebView2
+  // updates, and the session cookie is left behind in the old folder. This puts
+  // it back from a key kept in the mailbox — see lib/outlook-keys.ts.
+  const { restoring, signOut } = useOutlookSignIn(hostReady, userId, userLoading);
   const [email, setEmail] = useState<ReadEmail | null>(null);
   // The box you type in, and nothing else. It starts empty and STAYS empty
   // until you put something in it — see the note above `source` for why this
@@ -283,7 +291,10 @@ export default function OutlookPage() {
   useEffect(() => {
     if (!officeReady || readied.current) return;
     readied.current = true;
-    window.Office?.onReady(() => readOpenItem());
+    window.Office?.onReady(() => {
+      setHostReady(true);
+      readOpenItem();
+    });
   }, [officeReady, readOpenItem]);
 
   // The body, taken apart: what you typed, and then the thread underneath as
@@ -933,16 +944,39 @@ export default function OutlookPage() {
       />
 
       <main className="mx-auto w-full max-w-md space-y-2 p-2.5 text-ink">
-        <header>
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">
-            Writing Studio
-          </p>
-          <h1 className="text-base font-semibold">
-            {email?.composing ? "This draft" : "Answer this one"}
-          </h1>
+        <header className="flex items-start justify-between gap-2">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">
+              Writing Studio
+            </p>
+            <h1 className="text-base font-semibold">
+              {email?.composing ? "This draft" : "Answer this one"}
+            </h1>
+          </div>
+          {/* The pane now stays signed in on its own, so it needs a way out
+              that means it: this also revokes the saved sign-in, where a plain
+              cookie sign-out would be quietly undone on the next open. */}
+          {userId && !userLoading && (
+            <button
+              onClick={() => void signOut()}
+              className="mt-0.5 text-[10px] font-medium text-muted transition hover:text-ink"
+            >
+              Sign out
+            </button>
+          )}
         </header>
 
-        {!userId && (
+        {restoring && (
+          <p className="rounded-xl border border-border bg-surface p-3 text-xs text-muted">
+            Signing you back in…
+          </p>
+        )}
+
+        {/* Held back until Office has answered and the session check is done:
+            before that a missing id means "not known yet", not "signed out",
+            and flashing a sign-in prompt at somebody about to be signed back in
+            automatically is exactly the complaint this replaced. */}
+        {!userId && !userLoading && !restoring && (hostReady || outsideOutlook) && (
           <div className="rounded-xl border border-border bg-surface p-3 text-xs">
             <p className="font-medium">Sign in to Omni first.</p>
             <p className="mt-1 leading-relaxed text-muted">
