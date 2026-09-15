@@ -17,6 +17,13 @@ name: Supabase keepalive
 #   2. An auth token request with invalid credentials, making GoTrue read
 #      auth.users and reject them. 400 is the success case.
 #
+# ALSO NOT ENOUGH: those two reads alone -- another project on the same probes
+# was still warned as inactive. So a third probe makes the database WRITE:
+#
+#   3. POST /rest/v1/rpc/keepalive -- a tiny function that inserts a row into
+#      public.keepalive_ping and deletes it again in the same call, returning
+#      {"wrote": <time>, "left": 0}. Nothing is left behind.
+#
 # SELF-HEALING: those probes are a theory, not a guarantee. So before probing,
 # this checks the project's real status through the Management API, and if it
 # has gone INACTIVE it calls /restore and waits for it to come back. That caps
@@ -127,13 +134,25 @@ jobs:
             -d '{"email":"keepalive-probe@example.invalid","password":"not-a-real-password"}' \
             "https://$REF.supabase.co/auth/v1/token?grant_type=password" </dev/null)
 
-          if reached "$rest" && reached "$auth"; then
-            echo "ok  omni  (rest $rest, auth $auth, $status)"
+          # A real INSERT + DELETE, undone inside the same call.
+          : > "$RUNNER_TEMP/write.out"
+          write=$(curl -s -o "$RUNNER_TEMP/write.out" -w '%{http_code}' -m 30 -X POST \
+            -H "apikey: $ANON" -H "Authorization: Bearer $ANON" \
+            -H 'Content-Type: application/json' -d '{}' \
+            "https://$REF.supabase.co/rest/v1/rpc/keepalive" </dev/null)
+          wrote=no
+          if [ "$write" = 200 ] && grep -q '"wrote"' "$RUNNER_TEMP/write.out"; then wrote=yes; fi
+
+          if reached "$rest" && reached "$auth" && [ "$wrote" = yes ]; then
+            echo "ok  omni  (rest $rest, auth $auth, write $write, $status)"
           elif [ "$restored" = yes ]; then
             # We did the right thing and the platform is still bringing it up.
-            # Not a failure -- the next run in 3 days is the real check.
-            echo "::warning::omni — restored but still coming up (rest $rest, auth $auth, $status)"
+            # Not a failure -- tomorrow's run is the real check.
+            echo "::warning::omni — restored but still coming up (rest $rest, auth $auth, write $write, $status)"
           else
-            echo "::error::omni — rest $rest, auth $auth, status $status"
+            echo "::error::omni — rest $rest, auth $auth, write $write, status $status"
+            if [ "$write" = 404 ]; then
+              echo "::error::omni — keepalive() is missing; apply supabase-tools/keepalive-write.sql to it"
+            fi
             exit 1
           fi
