@@ -8,6 +8,7 @@ export type MeetingType =
   | "internal"
   | "congress"
   | "presentation"
+  | "panel"
   | "difficult"
   | "first_meeting"
   | "other";
@@ -29,6 +30,11 @@ export interface BriefSection {
   // section. If `content` no longer matches, the user has hand-edited it —
   // that's what makes a plain "Redo" (no guidance) meaningful again.
   generatedContent?: string;
+  // What this box is for, when it isn't a blueprint or saved custom section:
+  // the model added it because this meeting needed it (origin "ai"). Kept so
+  // a redo of the box, or a later whole-brief update, writes the same thing.
+  prompt?: string;
+  origin?: "ai";
 }
 
 export interface Brief {
@@ -197,7 +203,8 @@ export interface MpMeeting {
   title: string;
   meeting_type: MeetingType;
   date: string | null;
-  duration_min: number;
+  // null until the writer (or the Explain pre-pass) gives a length.
+  duration_min: number | null;
   format: MeetingFormat;
   location: string;
   kol_id: string | null;
@@ -265,6 +272,7 @@ export const MEETING_TYPES: { key: MeetingType; label: string }[] = [
   { key: "internal", label: "Internal / leadership" },
   { key: "congress", label: "Congress touchpoint" },
   { key: "presentation", label: "Presentation to a group" },
+  { key: "panel", label: "Moderating a panel" },
   { key: "difficult", label: "Difficult conversation" },
   { key: "other", label: "Other" },
 ];
@@ -284,7 +292,7 @@ export function meetingContextText(m: MpMeeting): string {
     m.title && `Meeting: ${m.title}`,
     `Type: ${meetingTypeLabel(m.meeting_type)}`,
     m.date && `When: ${new Date(m.date).toLocaleString()}`,
-    `Duration: ${m.duration_min} minutes`,
+    m.duration_min && `Duration: ${m.duration_min} minutes`,
     att && `Attendees:\n${att}`,
     htmlToPlain(m.explain) && `In the writer's own words:\n${htmlToPlain(m.explain)}`,
     htmlToPlain(m.objectives) && `Objectives:\n${htmlToPlain(m.objectives)}`,
@@ -338,7 +346,7 @@ export const DEFAULT_BRIEF_SECTIONS: { key: string; title: string; prompt: strin
     key: "agenda",
     title: "How the meeting should go",
     prompt:
-      "The run of show, start to finish, as a nested outline. Each top-level item is one phase of the meeting with a rough timing in parentheses (e.g. \"Opening and rapport (0-5 min)\"), sequenced so the meeting reaches the objective, and fitting the stated duration. Nested under each phase: what to actually cover or say in it, and what a good outcome of that phase looks like before moving on. This is the section the writer reads walking in — make it the shape of the whole meeting, not a list of topics.",
+      "The run of show, start to finish, as a nested outline. Each top-level item is one phase of the meeting with a rough timing in parentheses (e.g. \"Opening and rapport (0-5 min)\"), sequenced so the meeting reaches the objective. If a duration is given, fit it in minutes; if not, give each phase its share of the time (e.g. \"(about a fifth of the time)\") and never state a total. Nested under each phase: what to do in it, with the actual words to say or ask written out beneath each move, and what a good outcome of that phase looks like before moving on. This is the section the writer reads walking in — make it the shape of the whole meeting, not a list of topics.",
   },
   {
     key: "objective",
@@ -350,7 +358,7 @@ export const DEFAULT_BRIEF_SECTIONS: { key: string; title: string; prompt: strin
     key: "attendees",
     title: "Who's in the room",
     prompt:
-      "One short block per attendee: who they are, what they care about, and one tailored talking point or connection to make with them.",
+      "One short block per attendee: who they are, what they care about, and one tailored talking point or connection to make with them, written out as the line to say. If the writer has to introduce people, include each introduction word for word.",
   },
   {
     key: "talking_points",
@@ -362,17 +370,19 @@ export const DEFAULT_BRIEF_SECTIONS: { key: string; title: string; prompt: strin
     key: "questions_theyll_ask",
     title: "Questions they'll likely ask you",
     prompt:
-      "The 4-6 most probable questions the other side will ask, each with a crisp suggested answer based on the background.",
+      "The 4-6 most probable questions the writer will be asked (by the other side, or by the audience or group if they are presenting or moderating), each with a crisp suggested answer written out in full.",
   },
   {
     key: "questions_to_ask",
     title: "Smart questions to ask them",
-    prompt: "4-6 questions the writer should ask that advance the objective and build the relationship.",
+    prompt:
+      "4-6 questions the writer should ask that advance the objective and build the relationship, each written out in full exactly as they would say it. When there are several people to ask, say who each question is for, and nest a follow-up probe under the ones worth pushing on.",
   },
   {
     key: "objections",
     title: "Objections & how to handle them",
-    prompt: "Likely pushback or sensitive moments, each with a suggested handling approach.",
+    prompt:
+      "Likely pushback or sensitive moments, each with how to handle it and the actual words to say.",
   },
   {
     key: "checklist",

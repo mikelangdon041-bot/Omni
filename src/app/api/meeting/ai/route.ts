@@ -9,15 +9,27 @@ import {
   stripDashes,
 } from "@/lib/meetingprep/captureAi";
 import { stripHtml } from "@/lib/territory/utils";
+import {
+  BriefRefusal,
+  NO_FORMATTING_RULE,
+  meetingContext,
+  writeBrief,
+  type MeetingPayload,
+} from "@/lib/meetingprep/briefAi";
+import { MEETING_TYPES } from "@/lib/meetingprep/types";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+// A whole brief now writes out the words for every step, plus any boxes the
+// meeting needs beyond the blueprint, so it runs well past two minutes.
+export const maxDuration = 300;
 
 // Meeting Prep AI — powered by Claude (same model as Writing Studio). Actions:
 //   brief    { meeting, sections:[{key,title,prompt}], kolId?, guidance?,
-//              previousSections? }             → { sections:[{key,title,content}] }
+//              previousSections? }             → { sections:[{key,title,content,
+//              prompt?,origin?}] } (origin "ai" = a box the model added)
 //   autofill { meeting }                       → { title, location, durationMin,
-//              date, attendees:[], objectives, concerns } (only what's stated)
+//              date, meetingType, attendees:[], objectives, concerns }
+//              (only what's stated)
 //   ideas    { context, focus?, count? }       → { ideas:[{title,detail}] }
 //   grill    { context, briefText?, count? }   → { questions:[{question,modelAnswer}] }
 //   coach    { question, modelAnswer, userAnswer, context } → { coaching }
@@ -28,59 +40,6 @@ export const maxDuration = 120;
 function firstText(res: { content: { type: string; text?: string }[] }): string {
   const block = res.content.find((b) => b.type === "text");
   return (block?.text || "").trim();
-}
-
-interface MeetingPayload {
-  title?: string;
-  meetingType?: string;
-  date?: string;
-  durationMin?: number;
-  format?: string;
-  location?: string;
-  attendees?: { name?: string; role?: string; org?: string; notes?: string }[];
-  explain?: string;
-  objectives?: string;
-  background?: string;
-  concerns?: string;
-  priorTranscript?: string;
-  documents?: { name?: string; note?: string; text?: string }[];
-}
-
-function meetingContext(m: MeetingPayload, kolBlock: string): string {
-  const att = (m.attendees || [])
-    .filter((a) => (a.name || "").trim())
-    .map(
-      (a) =>
-        `- ${a.name}${a.role ? `, ${a.role}` : ""}${a.org ? ` (${a.org})` : ""}${a.notes ? ` — ${a.notes}` : ""}`,
-    )
-    .join("\n");
-  return [
-    m.title && `Meeting: ${m.title}`,
-    m.meetingType && `Type: ${m.meetingType}`,
-    m.date && `When: ${m.date}`,
-    m.durationMin && `Duration: ${m.durationMin} minutes`,
-    m.format && `Format: ${m.format}`,
-    m.location && `Location: ${m.location}`,
-    att && `Attendees:\n${att}`,
-    m.explain && `In the writer's own words:\n${stripHtml(m.explain)}`,
-    m.objectives && `The writer's objectives:\n${stripHtml(m.objectives)}`,
-    m.background && `Background:\n${stripHtml(m.background)}`,
-    m.concerns && `Concerns / sensitivities:\n${stripHtml(m.concerns)}`,
-    kolBlock && `Linked contact profile (from Territory Planning):\n${kolBlock}`,
-    m.priorTranscript &&
-      `Transcript/notes from a previous meeting with these people:\n${m.priorTranscript.slice(0, 20000)}`,
-    ...(m.documents || [])
-      .filter((d) => String(d.text || "").trim())
-      .slice(0, 8)
-      .map(
-        (d) =>
-          `Supporting document "${d.name || "untitled"}"${
-            d.note ? ` — the writer says about it: "${d.note}"` : ""
-          }:\n${String(d.text).slice(0, 15000)}`,
-      ),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
 }
 
 async function kolBlockFor(
@@ -124,45 +83,6 @@ async function kolBlockFor(
     .join("\n");
 }
 
-// Formatting rule shared by every action that writes brief content — Claude's
-// default house style leans on bold labels and headers; this app renders
-// content as plain prose in a document, not a chat bubble.
-const NO_FORMATTING_RULE =
-  "Plain prose. No bold, no markdown, no headers, no emoji. Use <b> only mid-sentence for a genuinely critical word or number, never to label a whole line or start a bullet. Write like a person handing over notes, not like an AI assistant's answer.";
-
-// How a brief section's `content` is structured. A brief is read standing up,
-// on the way into a room — it has to be scannable as an outline, so anything
-// with more than one part comes back as a nested list rather than a wall of
-// paragraphs. The app renders these as an indented tree.
-const BRIEF_HTML_RULE = `Each section's content is an HTML fragment using ONLY these tags: <p>, <ul>, <li>, <b>, <i>. No headings, no <div>, no <br>, no markdown, no bullet characters typed into the text (the <li> is the bullet).
-
-Structure it as a tree, not a wall of text:
-- A section with several points is a <ul> of <li>. One <li> = one point, stated in a complete sentence.
-- Detail that elaborates a point goes in a <ul> nested INSIDE that point's own <li>, never as a sibling. Two levels is the norm; three is the maximum; never more.
-- Keep parent items short enough to scan on their own — the parent is the headline, the children carry the specifics (what to say, numbers, names, the reason).
-- Use a <p> only for a genuinely single-thought section that has nothing to nest.`;
-
-const BRIEF_SCHEMA = {
-  type: "object" as const,
-  properties: {
-    sections: {
-      type: "array" as const,
-      items: {
-        type: "object" as const,
-        properties: {
-          key: { type: "string" as const },
-          title: { type: "string" as const },
-          content: { type: "string" as const },
-        },
-        required: ["key", "title", "content"],
-        additionalProperties: false,
-      },
-    },
-  },
-  required: ["sections"],
-  additionalProperties: false,
-};
-
 const AUTOFILL_SCHEMA = {
   type: "object" as const,
   properties: {
@@ -170,6 +90,10 @@ const AUTOFILL_SCHEMA = {
     location: { type: "string" as const },
     durationMin: { type: "number" as const },
     date: { type: "string" as const },
+    meetingType: {
+      type: "string" as const,
+      enum: ["", ...MEETING_TYPES.map((t) => t.key)],
+    },
     attendees: {
       type: "array" as const,
       items: {
@@ -187,7 +111,16 @@ const AUTOFILL_SCHEMA = {
     objectives: { type: "string" as const },
     concerns: { type: "string" as const },
   },
-  required: ["title", "location", "durationMin", "date", "attendees", "objectives", "concerns"],
+  required: [
+    "title",
+    "location",
+    "durationMin",
+    "date",
+    "meetingType",
+    "attendees",
+    "objectives",
+    "concerns",
+  ],
   additionalProperties: false,
 };
 
@@ -270,58 +203,22 @@ export async function POST(req: Request) {
         ? body.sections
         : [];
       const guidance = String(body?.guidance || "").slice(0, 4000);
-      const previous = body?.previousSections;
-      const onlyKey = String(body?.onlyKey || "");
       const kolBlock = await kolBlockFor(supabase, String(body?.kolId || ""));
-      const context = meetingContext(meeting, kolBlock);
-
-      const wanted = onlyKey ? sections.filter((s) => s.key === onlyKey) : sections;
-      const res = await anthropic().messages.create({
-        model: WRITER_MODEL,
-        max_tokens: 6000,
-        output_config: { format: { type: "json_schema", schema: BRIEF_SCHEMA } },
-        system: `You are a sharp, experienced chief of staff writing a pre-meeting brief for someone about to walk into the room. Produce sections a real person would hand another person, not an AI-generated report.
-
-${NO_FORMATTING_RULE}
-
-${BRIEF_HTML_RULE}
-
-Hard rules:
-- Ground everything in the provided meeting context. NEVER invent facts, names, data, or commitments not present. When context is thin for a section, give genuinely useful general guidance for this type of meeting instead of fabricating specifics — say less rather than make things up.
-- When a previous version of a section is provided, that is the user's own current text (possibly hand-edited). Build on it and extend it — keep everything in it that the guidance didn't ask you to change. Do not silently rewrite it into your own voice or drop details it already has. Only make the specific change the guidance asks for; if no guidance is given, make the smallest improvement that adds real value (fix a gap, sharpen something vague) rather than a wholesale rewrite.
-- Be concrete and practical — things you could actually say or do, not platitudes.
-- Suggested answers must be usable verbatim as a starting point.
-- Keep each section tight; this is read on the way into the room.
-- Return one entry per requested section, same keys and titles, in the same order.`,
-        messages: [
-          {
-            role: "user",
-            content: `Meeting context:\n${context || "(minimal context provided)"}\n\nSections to write (key — title — what it should contain):\n${wanted
-              .map((s) => `- ${s.key} — ${s.title} — ${s.prompt}`)
-              .join("\n")}${
-              previous
-                ? `\n\nThe user's current version of ${previous.length === 1 ? "this section" : "these sections"} (build on it, don't discard it):\n${JSON.stringify(previous).slice(0, 20000)}\n\nGuidance: ${guidance || "(no specific guidance — make only a small, genuinely useful improvement)"}`
-                : guidance
-                  ? `\n\nExtra guidance from the writer: ${guidance}`
-                  : ""
-            }`,
-          },
-        ],
-      });
-      if (res.stop_reason === "refusal")
-        return NextResponse.json(
-          { error: "The model declined this request — try rephrasing." },
-          { status: 502 },
-        );
-      const parsed = JSON.parse(firstText(res) || "{}");
-      const out = (Array.isArray(parsed.sections) ? parsed.sections : []).map(
-        (s: { key?: unknown; title?: unknown; content?: unknown }) => ({
-          key: String(s?.key || ""),
-          title: String(s?.title || ""),
-          content: String(s?.content || ""),
-        }),
-      );
-      return NextResponse.json({ sections: out });
+      try {
+        const out = await writeBrief({
+          meeting,
+          sections,
+          kolBlock,
+          guidance,
+          previous: body?.previousSections,
+          onlyKey: String(body?.onlyKey || ""),
+        });
+        return NextResponse.json({ sections: out });
+      } catch (e) {
+        if (e instanceof BriefRefusal)
+          return NextResponse.json({ error: e.message }, { status: 502 });
+        throw e;
+      }
     }
 
     if (action === "autofill") {
@@ -338,7 +235,8 @@ Rules:
 - attendees: every person stated or implied to be AT this meeting (e.g. "Melissa, the head of the company, will be there" → {"name":"Melissa","role":"Head of the company"}). Do not include the writer themself. Put anything else known about a person in "notes".
 - title: a short natural meeting title, only if the purpose is clear.
 - date: ISO 8601 datetime, only if a specific date (and ideally time) is stated. Otherwise "".
-- durationMin: only if a duration is stated, else 0.
+- durationMin: only if a length is stated in minutes or hours ("a 45-minute slot", "an hour"). A start time alone is not a duration. Otherwise 0.
+- meetingType: which of these fits what is described, or "" if none clearly does: ${MEETING_TYPES.map((t) => `${t.key} (${t.label})`).join(", ")}. Judge by the writer's role: someone moderating or chairing a panel is "panel", not a 1-on-1.
 - objectives: the writer's goals for the meeting, in their voice, plain text. "" if not stated.
 - concerns: worries/sensitivities stated, plain text. "" if none.
 - Use "" / [] / 0 for anything not present.`,
@@ -350,6 +248,7 @@ Rules:
         location: String(parsed.location || ""),
         durationMin: Number(parsed.durationMin) || 0,
         date: String(parsed.date || ""),
+        meetingType: String(parsed.meetingType || ""),
         attendees: (Array.isArray(parsed.attendees) ? parsed.attendees : []).map(
           (a: { name?: unknown; role?: unknown; org?: unknown; notes?: unknown }) => ({
             name: String(a?.name || ""),

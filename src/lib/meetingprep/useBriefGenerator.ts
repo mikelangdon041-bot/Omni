@@ -112,7 +112,11 @@ export function useBriefGenerator({
       const known = new Set(blueprint.map((s) => s.key));
       for (const s of sections) {
         if (!known.has(s.key)) {
-          blueprint.push({ key: s.key, title: s.title, prompt: `Section "${s.title}" as before.` });
+          blueprint.push({
+            key: s.key,
+            title: s.title,
+            prompt: s.prompt || `Section "${s.title}" as before.`,
+          });
         }
       }
       const ordered = orderSections(blueprint, sectionOrder);

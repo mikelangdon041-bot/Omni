@@ -120,7 +120,9 @@ function fold(line: string): string {
 export function downloadMeetingInvite(m: MpMeeting): void {
   if (!m.date) return;
   const start = new Date(m.date);
-  const end = new Date(start.getTime() + (m.duration_min || 30) * 60000);
+  // An invite has to end somewhere, so an unset duration gets the usual hour
+  // and the user drags it in Outlook. Nothing else assumes a length.
+  const end = new Date(start.getTime() + (m.duration_min || 60) * 60000);
   const agenda = (m.brief?.sections || []).find((s) => s.key === "agenda");
   const description = [
     meetingTypeLabel(m.meeting_type),

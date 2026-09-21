@@ -24,7 +24,7 @@ import {
   useUserId,
 } from "@/lib/meetingprep/hooks";
 import { useBriefGenerator, type GenerateOpts } from "@/lib/meetingprep/useBriefGenerator";
-import { folderMovePatch, meetingTypeLabel } from "@/lib/meetingprep/types";
+import { folderMovePatch, meetingTypeLabel, type BriefSection } from "@/lib/meetingprep/types";
 import { usePersistedState } from "@/lib/usePersistedState";
 
 const TABS = ["Setup", "Brief", "Grill me", "Debrief"] as const;
@@ -80,9 +80,11 @@ export default function MeetingPage() {
   // Nothing an AI regenerate writes lands on the brief until the user has
   // seen it and applied it — lives here (not in BriefTab) so a generation
   // kicked off from Setup still shows its preview once it lands on Brief.
-  const [preview, setPreview] = useState<{ changes: DiffChange[]; opts: GenerateOpts } | null>(
-    null,
-  );
+  const [preview, setPreview] = useState<{
+    changes: DiffChange[];
+    opts: GenerateOpts;
+    incoming: BriefSection[];
+  } | null>(null);
   const [applying, setApplying] = useState(false);
   const hasBrief = (meeting?.brief?.sections || []).length > 0;
 
@@ -103,14 +105,25 @@ export default function MeetingPage() {
       oldContent: cur.find((s) => s.key === inc.key)?.content || "",
       newContent: inc.content,
     }));
-    setPreview({ changes, opts: result.opts });
+    setPreview({ changes, opts: result.opts, incoming: result.incoming });
   }
 
   function applyPreview() {
     if (!preview) return;
     setApplying(true);
+    // A box the model added carries its prompt and origin through; the diff
+    // only knows key/title/content, so they come back from the proposal.
     generator.applyGenerated(
-      preview.changes.map((c) => ({ key: c.key, title: c.title, content: c.newContent })),
+      preview.changes.map((c) => {
+        const inc = preview.incoming.find((s) => s.key === c.key);
+        return {
+          key: c.key,
+          title: c.title,
+          content: c.newContent,
+          ...(inc?.prompt ? { prompt: inc.prompt } : {}),
+          ...(inc?.origin ? { origin: inc.origin } : {}),
+        };
+      }),
       preview.opts,
     );
     setApplying(false);

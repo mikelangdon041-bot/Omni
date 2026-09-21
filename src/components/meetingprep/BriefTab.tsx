@@ -29,6 +29,7 @@ import {
   Sparkles,
   Target,
   Users,
+  X,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/Button";
@@ -195,6 +196,14 @@ export function BriefTab({
     toast("success", `${items.length} item${items.length === 1 ? "" : "s"} added to your to-do list`);
   }
 
+  // Only boxes the model added on its own can be dropped from here — the
+  // blueprint ones come back on the next update anyway, and saved custom
+  // sections are managed in My brief.
+  const removeSection = (key: string) =>
+    save({
+      brief: { ...m.brief, sections: storedSections.filter((s) => s.key !== key) },
+    });
+
   const setSection = (key: string, content: string) =>
     save({
       brief: {
@@ -236,7 +245,7 @@ export function BriefTab({
             <p className="mt-1 max-w-md text-sm text-muted">
               I&apos;m reading what you wrote, filling in the details on Setup,
               then writing the brief from your attendees and documents. It takes
-              about half a minute — feel free to look around, I&apos;ll keep
+              a minute or two — feel free to look around, I&apos;ll keep
               working in the background.
             </p>
           </>
@@ -330,7 +339,7 @@ export function BriefTab({
           always-available "Adjust" for explicit guidance. */}
       <div className="gap-4 lg:columns-2">
         {sections.map((s) => {
-          const Icon = SECTION_ICONS[s.key] || FileText;
+          const Icon = SECTION_ICONS[s.key] || (s.origin === "ai" ? Sparkles : FileText);
           const sectionBusy = busy === s.key;
           const isCollapsed = collapsedKeys.has(s.key);
           const isDirty = s.generatedContent !== undefined && s.content !== s.generatedContent;
@@ -339,20 +348,44 @@ export function BriefTab({
               key={s.key}
               className="mb-4 break-inside-avoid rounded-xl border border-border bg-surface shadow-sm"
             >
-              <button
-                type="button"
-                onClick={() => toggleCollapsed(s.key)}
-                className="flex w-full items-center justify-between gap-2 rounded-t-xl border-b border-border bg-canvas/50 px-4 py-2.5 text-left"
-              >
-                <h3 className="flex items-center gap-2 text-sm font-semibold">
-                  <Icon size={15} className="text-[var(--accent)]" />
-                  {s.title}
-                </h3>
-                <ChevronDown
-                  size={16}
-                  className={`shrink-0 text-muted transition-transform ${isCollapsed ? "-rotate-90" : ""}`}
-                />
-              </button>
+              <div className="flex items-center rounded-t-xl border-b border-border bg-canvas/50">
+                <button
+                  type="button"
+                  onClick={() => toggleCollapsed(s.key)}
+                  className="flex min-w-0 flex-1 items-center justify-between gap-2 px-4 py-2.5 text-left"
+                >
+                  <h3 className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-sm font-semibold">
+                    <Icon size={15} className="shrink-0 text-[var(--accent)]" />
+                    {s.title}
+                    {s.origin === "ai" && (
+                      <span
+                        title={s.prompt || "Added because this meeting needed it"}
+                        className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[11px] font-medium text-[var(--accent)]"
+                      >
+                        Added for this meeting
+                      </span>
+                    )}
+                  </h3>
+                  <ChevronDown
+                    size={16}
+                    className={`shrink-0 text-muted transition-transform ${isCollapsed ? "-rotate-90" : ""}`}
+                  />
+                </button>
+                {s.origin === "ai" && (
+                  <button
+                    type="button"
+                    aria-label={`Remove "${s.title}"`}
+                    title="Remove this box"
+                    onClick={() => {
+                      removeSection(s.key);
+                      toast("info", `Removed "${s.title}"`);
+                    }}
+                    className="mr-2 grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted hover:bg-canvas hover:text-ink"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
               {!isCollapsed && (
                 <>
                   <div className={`p-3 ${sectionBusy ? "opacity-50" : ""}`}>

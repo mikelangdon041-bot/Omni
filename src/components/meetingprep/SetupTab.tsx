@@ -210,8 +210,9 @@ export function SetupTab({
             type="number"
             min={5}
             step={5}
-            value={m.duration_min}
-            onChange={(e) => save({ duration_min: Number(e.target.value) || 30 })}
+            value={m.duration_min ?? ""}
+            placeholder="Not set"
+            onChange={(e) => save({ duration_min: Number(e.target.value) || null })}
           />
         </div>
         <Input

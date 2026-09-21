@@ -241,8 +241,14 @@ export function aggregateRows(
     if (measureDef.key === "*") {
       arr.push(1);
     } else {
-      const v = Number(r[measureDef.key]);
-      if (!Number.isNaN(v)) arr.push(v);
+      // A measure the row doesn't have is missing, not zero. Number(null) is
+      // 0, which would pull an average down for every row that never had the
+      // value (meeting durations are null until someone sets one).
+      const raw = r[measureDef.key];
+      if (raw !== null && raw !== undefined && raw !== "") {
+        const v = Number(raw);
+        if (!Number.isNaN(v)) arr.push(v);
+      }
     }
   }
 

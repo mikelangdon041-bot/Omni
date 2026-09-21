@@ -9,7 +9,7 @@
 // in is overwritten — every rule below only writes into a blank field.
 
 import { htmlToPlain } from "@/lib/writer/types";
-import { meetingTypeLabel, type Attendee, type MpMeeting } from "./types";
+import { MEETING_TYPES, meetingTypeLabel, type Attendee, type MpMeeting } from "./types";
 
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -75,8 +75,20 @@ export async function runAutofill(m: MpMeeting): Promise<AutofillResult> {
     patch.location = json.location;
     changes++;
   }
-  if (json.durationMin && m.duration_min === 30 && json.durationMin !== 30) {
+  // Only into a blank: a length the writer typed on Setup always wins.
+  if (json.durationMin > 0 && !m.duration_min) {
     patch.duration_min = json.durationMin;
+    changes++;
+  }
+  // "other" is where every new meeting starts, so it's the one type that can
+  // be read out of what they wrote; a type they picked is left alone.
+  if (
+    json.meetingType &&
+    json.meetingType !== "other" &&
+    m.meeting_type === "other" &&
+    MEETING_TYPES.some((t) => t.key === json.meetingType)
+  ) {
+    patch.meeting_type = json.meetingType;
     changes++;
   }
   if (json.date && !m.date) {
