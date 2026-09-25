@@ -113,7 +113,7 @@ const SCRIPT_RULE = `Write the words, not just the move. This is the most import
 // table from one person. A moderator, a presenter or an interviewer is in a
 // different seat, and reading "questions to ask them" literally produced a
 // brief with nothing a moderator could use.
-const SEAT_RULE = `Work out the writer's seat before writing anything: are they meeting one person, moderating or chairing a group, presenting, interviewing, negotiating, or attending? Write every section from that seat. The section titles are fixed, but read each one for what it means in this meeting: for a moderator, "questions to ask them" is the question bank for the panel, "questions they'll likely ask you" is what the audience and panelists will throw at the moderator, "who's in the room" includes how to introduce each person.`;
+export const SEAT_RULE = `Work out the writer's seat before writing anything: are they meeting one person, moderating or chairing a group, presenting, interviewing, negotiating, or attending? Write every section from that seat. The section titles are fixed, but read each one for what it means in this meeting: for a moderator, "questions to ask them" is the question bank for the panel, "questions they'll likely ask you" is what the audience and panelists will throw at the moderator, "who's in the room" includes how to introduce each person.`;
 
 // When the fixed boxes can't hold what this meeting needs, the model adds its
 // own. A moderator needs a question bank per panelist; a keynote speaker needs
@@ -131,7 +131,7 @@ const EXTRA_SECTIONS_RULE = `Improvise when the meeting needs it. The requested 
 // title, talking points about "tying points to what they care about". Nobody
 // needs a brief to be told to ask a good question. They need the question that
 // only someone who knows the field would ask.
-const DOMAIN_RULE = `Bring what you know about the subject. "Never invent" governs facts about THIS meeting and THESE people, not the subject matter itself.
+export const DOMAIN_RULE = `Bring what you know about the subject. "Never invent" governs facts about THIS meeting and THESE people, not the subject matter itself.
 - On the field, the science, the market, the policy or the technology in play: be specific and current. Name the actual shifts, the real debates, the regulations, the metrics, the technologies and the numbers, in the terms practitioners use. Where research notes are provided, they are the freshest material you have: lead with them.
 - Every question, talking point and objection must be one only someone who knows this field could have written. A question that restates the meeting's title back as a question ("what does the future of X look like?", "what does strategic leadership really mean?") is filler: replace it with one that names the specific tension, change, number or trade-off underneath it.
 - Prefer the concrete disagreement to the abstraction: who is under pressure, what is being cut or funded, what changed in the last year or two, what people in this field argue about privately.

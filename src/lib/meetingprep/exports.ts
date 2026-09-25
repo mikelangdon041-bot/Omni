@@ -84,6 +84,41 @@ export async function exportBriefDocx(m: MpMeeting): Promise<void> {
     children.push(...sectionParagraphs(s.content));
   }
 
+  // The questions the writer picked and arranged, printed last so the page
+  // they end on is the one they'll hold during the meeting. Backups go under
+  // their own heading, out of the numbered run.
+  const picked = (m.questions?.items || [])
+    .filter((q) => q.picked)
+    .sort((a, b) => a.order - b.order);
+  for (const [heading, list] of [
+    ["Questions to ask", picked.filter((q) => !q.backup)],
+    ["In reserve", picked.filter((q) => q.backup)],
+  ] as const) {
+    if (!list.length) continue;
+    children.push(
+      new Paragraph({ text: heading, heading: HeadingLevel.HEADING_1, spacing: { before: 280 } }),
+    );
+    for (const q of list) {
+      children.push(new Paragraph({ text: q.text, bullet: { level: 0 } }));
+      if (q.forWhom)
+        children.push(
+          new Paragraph({
+            children: [new TextRun({ text: `For: ${q.forWhom}`, italics: true, color: "666666" })],
+            bullet: { level: 1 },
+          }),
+        );
+      if (q.followUp)
+        children.push(
+          new Paragraph({
+            children: [
+              new TextRun({ text: `Probe: ${q.followUp}`, italics: true, color: "666666" }),
+            ],
+            bullet: { level: 1 },
+          }),
+        );
+    }
+  }
+
   const doc = new Document({ sections: [{ children }] });
   saveBlob(
     await Packer.toBlob(doc),

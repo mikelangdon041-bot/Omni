@@ -18,6 +18,7 @@ import {
   type MeetingPayload,
 } from "@/lib/meetingprep/briefAi";
 import { MEETING_TYPES } from "@/lib/meetingprep/types";
+import { writeQuestions } from "@/lib/meetingprep/questionsAi";
 
 export const runtime = "nodejs";
 // A whole brief now writes out the words for every step, plus any boxes the
@@ -26,6 +27,8 @@ export const maxDuration = 300;
 
 // Meeting Prep AI — powered by Claude (same model as Writing Studio). Actions:
 //   research { meeting, kolId? }               → { notes } (live web search)
+//   questions{ meeting, kolId?, research?, briefText?, existing:[], count?,
+//              focus? }                        → { questions:[...] } (the bank)
 //   brief    { meeting, sections:[{key,title,prompt}], kolId?, guidance?,
 //              previousSections? }             → { sections:[{key,title,content,
 //              prompt?,origin?}] } (origin "ai" = a box the model added)
@@ -232,6 +235,24 @@ export async function POST(req: Request) {
       const kolBlock = await kolBlockFor(supabase, String(body?.kolId || ""));
       const notes = await researchMeeting(meeting, kolBlock);
       return NextResponse.json({ notes });
+    }
+
+    // The question bank: a long ranked list to pick from, not the four or
+    // five that fit in the brief. "More questions" sends what is already
+    // there so a second batch never repeats the first.
+    if (action === "questions") {
+      const meeting: MeetingPayload = body?.meeting || {};
+      const kolBlock = await kolBlockFor(supabase, String(body?.kolId || ""));
+      const questions = await writeQuestions({
+        meeting,
+        kolBlock,
+        research: String(body?.research || "").slice(0, 20000),
+        briefText: String(body?.briefText || "").slice(0, 12000),
+        existing: Array.isArray(body?.existing) ? body.existing.map(String).slice(0, 120) : [],
+        count: Math.min(30, Math.max(6, Number(body?.count) || 20)),
+        focus: String(body?.focus || "").slice(0, 500),
+      });
+      return NextResponse.json({ questions });
     }
 
     if (action === "autofill") {

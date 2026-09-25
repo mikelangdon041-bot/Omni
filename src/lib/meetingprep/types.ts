@@ -70,6 +70,37 @@ export interface IdeaSuggestion {
   added: boolean;
 }
 
+// One question in the bank. The model writes text/category/why/followUp/
+// forWhom/rank; the writer owns picked/backup/asked/order — which is why a
+// regenerate adds to the list rather than replacing it.
+export interface QuestionItem {
+  id: string;
+  text: string;
+  category: string;
+  /** At most a dozen words on what the question gets you. */
+  why: string;
+  /** The probe for when the first answer is thin. */
+  followUp: string;
+  /** Who to put it to, when that matters. Empty = anyone. */
+  forWhom: string;
+  /** The model's ranking across the batch it came from; 1 is strongest. */
+  rank: number;
+  /** In the writer's own list, the one they carry in. */
+  picked: boolean;
+  /** Picked, but held back for if the room goes quiet. */
+  backup: boolean;
+  /** Ticked off during the meeting. */
+  asked: boolean;
+  /** Position within the picked list; the writer arranges this. */
+  order: number;
+  source: "ai" | "user";
+}
+
+export interface QuestionBank {
+  items?: QuestionItem[];
+  generatedAt?: string;
+}
+
 export interface GrillItem {
   id: string;
   question: string;
@@ -228,6 +259,7 @@ export interface MpMeeting {
   documents: MpDocument[];
   ideas: IdeaSuggestion[];
   brief: Brief;
+  questions: QuestionBank;
   grill: GrillItem[];
   debrief: Debrief;
   territory_logged: boolean;

@@ -15,6 +15,7 @@ import { Tabs } from "@/components/ui/Tabs";
 import { DiffPreviewModal, type DiffChange } from "@/components/ui/DiffPreviewModal";
 import { SetupTab } from "@/components/meetingprep/SetupTab";
 import { BriefTab } from "@/components/meetingprep/BriefTab";
+import { QuestionsTab } from "@/components/meetingprep/QuestionsTab";
 import { GrillTab } from "@/components/meetingprep/GrillTab";
 import { DebriefTab } from "@/components/meetingprep/DebriefTab";
 import { FolderPicker } from "@/components/meetingprep/FolderPicker";
@@ -27,7 +28,7 @@ import { useBriefGenerator, type GenerateOpts } from "@/lib/meetingprep/useBrief
 import { folderMovePatch, meetingTypeLabel, type BriefSection } from "@/lib/meetingprep/types";
 import { usePersistedState } from "@/lib/usePersistedState";
 
-const TABS = ["Setup", "Brief", "Grill me", "Debrief"] as const;
+const TABS = ["Setup", "Brief", "Questions", "Grill me", "Debrief"] as const;
 type Tab = (typeof TABS)[number];
 
 export default function MeetingPage() {
@@ -262,6 +263,7 @@ export default function MeetingPage() {
           sectionOrder={settings?.section_order}
         />
       )}
+      {tab === "Questions" && <QuestionsTab m={meeting} save={save} flush={flush} />}
       {tab === "Grill me" && <GrillTab m={meeting} save={save} flush={flush} />}
       {tab === "Debrief" && <DebriefTab m={meeting} save={save} userId={userId} />}
 
