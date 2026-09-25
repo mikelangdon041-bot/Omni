@@ -38,6 +38,27 @@ export interface GenerateResult {
   /** The sections the AI proposed (only — never auto-applied). */
   incoming: BriefSection[];
   opts: GenerateOpts;
+  /** What the search turned up, when this run did one. */
+  research?: string;
+}
+
+/** The meeting as the AI routes want it. */
+function payloadOf(m: MpMeeting) {
+  return {
+    title: m.title,
+    meetingType: meetingTypeLabel(m.meeting_type),
+    date: m.date,
+    durationMin: m.duration_min,
+    format: m.format,
+    location: m.location,
+    attendees: m.attendees,
+    explain: m.explain,
+    objectives: m.objectives,
+    background: m.background,
+    concerns: m.concerns,
+    priorTranscript: m.prior_transcript,
+    documents: (m.documents || []).map((d) => ({ name: d.name, note: d.note, text: d.text })),
+  };
 }
 
 export function useBriefGenerator({
@@ -156,6 +177,31 @@ export function useBriefGenerator({
             // never lose the generation over the pre-pass.
           }
         }
+        // Step 2 — read up on the subject. A brief that knows nothing about
+        // the topic can only give advice about how to have a meeting, which
+        // is the one thing nobody needs. Kept on the meeting so a later redo
+        // of one box is written from the same material.
+        let research = source.brief?.research?.notes || "";
+        if (wholeBrief) {
+          rampTo(60, "Researching the topic");
+          try {
+            const r = await fetch("/api/meeting/ai", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              credentials: "same-origin",
+              body: JSON.stringify({
+                action: "research",
+                meeting: payloadOf(source),
+                kolId: source.kol_id || "",
+              }),
+            });
+            const rj = await r.json();
+            if (r.ok && String(rj.notes || "").trim()) research = String(rj.notes).trim();
+          } catch {
+            // A brief written from the meeting alone is still a brief — never
+            // lose the generation because the search failed.
+          }
+        }
         if (wholeBrief) rampTo(95, "Writing your brief");
 
         const res = await fetch("/api/meeting/ai", {
@@ -164,25 +210,8 @@ export function useBriefGenerator({
           credentials: "same-origin",
           body: JSON.stringify({
             action: "brief",
-            meeting: {
-              title: source.title,
-              meetingType: meetingTypeLabel(source.meeting_type),
-              date: source.date,
-              durationMin: source.duration_min,
-              format: source.format,
-              location: source.location,
-              attendees: source.attendees,
-              explain: source.explain,
-              objectives: source.objectives,
-              background: source.background,
-              concerns: source.concerns,
-              priorTranscript: source.prior_transcript,
-              documents: (source.documents || []).map((d) => ({
-                name: d.name,
-                note: d.note,
-                text: d.text,
-              })),
-            },
+            meeting: payloadOf(source),
+            research,
             sections: opts.extra
               ? [opts.extra]
               : opts.onlyKey
@@ -201,7 +230,7 @@ export function useBriefGenerator({
         stopRamp();
         setStage("Done");
         setProgress(100);
-        return { incoming, opts };
+        return { incoming, opts, research };
       } catch (e) {
         toast("error", (e as Error).message);
         stopRamp();
@@ -218,7 +247,7 @@ export function useBriefGenerator({
   // Writes a previously-fetched proposal to the meeting. Called only after
   // the user reviews and accepts it.
   const applyGenerated = useCallback(
-    (incoming: BriefSection[], opts: GenerateOpts) => {
+    (incoming: BriefSection[], opts: GenerateOpts, research?: string) => {
       const latest = mRef.current;
       setProgress(0);
       setStage("");
@@ -240,6 +269,9 @@ export function useBriefGenerator({
         brief: {
           ...latest.brief,
           sections: next,
+          ...(research
+            ? { research: { notes: research, at: new Date().toISOString() } }
+            : {}),
           generatedAt: new Date().toISOString(),
           // A single section redo (or adding one new section) only
           // refreshes part of the brief — the rest may still be stale

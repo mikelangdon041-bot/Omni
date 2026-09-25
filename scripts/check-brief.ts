@@ -10,7 +10,7 @@
 // to deliver without writing it out.
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { writeBrief } from "@/lib/meetingprep/briefAi";
+import { researchMeeting, writeBrief } from "@/lib/meetingprep/briefAi";
 import { DEFAULT_BRIEF_SECTIONS, meetingTypeLabel, type MpMeeting } from "@/lib/meetingprep/types";
 
 for (const line of readFileSync(".env.local", "utf8").split(/\r?\n/)) {
@@ -26,8 +26,7 @@ async function main() {
   const m = (parsed.row_to_json ?? parsed) as MpMeeting;
   if (!m.title && !m.explain) throw new Error("No meeting in that file");
   const t0 = Date.now();
-  const out = await writeBrief({
-    meeting: {
+  const payload = {
       title: m.title,
       meetingType: meetingTypeLabel(m.meeting_type),
       date: m.date ?? undefined,
@@ -41,11 +40,17 @@ async function main() {
       concerns: m.concerns,
       priorTranscript: m.prior_transcript,
       documents: m.documents,
-    },
+  };
+  const research = await researchMeeting(payload);
+  console.log(`===== RESEARCH (${((Date.now() - t0) / 1000).toFixed(0)}s)\n${research}`);
+  const out = await writeBrief({
+    meeting: payload,
     sections: DEFAULT_BRIEF_SECTIONS,
+    research,
   });
   const secs = ((Date.now() - t0) / 1000).toFixed(0);
-  if (outPath) writeFileSync(outPath, JSON.stringify(out, null, 2));
+  if (outPath)
+    writeFileSync(outPath, JSON.stringify({ sections: out, research }, null, 2));
 
   const text = (html: string) =>
     html
@@ -64,9 +69,26 @@ async function main() {
   // A headcount only counts as invented when it counts people: "the three
   // pillars in the panel title" is in the title the writer gave.
   const count = all.match(
-    /\b(these|the|our|all|both)?\s*(two|three|four|five|six|2|3|4|5|6)\s*(of you|panelists?|speakers?|people|guests|attendees)\b|\b(these|those) (two|three|four|five|six)\b/i,
+    /\b(these|those|the|our|all|both) (two|three|four|five|six|2|3|4|5|6) (of you|panelists?|speakers?|people|guests|attendees)\b/i,
   );
+
   if (count && !people) problems.push(`states a headcount nobody gave: "${count[0]}"`);
+  // Did the research actually reach the page? Distinctive tokens are the
+  // proper nouns and figures the search turned up; a brief that used none of
+  // them was written from nothing, whatever the notes say.
+  if (!research.trim()) problems.push("the research pass came back empty");
+  else {
+    const tokens = [
+      ...new Set(
+        (research.match(/\b(?:[A-Z][A-Za-z]{3,}|\d[\d.,%]{2,})\b/g) || []).filter(
+          (t) => !/^(The|This|That|Their|These|Where|What|When|Open|Sources)$/.test(t),
+        ),
+      ),
+    ];
+    const used = tokens.filter((t) => all.includes(t));
+    console.log(`research terms reaching the brief: ${used.length}/${tokens.length}`);
+    if (used.length < 3) problems.push("the brief barely used the research notes");
+  }
   const bare = all.match(/(ask|pose|open with) (one|a) (sharp|strong|good)[^<]*question[^<]*<\/li>/gi) || [];
   if (bare.length) problems.push(`a question it never writes out: ${bare[0]}`);
   console.log(`\n${secs}s, ${out.length} sections (${out.filter((s) => s.origin === "ai").length} added)`);

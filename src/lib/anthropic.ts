@@ -19,6 +19,13 @@ export const WRITER_MODEL = process.env.ANTHROPIC_WRITER_MODEL || "claude-opus-4
 // Meeting Prep AI action silently failed this way until 2026-07-26. Steer
 // output with the prompt, or with `output_config: { effort }`, instead.
 
+// Searching the web and condensing what comes back, for Meeting Prep's
+// research pass. Not the writer model: the same search ran 371s on it (and
+// 298s at low effort), past the 300s route ceiling, because the wait is the
+// searching itself. This step judges and condenses rather than reasons, and
+// the writer model still writes every word of the brief from its notes.
+export const RESEARCH_MODEL = process.env.ANTHROPIC_RESEARCH_MODEL || "claude-sonnet-5";
+
 // Cheap, fast model for the small transformations that don't need the writer
 // model: condensing a bullet, drafting a recap email from notes that already
 // exist. Both are rewrites of text we already have, not fresh reasoning.

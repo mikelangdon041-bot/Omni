@@ -84,6 +84,7 @@ export default function MeetingPage() {
     changes: DiffChange[];
     opts: GenerateOpts;
     incoming: BriefSection[];
+    research?: string;
   } | null>(null);
   const [applying, setApplying] = useState(false);
   const hasBrief = (meeting?.brief?.sections || []).length > 0;
@@ -92,7 +93,7 @@ export default function MeetingPage() {
   // to compare against, so it applies straight away (same as before).
   async function generateDirect(opts?: GenerateOpts) {
     const result = await generator.generate(opts);
-    if (result) generator.applyGenerated(result.incoming, result.opts);
+    if (result) generator.applyGenerated(result.incoming, result.opts, result.research);
   }
 
   async function generateWithPreview(opts?: GenerateOpts) {
@@ -105,7 +106,12 @@ export default function MeetingPage() {
       oldContent: cur.find((s) => s.key === inc.key)?.content || "",
       newContent: inc.content,
     }));
-    setPreview({ changes, opts: result.opts, incoming: result.incoming });
+    setPreview({
+      changes,
+      opts: result.opts,
+      incoming: result.incoming,
+      research: result.research,
+    });
   }
 
   function applyPreview() {
@@ -125,6 +131,7 @@ export default function MeetingPage() {
         };
       }),
       preview.opts,
+      preview.research,
     );
     setApplying(false);
     setPreview(null);

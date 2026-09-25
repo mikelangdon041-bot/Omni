@@ -13,6 +13,7 @@ import {
   BriefRefusal,
   NO_FORMATTING_RULE,
   meetingContext,
+  researchMeeting,
   writeBrief,
   type MeetingPayload,
 } from "@/lib/meetingprep/briefAi";
@@ -24,6 +25,7 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 // Meeting Prep AI — powered by Claude (same model as Writing Studio). Actions:
+//   research { meeting, kolId? }               → { notes } (live web search)
 //   brief    { meeting, sections:[{key,title,prompt}], kolId?, guidance?,
 //              previousSections? }             → { sections:[{key,title,content,
 //              prompt?,origin?}] } (origin "ai" = a box the model added)
@@ -212,6 +214,7 @@ export async function POST(req: Request) {
           guidance,
           previous: body?.previousSections,
           onlyKey: String(body?.onlyKey || ""),
+          research: String(body?.research || "").slice(0, 20000),
         });
         return NextResponse.json({ sections: out });
       } catch (e) {
@@ -219,6 +222,16 @@ export async function POST(req: Request) {
           return NextResponse.json({ error: e.message }, { status: 502 });
         throw e;
       }
+    }
+
+    // Reading up on the subject before the brief is written. Its own call and
+    // its own step in the UI, because it searches the web and that takes as
+    // long again as the writing does.
+    if (action === "research") {
+      const meeting: MeetingPayload = body?.meeting || {};
+      const kolBlock = await kolBlockFor(supabase, String(body?.kolId || ""));
+      const notes = await researchMeeting(meeting, kolBlock);
+      return NextResponse.json({ notes });
     }
 
     if (action === "autofill") {

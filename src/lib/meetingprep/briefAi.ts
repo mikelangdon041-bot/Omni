@@ -4,7 +4,7 @@
 // against a real meeting outside the browser: the route and any check script
 // call the same function, so a check exercises the prompt that ships.
 
-import { anthropic, WRITER_MODEL } from "@/lib/anthropic";
+import { anthropic, RESEARCH_MODEL, WRITER_MODEL } from "@/lib/anthropic";
 import { stripHtml } from "@/lib/territory/utils";
 
 export interface MeetingPayload {
@@ -125,6 +125,18 @@ const EXTRA_SECTIONS_RULE = `Improvise when the meeting needs it. The requested 
 - Never add a section that repeats a requested section, and never one whose title matches an existing section.
 - key: short snake_case, unique. title: a plain box heading (3-7 words). prompt: one or two sentences describing what the section contains, written as an instruction, so it can be rewritten later. content: the section itself, following every rule above.`;
 
+// The rule the "never invent" rule kept eating. Told only not to invent, the
+// model treated its own subject knowledge as an invention too, and wrote
+// process advice with the substance left out: questions that restate the panel
+// title, talking points about "tying points to what they care about". Nobody
+// needs a brief to be told to ask a good question. They need the question that
+// only someone who knows the field would ask.
+const DOMAIN_RULE = `Bring what you know about the subject. "Never invent" governs facts about THIS meeting and THESE people, not the subject matter itself.
+- On the field, the science, the market, the policy or the technology in play: be specific and current. Name the actual shifts, the real debates, the regulations, the metrics, the technologies and the numbers, in the terms practitioners use. Where research notes are provided, they are the freshest material you have: lead with them.
+- Every question, talking point and objection must be one only someone who knows this field could have written. A question that restates the meeting's title back as a question ("what does the future of X look like?", "what does strategic leadership really mean?") is filler: replace it with one that names the specific tension, change, number or trade-off underneath it.
+- Prefer the concrete disagreement to the abstraction: who is under pressure, what is being cut or funded, what changed in the last year or two, what people in this field argue about privately.
+- Attribute what you draw from the research notes inline, briefly, as source plus year. Where you are working from your own knowledge and the fact is checkable and load-bearing, mark it "(worth checking)" so the writer verifies before saying it out loud. Never dress up a guess as a cited fact.`;
+
 const SECTION_ITEM = {
   type: "object" as const,
   properties: {
@@ -182,6 +194,126 @@ const slug = (s: string) =>
     .replace(/^_+|_+$/g, "")
     .slice(0, 40);
 
+// Reading up on the subject before writing a word of the brief.
+//
+// This runs as its own plain-text call, the way Writing Studio's "Look it up"
+// does: a search loop wants to think out loud across several turns, and the
+// brief call is pinned to a JSON schema. The notes come back once and are
+// then handed to the brief (and kept on the meeting, so a later single-box
+// redo is written from the same material rather than searching again).
+/**
+ * Did the model spend its notes explaining that it could not search, rather
+ * than on the subject? The giveaway is in the opening lines; a note that
+ * mentions in passing that one fact could not be confirmed is still useful,
+ * so only the opening and explicit tool-limit wording count.
+ */
+export function researchIsAnApology(notes: string): boolean {
+  const opener = notes.slice(0, 400);
+  return (
+    /\b(search|web search|the tool)\b[^.]{0,60}\b(was|is|has been|were)\b[^.]{0,40}\b(unavailable|down|blocked|failing|not available)/i.test(
+      opener,
+    ) ||
+    /\b(unable|not able|could ?n[o\u2019']t|failed) to (search|retrieve|access|reach)/i.test(opener) ||
+    /\btool[- ]limit\b|\busage limit\b|\bmax_uses_exceeded\b/i.test(notes)
+  );
+}
+
+export async function researchMeeting(
+  meeting: MeetingPayload,
+  kolBlock = "",
+): Promise<string> {
+  const searchTools = [
+    { type: "web_search_20260209" as const, name: "web_search" as const, max_uses: 8 },
+  ];
+  const system = `You are the researcher for a meeting brief. Someone is about to walk into this meeting; your job is to find what they should know about the SUBJECT, so the brief can be specific instead of generic.
+
+What to search for, in priority order:
+- The subject matter itself: what is actually happening in this field right now, the live debates, what changed in the last year or two, the numbers people cite, the terms of art. This is most of the value.
+- The named people and organizations in the context, if any: their role, their recent work, positions they have taken publicly, anything that shapes how to talk to them.
+- The event, venue or programme, if one is named.
+
+Rules:
+- Search before answering. Never answer from memory alone.
+- Do NOT narrate the searching. No "let me look that up", no commentary on what came back. Only the findings.
+- Return plain text. No markdown of any kind: no headings, no asterisks, no bold. Under 400 words, as short labelled lines or a tight list.
+- Start with the first finding. No preamble, no "here is your briefing", no sign-off.
+- Lead with what changes the content of the brief: the specific developments, tensions and figures the writer could name out loud in the room.
+- Attribute every substantive claim inline as a source plus year ("McKinsey, 2025"). No bare URLs, no footnotes.
+- Where sources disagree, say so in a line rather than picking a winner.
+- End with two or three lines headed "Open questions in the field" naming what practitioners genuinely argue about, since those make the sharpest questions.
+- If a search turns up nothing solid on something, say so plainly rather than filling the gap with plausible invention.
+- If a search fails, move on to the next one. Do not retry the same search repeatedly.
+- You are writing notes that another program will read, not talking to a person. Never address the reader, never ask them anything, never offer to do more.`;
+
+  const question = `Research the subject of this meeting so the brief can be specific.\n\n${meetingContext(
+    meeting,
+    kolBlock,
+  ) || "(minimal context)"}`;
+
+  // Low effort on a fast model: this step searches and condenses, it does
+  // not reason, and it has to come back inside the route's 300s ceiling.
+  const params = {
+    model: RESEARCH_MODEL,
+    max_tokens: 6000,
+    output_config: { effort: "low" as const },
+    tools: searchTools,
+    system,
+  };
+  let res = await anthropic().messages.create({
+    ...params,
+    messages: [{ role: "user", content: question }],
+  });
+  // A server-side tool loop can stop for breath partway through; re-send so it
+  // can finish, carrying the system prompt along or the second half is written
+  // without any of the rules above.
+  for (let i = 0; i < 3 && res.stop_reason === "pause_turn"; i++) {
+    res = await anthropic().messages.create({
+      ...params,
+      messages: [
+        { role: "user", content: question },
+        { role: "assistant", content: res.content },
+      ],
+    });
+  }
+  if (res.stop_reason === "refusal") return "";
+
+  // Only the text after the last tool block is the answer; the text between
+  // tool calls is the model working out loud. Matching on "not text" rather
+  // than naming the block types, because this tool version filters results
+  // through code execution and the turn comes back as an interleaving of
+  // several kinds of tool block.
+  const lastToolAt = res.content.reduce(
+    (found, block, i) => (block.type === "text" ? found : i),
+    -1,
+  );
+  const notes = res.content
+    .slice(lastToolAt + 1)
+    .filter((b) => b.type === "text")
+    .map((b) => ("text" in b ? b.text || "" : ""))
+    .join("\n")
+    .trim();
+  // A search tool that errors (a usage limit, an outage) leaves the model
+  // writing about the tool instead of the subject. Those notes are worse than
+  // none — one brief opened its landscape section with "Search was down when
+  // this brief was written" — so they are thrown away and the brief is written
+  // from the model's own knowledge of the field instead.
+  //
+  // Two checks, because neither alone caught it: a result block can come back
+  // with rows while the searches that mattered still failed, and the giveaway
+  // is then in the notes, which open by apologising for the tool.
+  const searched = res.content.some(
+    (b) =>
+      b.type === "web_search_tool_result" &&
+      Array.isArray((b as { content?: unknown }).content) &&
+      (b as { content: unknown[] }).content.length > 0,
+  );
+  if (!searched || researchIsAnApology(notes)) return "";
+  return notes
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/^#{1,6}\s*/gm, "")
+    .trim();
+}
+
 export async function writeBrief({
   meeting,
   sections,
@@ -189,6 +321,7 @@ export async function writeBrief({
   guidance = "",
   previous,
   onlyKey = "",
+  research = "",
 }: {
   meeting: MeetingPayload;
   sections: BriefSectionSpec[];
@@ -196,8 +329,16 @@ export async function writeBrief({
   guidance?: string;
   previous?: unknown;
   onlyKey?: string;
+  /** Findings from researchMeeting(), treated as the freshest facts available. */
+  research?: string;
 }): Promise<WrittenSection[]> {
-  const context = meetingContext(meeting, kolBlock);
+  const context = [
+    meetingContext(meeting, kolBlock),
+    research &&
+      `Research notes, from a web search run just now for this brief. Treat these as current fact and use them — this is the material that makes the brief worth reading:\n${research.slice(0, 20000)}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
   const wanted = onlyKey ? sections.filter((s) => s.key === onlyKey) : sections;
   // Extra boxes are only offered when the whole brief is being written, so
   // there is a whole picture to judge the gap against. A single-box redo (or
@@ -222,9 +363,12 @@ ${BRIEF_HTML_RULE}
 ${SCRIPT_RULE}
 
 ${SEAT_RULE}
+
+${DOMAIN_RULE}
 ${allowExtras ? `\n${EXTRA_SECTIONS_RULE}\n` : ""}
 Hard rules:
-- Ground everything in the provided meeting context. NEVER invent facts, names, data, or commitments not present. When context is thin for a section, give genuinely useful general guidance for this type of meeting instead of fabricating specifics — say less rather than make things up.
+- NEVER invent facts, names, data or commitments about this meeting or these people that the context doesn't give. That restriction is about them, not about the subject — see the rule above on bringing what you know.
+- When the context is thin on the people, do NOT fall back to advice about how to have a meeting. Fill the space with substance about the subject instead: the real questions, the live debates, what is actually changing. Process advice with no subject matter in it is the one thing this brief must never be.
 - Never state a length, date, time of day or headcount that the context doesn't give, including in scripted lines: not "these four panelists", not "good afternoon", not "over the next thirty minutes". Write around it ("our panel", "welcome") or use a placeholder. If the duration is "not given", don't assume one: express timings as a share of the time and say once that they firm up when the slot length is confirmed.
 - When a previous version of a section is provided, that is the user's own current text (possibly hand-edited). Build on it and extend it — keep everything in it that the guidance didn't ask you to change. Do not silently rewrite it into your own voice or drop details it already has. Only make the specific change the guidance asks for; if no guidance is given, make the smallest improvement that adds real value (fix a gap, sharpen something vague, write out words the section only describes) rather than a wholesale rewrite.
 - Be concrete and practical — things you could actually say or do, not platitudes.

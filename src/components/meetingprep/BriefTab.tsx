@@ -20,6 +20,7 @@ import {
   Lightbulb,
   ListOrdered,
   ListTodo,
+  Globe,
   MessageSquare,
   MessagesSquare,
   Plus,
@@ -57,6 +58,7 @@ const SECTION_ICONS: Record<string, React.ComponentType<{ size?: number | string
   objective: Target,
   attendees: Users,
   agenda: ListOrdered,
+  landscape: Globe,
   talking_points: MessageSquare,
   questions_theyll_ask: HelpCircle,
   questions_to_ask: MessagesSquare,
@@ -244,7 +246,8 @@ export function BriefTab({
             </p>
             <p className="mt-1 max-w-md text-sm text-muted">
               I&apos;m reading what you wrote, filling in the details on Setup,
-              then writing the brief from your attendees and documents. It takes
+              searching for what&apos;s happening in this space right now, then
+              writing the brief from all of it. It takes
               a minute or two — feel free to look around, I&apos;ll keep
               working in the background.
             </p>
@@ -410,6 +413,26 @@ export function BriefTab({
           );
         })}
       </div>
+
+      {/* What the search turned up. The brief is built from this, so it is
+          worth being able to see it: it shows the sourcing behind a claim,
+          and it is the thing to read when a section looks thin. */}
+      {(m.brief?.research?.notes || "").trim() && (
+        <details className="rounded-xl border border-border bg-surface p-3">
+          <summary className="flex cursor-pointer items-center gap-2 text-sm font-semibold">
+            <Globe size={15} className="text-[var(--accent)]" />
+            What I looked up
+            <span className="font-normal text-muted">
+              {m.brief?.research?.at
+                ? `— searched ${new Date(m.brief.research.at).toLocaleDateString()}`
+                : ""}
+            </span>
+          </summary>
+          <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-muted">
+            {m.brief?.research?.notes}
+          </p>
+        </details>
+      )}
 
       {/* Refine loop */}
       <section className="rounded-xl border border-[var(--accent)]/30 bg-[var(--accent-soft)]/25 p-4">

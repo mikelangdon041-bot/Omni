@@ -47,6 +47,10 @@ export interface Brief {
   sourceFingerprint?: string;
   // Section keys the user has collapsed, remembered per meeting.
   collapsed?: string[];
+  // What the web search turned up about the subject, kept so the user can see
+  // what the brief was built from and so a single-box redo is written from the
+  // same material instead of searching again.
+  research?: { notes: string; at: string };
 }
 
 // A supporting document uploaded to the meeting, with the user's note on what
@@ -359,6 +363,12 @@ export const DEFAULT_BRIEF_SECTIONS: { key: string; title: string; prompt: strin
     title: "Who's in the room",
     prompt:
       "One short block per attendee: who they are, what they care about, and one tailored talking point or connection to make with them, written out as the line to say. If the writer has to introduce people, include each introduction word for word.",
+  },
+  {
+    key: "landscape",
+    title: "What's moving in this space right now",
+    prompt:
+      "The state of the subject itself, built from the research notes: 3-5 developments, debates, figures or changes that are live right now, each named specifically with its source and year, and nested under each one the line about why it matters for THIS meeting and how the writer can use it. This is the section that makes the writer sound like they have been paying attention. No generic observations about the industry; if the research notes are empty, use what you know of the field and mark anything checkable.",
   },
   {
     key: "talking_points",
