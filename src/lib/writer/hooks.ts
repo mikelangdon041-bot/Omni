@@ -374,6 +374,7 @@ const DEFAULT_SETTINGS: Omit<WriterSettings, "user_id"> = {
   variant_count: 1,
   version_retention_days: 10,
   word_swaps: [],
+  auto_voice: false,
 };
 
 export function useWriterSettings(userId: string | null) {

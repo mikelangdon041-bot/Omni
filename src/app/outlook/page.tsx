@@ -25,6 +25,12 @@ import Script from "next/script";
 import { composeFont, plainToHtml, toOutlookHtml } from "@/lib/writer/clipboard";
 import { isShortSignOff } from "@/lib/writer/signature";
 import {
+  alreadyLearned,
+  generatedDetector,
+  joinSamples,
+  splitSamples,
+} from "@/lib/writer/voice";
+import {
   splitComposeBody,
   splitThread,
   threadForPrompt,
@@ -262,9 +268,6 @@ const BUTTON_FOR: Record<Fidelity, string> = {
   rewrite: "Rewrite it",
 };
 
-/** Between one piece of somebody's writing and the next. */
-const SAMPLE_SEPARATOR = "\n\n---\n\n";
-
 const nameTokens = (s: string) => s.toLowerCase().match(/[a-z]{2,}/g) || [];
 
 /**
@@ -297,19 +300,17 @@ function samePerson(from: string, name: string, mail: string): boolean {
 /** Below this there is no style to read, only "sounds good". */
 const SAMPLE_FLOOR = 80;
 
-function countSamples(samples?: string): number {
-  return (samples || "")
-    .split(/\n\s*---+\s*\n/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 40).length;
-}
-
 export default function OutlookPage() {
   const { userId, loading: userLoading } = useUserId();
-  const { docs, add, refresh } = useWriterDocs(userId);
+  const { docs, loading: docsLoading, add, refresh } = useWriterDocs(userId);
   const { settings, save: saveSettings } = useWriterSettings(userId);
 
-  const { styles, add: addStyle, update: updateStyle } = useWriterStyles(userId);
+  const {
+    styles,
+    add: addStyle,
+    update: updateStyle,
+    remove: removeStyle,
+  } = useWriterStyles(userId);
 
   const [officeReady, setOfficeReady] = useState(false);
   // Office.onReady has fired, so the mailbox — and the saved sign-in in its
@@ -358,6 +359,10 @@ export default function OutlookPage() {
   const [me, setMe] = useState<{ name: string; email: string }>({ name: "", email: "" });
   const [learning, setLearning] = useState(false);
   const [learned, setLearned] = useState("");
+  // Which pieces of writing on this thread are ticked. Absent means "the
+  // default for that one", which is on unless Omni wrote it.
+  const [picked, setPicked] = useState<Record<string, boolean>>({});
+  const [pasted, setPasted] = useState("");
   const [swapAvoid, setSwapAvoid] = useState("");
   const [swapPrefer, setSwapPrefer] = useState("");
   const [signOffDraft, setSignOffDraft] = useState("");
@@ -864,38 +869,71 @@ export default function OutlookPage() {
   // but it does not need to — half a thread is usually the person's own
   // replies, already on screen, already parsed into separate messages.
 
-  /** Messages in this thread that this person wrote. Their writing, for free. */
-  const myMessages = useMemo(() => {
-    if (!me.name.trim() && !me.email.trim()) return [];
-    return messages.filter(
-      (m) => samePerson(m.from, me.name, me.email) && m.body.trim().length >= SAMPLE_FLOOR,
-    );
-  }, [messages, me]);
-
   const voice = styles.find((s) => s.kind === "voice") || null;
-  const voiceCount = countSamples(voice?.samples);
-  // A draft of your own counts too: it is the most recent thing you have
-  // written, and it is about this very email.
-  const newSamples = [...myMessages.map((m) => m.body.trim()), typed.trim()]
-    .filter((s) => s.length >= SAMPLE_FLOOR)
-    // Nothing it has already been taught. Pressing the button twice on the same
-    // thread should say there is nothing new, not learn the same email again.
-    .filter((s) => !(voice?.samples || "").includes(s.slice(0, SAMPLE_FLOOR)));
+  const learnedSamples = useMemo(() => splitSamples(voice?.samples || ""), [voice?.samples]);
+  const voiceCount = learnedSamples.length;
+
+  // Everything Omni has written for this person. Not a nicety: without it the
+  // pane offers to learn from its own output — see lib/writer/voice.ts.
+  const wasGenerated = useMemo(
+    () => generatedDetector(docs.map((d) => htmlToPlain(d.content)).filter(Boolean)),
+    [docs],
+  );
 
   /**
-   * Learn — or re-learn — the voice from those. Samples are kept alongside the
-   * profile, never replaced by it: a description of how somebody writes is a
-   * weaker guide than their actual sentences, and generate sends both.
+   * Writing on this thread that could go into the voice, each one flagged with
+   * where it came from and whether Omni wrote it. Offered as a list to tick
+   * rather than as one button, because "learn from the 2 messages you wrote" is
+   * a claim the person has no way to check, and one of those two is quite
+   * likely to be a reply this pane produced.
    */
-  async function learnVoice() {
-    if (!newSamples.length || learning) return;
+  const candidates = useMemo(() => {
+    const seen = new Set<string>();
+    const out: { key: string; text: string; source: string; ours: boolean }[] = [];
+    const push = (text: string, source: string) => {
+      const t = text.trim();
+      if (t.length < SAMPLE_FLOOR) return;
+      const key = t.slice(0, 120);
+      if (seen.has(key)) return;
+      seen.add(key);
+      if (alreadyLearned(t, voice?.samples || "")) return;
+      out.push({ key, text: t, source, ours: wasGenerated(t) });
+    };
+    if (me.name.trim() || me.email.trim())
+      for (const m of messages)
+        if (samePerson(m.from, me.name, me.email))
+          push(m.body, m.sent ? `you, ${m.sent}` : "you, earlier in this thread");
+    // The draft open in Outlook is the most recent thing there is, and also the
+    // single most likely thing to have come out of this pane.
+    push(typed, "the draft open in Outlook");
+    return out;
+  }, [messages, me, typed, voice?.samples, wasGenerated]);
+
+  const offered = candidates.filter((c) => !c.ours);
+  const chosenCandidates = candidates.filter((c) => picked[c.key] ?? !c.ours);
+
+  /**
+   * Learn — or re-learn — the voice from a list of pieces. Samples are kept
+   * alongside the profile, never replaced by it: a description of how somebody
+   * writes is a weaker guide than their actual sentences, and generate sends
+   * both. Passing the full list rather than only the new ones is deliberate —
+   * removing a sample has to re-read the profile without it, or the writing
+   * stays in the profile after it has gone from the list.
+   */
+  async function learnVoice(all: string[], note: string) {
+    if (learning) return;
+    const merged = joinSamples(all).slice(-24000);
     setLearning(true);
     setError("");
     try {
-      const merged = [voice?.samples || "", ...newSamples]
-        .filter(Boolean)
-        .join(SAMPLE_SEPARATOR)
-        .slice(-24000);
+      if (!merged) {
+        // Nothing left to learn from. A voice with no writing behind it is a
+        // paragraph of invented description, so it goes.
+        if (voice) await removeStyle(voice.id);
+        setLearned("Cleared — it has nothing of yours to go on now.");
+        setTimeout(() => setLearned(""), 4000);
+        return;
+      }
       const res = await fetch("/api/writer/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -916,8 +954,7 @@ export default function OutlookPage() {
         });
         if (created) setStyleIds([...activeStyleIds, created.id]);
       }
-      const n = newSamples.length;
-      setLearned(`Got it — ${n} ${n === 1 ? "piece" : "pieces"} of your writing added.`);
+      setLearned(note);
       setTimeout(() => setLearned(""), 4000);
     } catch (e) {
       setError((e as Error).message || "Couldn't read your voice");
@@ -925,6 +962,90 @@ export default function OutlookPage() {
       setLearning(false);
     }
   }
+
+  /** The ticked ones on this thread. */
+  async function learnChosen() {
+    const add = chosenCandidates.map((c) => c.text);
+    if (!add.length) return;
+    setPicked({});
+    await learnVoice(
+      [...learnedSamples, ...add],
+      `Got it — ${add.length} ${add.length === 1 ? "piece" : "pieces"} of your writing added.`,
+    );
+  }
+
+  /** An old email, pasted. The answer when this thread has nothing of yours. */
+  async function learnPasted() {
+    const pieces = splitSamples(pasted).filter((s) => s.length >= SAMPLE_FLOOR);
+    if (!pieces.length) return;
+    setPasted("");
+    await learnVoice(
+      [...learnedSamples, ...pieces],
+      `Got it — ${pieces.length} ${pieces.length === 1 ? "piece" : "pieces"} added.`,
+    );
+  }
+
+  /** Take one back out, and read the profile again without it. */
+  async function forgetSample(index: number) {
+    await learnVoice(
+      learnedSamples.filter((_, i) => i !== index),
+      "Removed, and the profile read again without it.",
+    );
+  }
+
+  /**
+   * "Can't you just read my emails and work it out?" — nearly.
+   *
+   * Office hands this pane the message you are looking at and nothing else.
+   * Reading the Sent folder means Microsoft Graph, which means an Azure app
+   * registration and a tenant admin saying yes. What it can do instead is take
+   * the long way round: every thread you open usually has one of your own
+   * replies in it, so with this on it keeps them as it goes, and after a week
+   * of ordinary mail the voice is built out of dozens of real messages without
+   * anybody pasting anything.
+   *
+   * Two rules make that safe. Nothing Omni wrote is ever taken — the same check
+   * the ticklist uses. And the profile is only re-read every few additions:
+   * samples reach the model directly, so the description of them is the cheap
+   * part to let lag.
+   */
+  const autoVoice = !!settings?.auto_voice;
+  // One key per thread, and empty until everything it depends on has loaded —
+  // most of all the library, because without that the "Omni wrote this" check
+  // answers no to everything and the loop this is guarding against opens right
+  // back up.
+  const autoKey =
+    autoVoice && userId && settings && !docsLoading && !learning
+      ? `${email?.subject || ""}|${messages.length}|${typed.slice(0, 60)}`
+      : "";
+  const autoDone = useRef("");
+  useEffect(() => {
+    if (!autoKey || autoDone.current === autoKey) return;
+    const take = candidates.filter((c) => !c.ours).map((c) => c.text);
+    if (!take.length) return;
+    autoDone.current = autoKey;
+
+    const all = [...learnedSamples, ...take];
+    // Re-read the profile on the first batch and every third after that. In
+    // between, the new writing still reaches the model — it goes as samples,
+    // and the profile is only the description of them, which can afford to lag.
+    const restate =
+      !voice?.voice_profile ||
+      Math.floor(all.length / 3) > Math.floor(learnedSamples.length / 3);
+    // Out of the commit, so opening the pane paints first and this happens
+    // behind it. It is housekeeping; nothing on screen is waiting for it.
+    const id = setTimeout(() => {
+      void (restate
+        ? learnVoice(all, `Picked up ${take.length} more of your writing.`)
+        : voice
+          ? updateStyle(voice.id, { samples: joinSamples(all).slice(-24000) })
+          : Promise.resolve());
+    }, 0);
+    return () => clearTimeout(id);
+    // Everything else is read off the render this key belongs to; listing it
+    // would re-run the effect on each keystroke without changing the answer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoKey]);
 
   const swaps: WordSwap[] = settings?.word_swaps || [];
 
@@ -1119,32 +1240,153 @@ export default function OutlookPage() {
           <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
             Your voice
           </p>
-          {voiceCount > 0 && (
-            <p className="mt-0.5 text-[11px] leading-snug text-ink">
-              ✓ Learned from {voiceCount} {voiceCount === 1 ? "piece" : "pieces"} of your
-              writing, and used on every reply.
-            </p>
-          )}
-          {newSamples.length > 0 ? (
-            <button
-              type="button"
-              onClick={() => void learnVoice()}
-              disabled={learning}
-              className="mt-1 w-full rounded-lg border border-[var(--accent)] px-2 py-1.5 text-[11px] font-semibold text-[var(--accent)] transition hover:bg-[var(--accent-soft)] disabled:opacity-50"
-            >
-              {learning
-                ? "Reading how you write…"
-                : voiceCount
-                  ? `Add the ${newSamples.length} ${newSamples.length === 1 ? "message" : "messages"} you wrote here`
-                  : `Learn from the ${newSamples.length} ${newSamples.length === 1 ? "message" : "messages"} you wrote in this thread`}
-            </button>
+          {voiceCount > 0 ? (
+            <>
+              <p className="mt-0.5 text-[11px] leading-snug text-ink">
+                ✓ Learned from {voiceCount} {voiceCount === 1 ? "piece" : "pieces"} of your
+                writing, and used on every reply.
+              </p>
+              {/* What it is going on, in full. A voice you cannot inspect is a
+                  voice you cannot correct. */}
+              <details className="mt-1">
+                <summary className="cursor-pointer list-none text-[10px] font-medium text-[var(--accent)]">
+                  See what it learned from ▾
+                </summary>
+                <ul className="mt-1 space-y-1">
+                  {learnedSamples.map((sample, i) => (
+                    <li
+                      key={i}
+                      className="flex items-start gap-1 rounded-lg border border-border bg-canvas px-2 py-1"
+                    >
+                      <span className="line-clamp-2 flex-1 text-[10px] leading-snug text-muted">
+                        {sample}
+                      </span>
+                      <button
+                        type="button"
+                        aria-label={`Forget sample ${i + 1}`}
+                        disabled={learning}
+                        onClick={() => void forgetSample(i)}
+                        className="shrink-0 text-[10px] text-muted transition hover:text-ink disabled:opacity-40"
+                      >
+                        ✕
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-1 text-[10px] leading-snug text-muted">
+                  Taking one out reads the profile again without it.
+                </p>
+              </details>
+            </>
           ) : (
             <p className="mt-0.5 text-[11px] leading-snug text-muted">
-              {voiceCount
-                ? "Nothing new here to learn from — open a thread you've replied on and I'll add those too."
-                : "Open a thread you've replied on and I'll learn from the messages you wrote in it. No pasting."}
+              Nothing learned yet, so it writes in its own voice.
             </p>
           )}
+
+          {/* Writing on this thread, offered one at a time rather than as a
+              count. Anything Omni wrote is listed too, unticked and labelled:
+              learning from it would be the model reading its own output back. */}
+          {candidates.length > 0 && (
+            <div className="mt-1.5">
+              <p className="text-[10px] leading-snug text-muted">
+                {offered.length
+                  ? "On this thread. Tick what you actually wrote yourself:"
+                  : "On this thread — but Omni wrote all of it, so none of it is ticked:"}
+              </p>
+              <ul className="mt-1 space-y-1">
+                {candidates.map((c) => {
+                  const on = picked[c.key] ?? !c.ours;
+                  return (
+                    <li key={c.key}>
+                      <label
+                        className={`flex items-start gap-1.5 rounded-lg border px-2 py-1 ${
+                          on ? "border-[var(--accent)] bg-[var(--accent-soft)]" : "border-border bg-canvas"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={on}
+                          onChange={() => setPicked((prev) => ({ ...prev, [c.key]: !on }))}
+                          className="mt-0.5 h-3 w-3 shrink-0 accent-[var(--accent)]"
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block line-clamp-2 text-[10px] leading-snug text-ink">
+                            {c.text}
+                          </span>
+                          <span className="mt-0.5 block text-[10px] text-muted">
+                            {c.source}
+                            {c.ours && " · Omni wrote this — leave it off"}
+                          </span>
+                        </span>
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
+              <button
+                type="button"
+                onClick={() => void learnChosen()}
+                disabled={learning || !chosenCandidates.length}
+                className="mt-1 w-full rounded-lg border border-[var(--accent)] px-2 py-1.5 text-[11px] font-semibold text-[var(--accent)] transition hover:bg-[var(--accent-soft)] disabled:opacity-50"
+              >
+                {learning
+                  ? "Reading how you write…"
+                  : `Learn from ${chosenCandidates.length} of these`}
+              </button>
+            </div>
+          )}
+
+          {/* The long way round to "just read my emails and work it out". */}
+          <label className="mt-1.5 flex items-start gap-1.5 rounded-lg border border-border bg-canvas px-2 py-1.5">
+            <input
+              type="checkbox"
+              checked={autoVoice}
+              onChange={(e) => void saveSettings({ auto_voice: e.target.checked })}
+              className="mt-0.5 h-3 w-3 shrink-0 accent-[var(--accent)]"
+            />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[11px] font-medium text-ink">
+                Keep learning as I go
+              </span>
+              <span className="mt-0.5 block text-[10px] leading-snug text-muted">
+                Every thread you open, it keeps the messages you wrote in it —
+                never the ones written here. Outlook won&apos;t let an add-in read
+                your Sent folder, so this is the way there: a week of normal mail
+                and it has plenty. Everything it takes is listed above, and can
+                be taken back out.
+              </span>
+            </span>
+          </label>
+
+          {/* And the answer to "what if this thread has nothing of mine in it". */}
+          <details className="mt-1.5" open={!candidates.length && !voiceCount}>
+            <summary className="cursor-pointer list-none text-[10px] font-medium text-[var(--accent)]">
+              Paste in older emails you wrote ▾
+            </summary>
+            <textarea
+              aria-label="Emails you wrote"
+              value={pasted}
+              onChange={(e) => setPasted(e.target.value)}
+              rows={4}
+              placeholder={
+                "Copy a few replies out of your Sent folder and paste them here.\n\nPut --- on a line of its own between them. Leave the signatures off."
+              }
+              className="mt-1 w-full resize-none rounded-md border border-border bg-canvas px-2 py-1 text-[11px] leading-snug outline-none focus:border-[var(--accent)]"
+            />
+            <button
+              type="button"
+              onClick={() => void learnPasted()}
+              disabled={learning || pasted.trim().length < SAMPLE_FLOOR}
+              className="mt-1 w-full rounded-lg border border-border px-2 py-1.5 text-[11px] font-medium text-muted transition hover:text-ink disabled:opacity-40"
+            >
+              {learning ? "Reading how you write…" : "Add these to my voice"}
+            </button>
+            <p className="mt-0.5 text-[10px] leading-snug text-muted">
+              Four or five is plenty — past that it stops making much difference.
+            </p>
+          </details>
+
           {learned && (
             <p className="mt-1 rounded-lg border border-emerald-300 bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-700">
               {learned}

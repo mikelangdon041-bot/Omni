@@ -156,6 +156,18 @@ export interface WriterSettings {
   version_retention_days: number;
   /** Applies to everything you write: it is a fact about you, not about a style. */
   word_swaps: WordSwap[];
+  /**
+   * Keep adding to the voice from the threads you open, without being asked.
+   *
+   * The nearest thing an add-in has to reading your Sent folder, which it
+   * cannot do: Office hands over the message you are looking at and nothing
+   * else, and going wider means Microsoft Graph, an Azure app registration and
+   * your tenant admin's consent. A thread usually carries one of your own
+   * replies, so opening your mail normally for a week does the same job. Off
+   * by default — quietly accumulating somebody's writing is not a default
+   * anyone chose. See lib/writer/voice.ts for what is filtered out of it.
+   */
+  auto_voice: boolean;
 }
 
 export const RETENTION_OPTIONS = [

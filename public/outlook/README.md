@@ -31,13 +31,18 @@ Three different complaints, so three different answers. All of them live under
 underneath what came back — that second one matters, because "I'd never say
 that" is a thought you have while reading it, not while filling a form in.
 
-- **Your voice.** Gmail learns this by reading your sent mail; an add-in can't
-  go through your Sent folder, and doesn't need to. Half of any thread is
-  usually your own replies, already open, already separated out. One tap turns
-  the messages you wrote in this thread into writing samples. The samples are
-  kept, not just the summary of them — a description of how somebody writes is
-  a weaker guide than their actual sentences, so the model gets both. Teach it
-  again on another thread and it adds to what it has.
+- **Your voice.** Gmail learns this by reading your sent mail. An add-in can't:
+  Office hands over the message you're looking at and nothing else, and going
+  wider means Microsoft Graph, an Azure app registration and your tenant admin
+  agreeing to it. It doesn't need to. Half of any thread is usually your own
+  replies, already open, already separated out — so the writing on the thread
+  is listed and you tick what's actually yours. **Keep learning as I go** does
+  it every time you open a thread, so a week of ordinary mail builds the voice
+  without you doing anything. When a thread has nothing of yours in it, paste
+  a few old emails instead. The samples are kept, not just the summary of them
+  — a description of how somebody writes is a weaker guide than their actual
+  sentences, so the model gets both — and everything it has learned is listed,
+  with an ✕ on each.
 - **Words you'd never use.** "Never _lovely_, say _great_." Stored as a swap
   and never as a bare ban: a list of forbidden words puts those words in front
   of the model and makes it _more_ likely to reach for them, where a
@@ -48,6 +53,21 @@ that" is a thought you have while reading it, not while filling a form in.
   sentence of the email and written by the model, in your own font, rather than
   pasted on underneath; a block of letterhead is still stapled on after the
   body, and never twice.
+
+### Why it never learns from itself
+
+The obvious way to build this is also the way it quietly destroys itself. The
+replies in your Sent folder include the ones written here: you asked for one,
+inserted it, sent it, and a week later it is in the thread under your name.
+Learn from that and the model is reading its own output back — its habits get
+scored as yours, and every round thins out the writing that was actually
+yours until the voice is a generic version of where it started.
+
+So nothing goes in without being checked against everything Omni has written
+for you. The check counts overlapping runs of eight words, which survives you
+rewording a sentence or two before sending, and doesn't trip on two people
+writing about the same subject. Anything it recognises is still listed, but
+unticked and labelled — hidden would be worse than visible and off.
 
 ## What lands in Outlook
 
