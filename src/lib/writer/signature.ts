@@ -232,6 +232,57 @@ export function guessSignatureStart(lines: string[]): number {
 }
 
 /**
+ * The other kind of signature: no phone number, no address, no letterhead at
+ * all. Two lines. "Cheers," and a first name.
+ *
+ * The scan above needs a hard signal before it will cut anything, which is the
+ * right rule for a block of contact details and blind to this. And this is the
+ * common case — plenty of people sign off with nothing else — so without it the
+ * pane reads an untouched reply window as "you have started a draft: Cheers,
+ * Zak" and hands those two words to the model as the piece to work on.
+ *
+ * Narrow on purpose. Below the sign-off line, only name-shaped lines count:
+ * short, few words, and not ending in a full stop unless it belongs to an
+ * abbreviation. That is what keeps "Best,\nI'll send the deck tomorrow." — a
+ * real last sentence, under a real sign-off — out of it.
+ */
+function trailingSignOff(lines: string[]): number {
+  let names = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const t = lines[i].trim();
+    if (!t) continue;
+    if (SIGN_OFF.test(t)) return i;
+    if (names >= 2) return -1;
+    if (t.length > 40 || t.split(/\s+/).length > 4) return -1;
+    if (/[.!?]$/.test(t) && !ABBREVIATION_END.test(t)) return -1;
+    if (isHardSignal(t)) return -1;
+    names++;
+  }
+  return -1;
+}
+
+/**
+ * Is this signature just a sign-off — "Cheers," and a first name — rather than
+ * a block of letterhead?
+ *
+ * It decides who writes it. A letterhead block is stapled on after the piece,
+ * because it is an object rather than prose and no model should be inventing a
+ * phone number. Two lines of "Cheers, Zak" are the last sentence of the email:
+ * stapling them on gets you a mail client's font in the middle of your own
+ * paragraph flow and a second sign-off when Outlook adds its own. The model is
+ * told to end on those exact words instead, and nothing is appended.
+ */
+export function isShortSignOff(text: string): boolean {
+  const lines = (text || "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (!lines.length || lines.length > 3) return false;
+  if (lines.join(" ").length > 100) return false;
+  return lines.every((l) => l.length <= 40 && !isHardSignal(l) && !looksLikeProse(l));
+}
+
+/**
  * Everything above the signature, with the signature gone.
  *
  * `saved` is the signature the user stored in Omni's settings, as plain text.
@@ -240,10 +291,29 @@ export function guessSignatureStart(lines: string[]): number {
  */
 export function stripSignature(text: string, saved = ""): string {
   const lines = (text || "").split(/\r?\n/);
-  const guessed = guessSignatureStart(lines);
-  const exact = saved ? savedSignatureStart(lines, saved) : -1;
-  const cut = exact === -1 ? guessed : guessed === -1 ? exact : Math.min(exact, guessed);
+  const cut = signatureCut(lines, saved);
   return (cut === -1 ? lines : lines.slice(0, cut)).join("\n").trim();
+}
+
+/**
+ * The line the signature starts on, or -1: the guess and the saved copy, with
+ * whichever cuts higher winning. Separated out because the caller sometimes
+ * wants the part that was cut off as well as the part that was kept — in a
+ * compose window the signature Outlook dropped in is worth keeping hold of.
+ */
+export function signatureCut(lines: string[], saved = "", ownDraft = false): number {
+  // The letterhead scan first, because it is the one with evidence behind it.
+  // A bare "Cheers, Zak" is only looked for when that found nothing AND these
+  // are the person's own words in a compose window. It stays off everywhere
+  // else on purpose: in a message somebody sent you, a body that is nothing but
+  // "Thanks, Shane" is the whole message, and eating it loses more than leaving
+  // it in ever costs. In your own draft the same two lines are what Outlook put
+  // there before you typed anything.
+  const guessed = guessSignatureStart(lines);
+  const bare = ownDraft && guessed === -1 ? trailingSignOff(lines) : -1;
+  const exact = saved ? savedSignatureStart(lines, saved) : -1;
+  const best = guessed === -1 ? bare : guessed;
+  return exact === -1 ? best : best === -1 ? exact : Math.min(exact, best);
 }
 
 /**

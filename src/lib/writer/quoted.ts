@@ -25,7 +25,7 @@
 // keeps its own name on it, and exactly one of them is marked as the one being
 // answered.
 
-import { stripSignature } from "./signature";
+import { signatureCut, stripSignature } from "./signature";
 
 /** The parts of a compose body, separated. */
 export interface SplitBody {
@@ -33,6 +33,16 @@ export interface SplitBody {
   mine: string;
   /** The thread underneath, verbatim, or "" when this isn't a reply. */
   quoted: string;
+  /**
+   * The signature that was taken off, verbatim, or "".
+   *
+   * Not just rubbish to discard: in a compose window it is the signature
+   * Outlook itself dropped in, which is the only evidence the pane has of how
+   * this person signs off. It is offered back to them rather than thrown away,
+   * and it is how the pane knows not to staple a second signature under a
+   * message that already carries one.
+   */
+  dropped: string;
 }
 
 /** One message inside a quoted thread. */
@@ -252,15 +262,24 @@ function people(raw: string): string {
  * exactly and the higher of the two cuts wins. Passing "" is fine and is the
  * right call for a message that arrived: the signature in that one is the
  * sender's, and it is guessed at like any other.
+ *
+ * `ownDraft` says these are the person's own words in a compose window, which
+ * licenses one extra cut: a bare "Cheers, / Zak" with no contact details under
+ * it. That is what Outlook drops into an untouched reply, and without this the
+ * pane reads it as a draft you started. It is off by default because in a
+ * message that arrived the same two lines may be the entire message.
  */
-export function splitComposeBody(body: string, signature = ""): SplitBody {
+export function splitComposeBody(body: string, signature = "", ownDraft = false): SplitBody {
   const lines = (body || "").split(/\r?\n/);
   const starts = quoteBoundaries(lines);
   const cut = starts.length ? starts[0] : -1;
   const mineLines = cut === -1 ? lines : lines.slice(0, cut);
   const quoted = cut === -1 ? "" : lines.slice(cut).join("\n").trim();
 
-  return { mine: stripSignature(mineLines.join("\n"), signature), quoted };
+  const sig = signatureCut(mineLines, signature, ownDraft);
+  const kept = sig === -1 ? mineLines : mineLines.slice(0, sig);
+  const dropped = sig === -1 ? [] : mineLines.slice(sig);
+  return { mine: kept.join("\n").trim(), quoted, dropped: dropped.join("\n").trim() };
 }
 
 /** Every message in a quoted thread, newest first. */

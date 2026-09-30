@@ -21,14 +21,51 @@
 
 import { htmlToPlain } from "./types";
 
-const FONT =
+// Two destinations, two shapes, and they are not the same shape — which is the
+// bug this split fixes.
+//
+// The CLIPBOARD lands in an unknown client via a paste, so it declares
+// everything: a font, because there is no telling what the paste target's
+// default is, and a margin AND a blank paragraph between blocks, because Word
+// throws the margin away and something has to survive.
+//
+// An INSERT into Outlook is not a paste. setSelectedDataAsync and
+// displayReplyForm hand the HTML to the message body directly, so the margin
+// survives — and then the blank paragraph is on top of it, which is the extra
+// space. Worse, a declared font overrides the font the person set as their
+// default, so text arrives as Calibri 11 in a message they write in something
+// else. So there: no font at all unless we read theirs off the message, and no
+// margin, leaving the blank paragraph as the one and only gap. That is exactly
+// what Outlook itself writes when somebody presses Enter twice.
+const CLIPBOARD_FONT =
   "font-family:Calibri,Helvetica,Arial,sans-serif;font-size:11pt;line-height:1.45";
-const BLOCK_MARGIN = "margin:0 0 12px 0";
-const PARAGRAPH = `${BLOCK_MARGIN};${FONT}`;
-const LIST = `${BLOCK_MARGIN};${FONT};padding-left:24px`;
-const NESTED_LIST = `margin:4px 0 0 0;${FONT};padding-left:24px`;
-const ITEM = `margin:0 0 4px 0;${FONT}`;
-const HEADING = `${BLOCK_MARGIN};font-family:Calibri,Helvetica,Arial,sans-serif;line-height:1.3`;
+
+/** The inline styles every block gets, for one destination. */
+interface Skin {
+  font: string;
+  paragraph: string;
+  list: string;
+  nestedList: string;
+  item: string;
+  heading: string;
+}
+
+/** A skin from a font declaration (possibly empty) and a block margin. */
+function skin(font: string, margin: string): Skin {
+  const f = font ? `;${font}` : "";
+  // A heading sets its own size; inheriting the body's would flatten it.
+  const headingFont = font.replace(/(^|;)\s*font-size\s*:[^;]*/gi, "").replace(/^;+|;+$/g, "");
+  return {
+    font,
+    paragraph: `${margin}${f}`,
+    list: `${margin}${f};padding-left:24px`,
+    nestedList: `margin:4px 0 0 0${f};padding-left:24px`,
+    item: `margin:0 0 4px 0${f}`,
+    heading: `${margin}${headingFont ? `;${headingFont}` : ""};line-height:1.3`,
+  };
+}
+
+const CLIPBOARD_SKIN = skin(CLIPBOARD_FONT, "margin:0 0 12px 0");
 
 // Tags that end the paragraph they appear in. Anything else is inline, and a
 // run of inline nodes sitting loose at the top level is a paragraph nobody got
@@ -57,17 +94,87 @@ function escapeHtml(s: string): string {
  * rather than silently dropped.
  */
 export function toEmailHtml(bodyHtml: string, signatureHtml = "", subject = ""): string {
-  const body = normalizeBlocks(bodyHtml);
-  const signature = signatureHtml ? normalizeBlocks(signatureHtml) : "";
+  return assemble(CLIPBOARD_SKIN, bodyHtml, signatureHtml, subject);
+}
+
+/**
+ * The same piece, for going straight into an Outlook message rather than onto
+ * the clipboard — `setSelectedDataAsync` in a draft, `displayReplyForm` from a
+ * message you are reading.
+ *
+ * `font` is the font declaration read off the message being written, when
+ * there was one to read (see `composeFont`). Empty is the better default, not
+ * a worse one: text with no font of its own takes the font the person set for
+ * writing mail, which is the answer they actually wanted.
+ */
+export function toOutlookHtml(bodyHtml: string, signatureHtml = "", font = ""): string {
+  return assemble(skin(font, "margin:0"), bodyHtml, signatureHtml);
+}
+
+function assemble(s: Skin, bodyHtml: string, signatureHtml: string, subject = ""): string {
+  const body = normalizeBlocks(bodyHtml, s);
+  const signature = signatureHtml ? normalizeBlocks(signatureHtml, s) : "";
   // Same reasoning as the spacers inside each block (see injectSpacers): the
   // gap has to be a real paragraph, not a margin, or Outlook drops it at the
   // seam after the subject line and the one before the signature too.
-  const spacer = `<p style="margin:0;${FONT}">&nbsp;</p>`;
+  const spacer = `<p style="margin:0${s.font ? `;${s.font}` : ""}">&nbsp;</p>`;
   const subjectLine = subject.trim()
-    ? `<p style="margin:0 0 12px 0;${FONT}"><b>Subject: ${escapeHtml(subject.trim())}</b></p>${spacer}`
+    ? `<p style="${s.paragraph}"><b>Subject: ${escapeHtml(subject.trim())}</b></p>${spacer}`
     : "";
   const gap = body && signature ? spacer : "";
-  return `<div style="${FONT}">${subjectLine}${body}${gap}${signature}</div>`;
+  const wrapper = s.font ? ` style="${s.font}"` : "";
+  return `<div${wrapper}>${subjectLine}${body}${gap}${signature}</div>`;
+}
+
+/**
+ * The font the open Outlook message is already written in, as a declaration to
+ * hand back to it — or "" when the HTML doesn't say.
+ *
+ * Outlook spells this two ways depending on which Outlook it is. The new one
+ * and OWA wrap whatever you type in `<div class="elementToProof" style="font-
+ * family:Aptos…;font-size:12pt">`. Classic Outlook is Word, so it puts the
+ * answer in a stylesheet instead, on `p.MsoNormal` or on the `span.EmailStyle`
+ * rule Word generates for the current message.
+ *
+ * `@font-face` blocks are dropped before anything is read: every Outlook ships
+ * one for "Cambria Math", and it sits above the rule that matters.
+ */
+export function composeFont(html: string): string {
+  if (!html) return "";
+  const source = html.replace(/@font-face\s*\{[^}]*\}/gi, "");
+
+  const declaration = (block: string): string => {
+    const family = block.match(/font-family\s*:\s*([^;"}]+)/i)?.[1]?.trim();
+    const size = block.match(/font-size\s*:\s*([^;"}]+)/i)?.[1]?.trim();
+    if (!family && !size) return "";
+    return [family && `font-family:${family}`, size && `font-size:${size}`]
+      .filter(Boolean)
+      .join(";");
+  };
+
+  // What the person is typing into, first: it is the live answer rather than a
+  // rule that may or may not apply to this block.
+  const proof = source.match(/class\s*=\s*"[^"]*elementToProof[^"]*"[^>]*style\s*=\s*"([^"]*)"/i);
+  if (proof) {
+    const d = declaration(proof[1]);
+    if (d) return d;
+  }
+  for (const rule of [/(?:span\.EmailStyle\d+|p\.MsoNormal|\.MsoNormal)\s*(?:,[^{]*)?\{([^}]*)\}/i]) {
+    const m = source.match(rule);
+    if (m) {
+      const d = declaration(m[1]);
+      if (d) return d;
+    }
+  }
+  // Last resort: the first style attribute that names both. A lone font-family
+  // is not enough — Outlook puts one on wrappers that are not the body text.
+  for (const m of source.matchAll(/style\s*=\s*"([^"]*)"/gi)) {
+    if (/font-family/i.test(m[1]) && /font-size/i.test(m[1])) {
+      const d = declaration(m[1]);
+      if (d) return d;
+    }
+  }
+  return "";
 }
 
 /**
@@ -93,8 +200,10 @@ export function plainToHtml(text: string): string {
  * two agree about where the blank lines are.
  */
 export function toEmailText(bodyHtml: string, signatureHtml = "", subject = ""): string {
-  const body = htmlToPlain(normalizeBlocks(bodyHtml));
-  const signature = signatureHtml ? htmlToPlain(normalizeBlocks(signatureHtml)) : "";
+  const body = htmlToPlain(normalizeBlocks(bodyHtml, CLIPBOARD_SKIN));
+  const signature = signatureHtml
+    ? htmlToPlain(normalizeBlocks(signatureHtml, CLIPBOARD_SKIN))
+    : "";
   const withSignature = signature ? `${body}\n\n${signature}` : body;
   return subject.trim() ? `Subject: ${subject.trim()}\n\n${withSignature}` : withSignature;
 }
@@ -103,12 +212,12 @@ export function toEmailText(bodyHtml: string, signatureHtml = "", subject = ""):
  * Rebuild stored HTML as explicit, individually styled blocks: loose inline
  * runs wrapped, blank lines promoted to paragraphs, spacing inlined.
  */
-function normalizeBlocks(html: string): string {
+function normalizeBlocks(html: string, s: Skin): string {
   if (!html?.trim()) return "";
   // Server-side (or any DOM-less caller) falls back to styling whatever blocks
   // are already there. Copying only ever happens in the browser, so this is a
   // safety net rather than a path anyone takes.
-  if (typeof DOMParser === "undefined") return withInlineSpacing(html);
+  if (typeof DOMParser === "undefined") return withInlineSpacing(html, s);
 
   const doc = new DOMParser().parseFromString(`<body>${html}</body>`, "text/html");
   const root = doc.body;
@@ -116,7 +225,7 @@ function normalizeBlocks(html: string): string {
   for (const el of Array.from(root.querySelectorAll("p,div,h1,h2,h3,h4,h5,h6")))
     splitOnBlankLines(el);
   injectSpacers(root, doc);
-  applyInlineStyles(root);
+  applyInlineStyles(root, s);
   return root.innerHTML;
 }
 
@@ -236,7 +345,7 @@ function splitOnBlankLines(el: Element) {
 }
 
 /** Give every block its own margin, font, and line height. */
-function applyInlineStyles(root: HTMLElement) {
+function applyInlineStyles(root: HTMLElement, s: Skin) {
   const blocks = root.querySelectorAll<HTMLElement>(
     "p,div,ul,ol,li,h1,h2,h3,h4,h5,h6,blockquote",
   );
@@ -245,17 +354,17 @@ function applyInlineStyles(root: HTMLElement) {
     if (tag === "UL" || tag === "OL") {
       // A list nested inside an item belongs to the line above it, so it takes
       // the tight item spacing rather than a full paragraph gap.
-      addStyle(el, el.parentElement?.tagName === "LI" ? NESTED_LIST : LIST);
+      addStyle(el, el.parentElement?.tagName === "LI" ? s.nestedList : s.list);
     } else if (tag === "LI") {
-      addStyle(el, ITEM);
+      addStyle(el, s.item);
     } else if (/^H[1-6]$/.test(tag)) {
-      addStyle(el, HEADING);
+      addStyle(el, s.heading);
     } else if (tag === "BLOCKQUOTE") {
-      addStyle(el, `${PARAGRAPH};padding-left:12px;border-left:3px solid #d0d0d0`);
+      addStyle(el, `${s.paragraph};padding-left:12px;border-left:3px solid #d0d0d0`);
     } else if (!el.querySelector(CONTAINS_BLOCK)) {
       // A <div> wrapping other blocks is scaffolding; only text blocks get the
       // paragraph gap, or the spacing doubles up.
-      addStyle(el, PARAGRAPH);
+      addStyle(el, s.paragraph);
       // An empty paragraph is how the editor spells "blank line". Give it
       // something to be tall, or every client collapses it away.
       if (!el.textContent?.trim() && !el.querySelector("img")) el.innerHTML = "&nbsp;";
@@ -273,15 +382,15 @@ function addStyle(el: HTMLElement, style: string) {
 // Styles the blocks that are already present. No restructuring, so a <br>-only
 // draft still pastes flat — but nothing here needs a browser.
 
-function withInlineSpacing(html: string): string {
+function withInlineSpacing(html: string, s: Skin): string {
   return html
     .replace(/<(p|h[1-6])(\s[^>]*)?>/gi, (_m, tag, attrs = "") =>
-      `<${tag}${mergeStyle(attrs, tag.toLowerCase() === "p" ? PARAGRAPH : HEADING)}>`,
+      `<${tag}${mergeStyle(attrs, tag.toLowerCase() === "p" ? s.paragraph : s.heading)}>`,
     )
     .replace(/<(ul|ol)(\s[^>]*)?>/gi, (_m, tag, attrs = "") =>
-      `<${tag}${mergeStyle(attrs, LIST)}>`,
+      `<${tag}${mergeStyle(attrs, s.list)}>`,
     )
-    .replace(/<li(\s[^>]*)?>/gi, (_m, attrs = "") => `<li${mergeStyle(attrs, ITEM)}>`)
+    .replace(/<li(\s[^>]*)?>/gi, (_m, attrs = "") => `<li${mergeStyle(attrs, s.item)}>`)
     .replace(/<p([^>]*)>\s*(?:&nbsp;)?\s*<\/p>/gi, "<p$1>&nbsp;</p>");
 }
 

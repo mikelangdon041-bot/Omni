@@ -9,17 +9,21 @@
 // add-in reads it directly — sender, subject, body, and the thread underneath —
 // and the only thing left to type is the part only you know.
 //
-// It closes the loop as well: once the reply is written, come back to the
-// compose window and this pane drops it in, formatted, with the signature.
-// Generation happens right here in the pane — read the email, set the dials,
-// hit write, watch it come back, edit it if it's not quite right, drop it in.
-// No hand-off to a separate tab: everything the workspace can do to a piece is
-// available here too, just for the one piece this pane exists to write.
+// It closes the loop as well: once the reply is written, this pane drops it
+// into Outlook, formatted, with the signature. Generation happens right here —
+// read the email, say what you want (or nothing), hit write, watch it come
+// back, edit it if it's not quite right, send it across.
+//
+// The layout is the one Gmail's "Help me write" and Copilot in Outlook settled
+// on, because it is the one that needs no explaining: what the email says at
+// the top, ONE optional box, one button that says what it is about to do, and
+// the dials folded away behind "Options" for the times they matter.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Script from "next/script";
-import { plainToHtml, toEmailHtml } from "@/lib/writer/clipboard";
+import { composeFont, plainToHtml, toOutlookHtml } from "@/lib/writer/clipboard";
+import { isShortSignOff } from "@/lib/writer/signature";
 import {
   splitComposeBody,
   splitThread,
@@ -48,6 +52,8 @@ import {
   emptyContext,
   htmlToPlain,
   type Fidelity,
+  type WordSwap,
+  type WriterContext,
   type WriterDoc,
 } from "@/lib/writer/types";
 
@@ -92,7 +98,15 @@ declare global {
   interface Window {
     Office?: {
       onReady: (cb: (info: { host?: string }) => void) => void;
-      context: { mailbox?: { item?: OfficeItem } };
+      context: {
+        mailbox?: {
+          item?: OfficeItem;
+          // Who is signed into this mailbox. The one thing that makes "which
+          // of these messages did I write?" answerable, which is what turns a
+          // thread into writing samples without anybody pasting anything.
+          userProfile?: { displayName?: string; emailAddress?: string };
+        };
+      };
       CoercionType: { Text: string; Html: string };
       AsyncResultStatus: { Succeeded: string };
     };
@@ -120,6 +134,9 @@ interface ReadEmail {
   composing: boolean;
 }
 
+/** How much of a thread goes to the model. */
+type Scope = "thread" | "one";
+
 /** Recipients as names to greet or to account for. */
 function addressNames(list: OfficeAddress[] | undefined, cap = 8): string {
   return (list || [])
@@ -127,6 +144,95 @@ function addressNames(list: OfficeAddress[] | undefined, cap = 8): string {
     .filter(Boolean)
     .slice(0, cap)
     .join(", ");
+}
+
+const sameEmail = (a: ReadEmail, b: ReadEmail) =>
+  a.subject === b.subject &&
+  a.from === b.from &&
+  a.to === b.to &&
+  a.cc === b.cc &&
+  a.body === b.body &&
+  a.composing === b.composing;
+
+/**
+ * The body, taken apart: what you typed, and then the thread underneath as the
+ * list of separate messages it actually is. A thread handed over whole is how
+ * the model ends up answering the newest message when you asked for the first
+ * one, and greeting a name it found at the top. lib/writer/quoted.ts carries
+ * the reasoning and the markers. A plain function rather than only a memo,
+ * because "Write" re-reads the message and has to parse the fresh copy on the
+ * spot, not the one from the last render.
+ */
+function readBody(
+  email: ReadEmail | null,
+  signature: string,
+): { typed: string; messages: ThreadMessage[]; dropped: string } {
+  if (!email) return { typed: "", messages: [], dropped: "" };
+  if (email.composing) {
+    const split = splitComposeBody(email.body, signature, true);
+    // `dropped` is the signature Outlook itself put in this draft. Kept,
+    // because it answers two questions nothing else can: how this person signs
+    // off, and whether Outlook is already going to add one.
+    return {
+      typed: split.mine.trim(),
+      messages: splitThread(split.quoted),
+      dropped: split.dropped,
+    };
+  }
+  // A message you were sent is itself the newest message in the thread, and
+  // its headers came from Office rather than from a quoted block.
+  const split = splitComposeBody(email.body, "");
+  return {
+    typed: "",
+    dropped: "",
+    messages: [
+      {
+        from: email.from,
+        to: email.to,
+        cc: email.cc,
+        sent: "",
+        subject: email.subject,
+        body: split.mine.trim(),
+      },
+      ...splitThread(split.quoted),
+    ],
+  };
+}
+
+// ONE RULE, and it has been got wrong in three different ways: NOTHING THE
+// ADD-IN READS EVER GOES IN THE BOX. The box is empty until the person types
+// in it.
+//
+//   the message being answered  → `source`  → the model, as background
+//   what they typed in Outlook  → `typed`   → the model, as the draft
+//   what they type in this pane → the box   → the model, as the draft or the
+//                                              instruction (see writeReply)
+//
+// All three reach the model. Only the third one is ever on screen in the box.
+// A prefilled box cannot be typed in, and "make it longer" or "just edit what
+// I wrote" are the normal things to want to say. The add-in reads the message
+// by itself; the summary card is where you see that it did.
+function sourceFor(
+  email: ReadEmail | null,
+  messages: ThreadMessage[],
+  pick: number,
+  scope: Scope,
+): string {
+  // "Just this message" is the one being answered on its own — no history, and
+  // a good deal fewer tokens on a long chain.
+  const thread =
+    scope === "one" && messages[pick]
+      ? threadForPrompt([messages[pick]], 0)
+      : threadForPrompt(messages, pick);
+  if (!thread || !email?.composing) return thread;
+  // On a draft, who it will actually go to is known, and it is not always the
+  // same set as the message being answered.
+  const going = [email.to && `To: ${email.to}`, email.cc && `Cc: ${email.cc}`]
+    .filter(Boolean)
+    .join("; ");
+  return going
+    ? `Your reply is addressed to — ${going}. Everyone there will read it.\n\n${thread}`
+    : thread;
 }
 
 /** Grow with what's typed, up to a cap, then scroll — never a fixed box you
@@ -140,12 +246,70 @@ function useAutoGrow(ref: React.RefObject<HTMLTextAreaElement | null>, value: st
   }, [ref, value]);
 }
 
+// "How much should I change your words" only means something once there are
+// words of yours. Worded as what the button will do, and with "write it from
+// this" first when all there is is a note typed here — that is what a note is.
+const FIDELITY_LABELS: Record<Fidelity, string> = {
+  draft: "📝 Write it from this",
+  light: "🔍 Just fix it",
+  polish: "✍️ Polish it",
+  rewrite: "🚀 Rewrite it",
+};
+const BUTTON_FOR: Record<Fidelity, string> = {
+  draft: "Write it",
+  light: "Fix it",
+  polish: "Polish it",
+  rewrite: "Rewrite it",
+};
+
+/** Between one piece of somebody's writing and the next. */
+const SAMPLE_SEPARATOR = "\n\n---\n\n";
+
+const nameTokens = (s: string) => s.toLowerCase().match(/[a-z]{2,}/g) || [];
+
+/**
+ * Is this "From:" line this person?
+ *
+ * Harder than it sounds, and worth getting right, because it is what decides
+ * which messages in a thread are writing samples. Outlook writes the same
+ * person as "Balmuth-Loris, Zak" in a quoted header and hands Office
+ * "Zak Balmuth-Loris" as the display name, so a substring test says no. The
+ * address is the sure thing when it survives into the header; otherwise every
+ * part of the shorter name has to turn up in the longer one, and a name of one
+ * word has to match outright — "Zak" should not claim every Zak on the thread.
+ */
+function samePerson(from: string, name: string, mail: string): boolean {
+  const f = (from || "").toLowerCase().trim();
+  if (!f) return false;
+  const m = mail.toLowerCase().trim();
+  if (m && f.includes(m)) return true;
+  const local = m.split("@")[0];
+  if (local.length > 3 && f.includes(local)) return true;
+
+  const a = nameTokens(f);
+  const b = nameTokens(name);
+  if (!a.length || !b.length) return false;
+  const [short, long]: [string[], string[]] = a.length <= b.length ? [a, b] : [b, a];
+  if (short.length < 2) return a.join(" ") === b.join(" ");
+  return short.every((t) => long.includes(t));
+}
+
+/** Below this there is no style to read, only "sounds good". */
+const SAMPLE_FLOOR = 80;
+
+function countSamples(samples?: string): number {
+  return (samples || "")
+    .split(/\n\s*---+\s*\n/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 40).length;
+}
+
 export default function OutlookPage() {
   const { userId, loading: userLoading } = useUserId();
   const { docs, add, refresh } = useWriterDocs(userId);
-  const { settings } = useWriterSettings(userId);
+  const { settings, save: saveSettings } = useWriterSettings(userId);
 
-  const { styles } = useWriterStyles(userId);
+  const { styles, add: addStyle, update: updateStyle } = useWriterStyles(userId);
 
   const [officeReady, setOfficeReady] = useState(false);
   // Office.onReady has fired, so the mailbox — and the saved sign-in in its
@@ -157,36 +321,52 @@ export default function OutlookPage() {
   // it back from a key kept in the mailbox — see lib/outlook-keys.ts.
   const { restoring, signOut } = useOutlookSignIn(hostReady, userId, userLoading);
   const [email, setEmail] = useState<ReadEmail | null>(null);
-  // The box you type in, and nothing else. It starts empty and STAYS empty
-  // until you put something in it — see the note above `source` for why this
-  // is the one rule here that must never be relaxed again. Everything the
-  // add-in can read for itself travels separately, in `typed` and `source`.
+  // The one box. Starts empty and STAYS empty until you type — see the rule
+  // above `sourceFor`.
   const [draftHtml, setDraftHtml] = useState("");
+  // "Anything else I should know?" — kept, but in Options: two boxes side by
+  // side, both optional, was the single most confusing thing on this panel.
   const [briefHtml, setBriefHtml] = useState("");
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
   const [inserted, setInserted] = useState(false);
 
-  // The same dials as the workspace, because the whole promise here is that you
-  // never have to go to the workspace to set them. Answering something you were
-  // sent is writing from scratch, so "Write it" is the honest default — the
-  // other modes only start meaning something once the draft in front of you is
-  // partly yours.
+  // The same dials as the workspace, so you never have to go there to set
+  // them — but folded away, because most replies need none of them. Answering
+  // somebody from scratch is "write it"; the other modes only mean something
+  // once there are words of yours to be faithful to.
   const [fidelity, setFidelity] = useState<Fidelity>("draft");
   const [tone, setTone] = useState<string[]>([]);
   const [audience, setAudience] = useState<string[]>([]);
   const [length, setLength] = useState("as_is");
-  const [styleIds, setStyleIds] = useState<string[]>([]);
-  // Derived rather than set: flipping a "reading" flag on in the effect body is
-  // a synchronous setState inside an effect, which is a cascading render for a
-  // spinner. The read is under way from the moment there is an email to read.
+  // null means "you haven't chosen", which is not the same as "none". A voice
+  // you taught it is the whole point of teaching it, so until you say otherwise
+  // the voices are on — see `activeStyleIds`.
+  const [styleIds, setStyleIds] = useState<string[] | null>(null);
+  const [scope, setScope] = useState<Scope>("thread");
+  const [summary, setSummary] = useState("");
   const [extractDone, setExtractDone] = useState(false);
   const [autoFilled, setAutoFilled] = useState<string[]>([]);
 
-  // The piece being written, once "Write the reply" has been pressed. Its
-  // presence is what switches the pane from intake to result — everything
-  // after that point (editing, refining, inserting) happens against this doc
-  // without ever leaving the pane.
+  // The font this message is already written in, read off the draft. Handed
+  // straight back on the way in, so what lands matches what is around it —
+  // before this, everything arrived as Calibri 11 whatever the person's own
+  // default was, and they were fixing it with the format painter.
+  const [bodyFont, setBodyFont] = useState("");
+  // Who is signed into this mailbox, so "which of these did I write?" has an
+  // answer. Only used to find writing samples.
+  const [me, setMe] = useState<{ name: string; email: string }>({ name: "", email: "" });
+  const [learning, setLearning] = useState(false);
+  const [learned, setLearned] = useState("");
+  const [swapAvoid, setSwapAvoid] = useState("");
+  const [swapPrefer, setSwapPrefer] = useState("");
+  const [signOffDraft, setSignOffDraft] = useState("");
+  const [signOffSaved, setSignOffSaved] = useState(false);
+
+  // The piece being written, once the button has been pressed. Its presence is
+  // what switches the pane from intake to result — everything after that point
+  // (editing, refining, inserting) happens against this doc without ever
+  // leaving the pane.
   const [resultDoc, setResultDoc] = useState<WriterDoc | null>(null);
   const [resultContent, setResultContent] = useState("");
   const [resultSubject, setResultSubject] = useState("");
@@ -216,8 +396,8 @@ export default function OutlookPage() {
   useAutoGrow(guidanceRef, guidance);
 
   // Autosave for edits made in the result box: optimistic locally, debounced to
-  // the database so the piece survives a reopen and shows up right in "Drop one
-  // in" — but "Add to email" below always uses what's on screen, so a save that
+  // the database so the piece survives a reopen and shows up in "Drop one in" —
+  // but sending it to Outlook always uses what's on screen, so a save that
   // hasn't landed yet is never the thing missing from the reply.
   const pendingRef = useRef<{ content?: string; subject?: string }>({});
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -236,96 +416,143 @@ export default function OutlookPage() {
   // next/script can re-run onLoad across a fast-refresh in development.
   const readied = useRef(false);
 
-  const readOpenItem = useCallback(() => {
-    const Office = window.Office;
-    const item = Office?.context?.mailbox?.item;
-    if (!Office || !item) {
-      setOutsideOutlook(true);
-      return;
-    }
-    // Compose items report their subject through an async accessor; read items
-    // expose it as a plain string. Both shapes are handled because both turn up
-    // — but the answer only changes the wording, never which controls exist.
-    const subjectField = item.subject;
-    const composing = typeof subjectField === "object" && subjectField !== null;
-    const who =
-      item.from?.displayName ||
-      item.from?.emailAddress ||
-      item.sender?.displayName ||
-      item.sender?.emailAddress ||
-      "";
+  /** Read the open message into state, and hand the fresh copy back. */
+  const readOpenItem = useCallback(
+    (): Promise<ReadEmail | null> =>
+      new Promise((resolve) => {
+        const Office = window.Office;
+        const item = Office?.context?.mailbox?.item;
+        if (!Office || !item) {
+          setOutsideOutlook(true);
+          resolve(null);
+          return;
+        }
+        // Compose items report their subject through an async accessor; read
+        // items expose it as a plain string. Both shapes are handled because
+        // both turn up — but the answer only changes the wording, never which
+        // controls exist.
+        const subjectField = item.subject;
+        const composing = typeof subjectField === "object" && subjectField !== null;
+        const who =
+          item.from?.displayName ||
+          item.from?.emailAddress ||
+          item.sender?.displayName ||
+          item.sender?.emailAddress ||
+          "";
 
-    const finish = (subject: string, to: string, cc: string) =>
-      item.body.getAsync(Office.CoercionType.Text, (result) => {
-        const body =
-          result.status === Office.AsyncResultStatus.Succeeded ? result.value || "" : "";
-        setEmail({ subject, from: who, to, cc, body: body.slice(0, 40000), composing });
-      });
+        const finish = (subject: string, to: string, cc: string) =>
+          item.body.getAsync(Office.CoercionType.Text, (result) => {
+            const body =
+              result.status === Office.AsyncResultStatus.Succeeded ? result.value || "" : "";
+            const next = { subject, from: who, to, cc, body: body.slice(0, 40000), composing };
+            // Same message as last time → same object, so a re-read on focus
+            // does not re-render the whole panel for nothing.
+            setEmail((prev) => (prev && sameEmail(prev, next) ? prev : next));
+            resolve(next);
+          });
 
-    // Everyone on the message. A draft hands its recipients over only if you
-    // ask; one you are reading has them sitting there as an array. Both are
-    // worth having: the To field is who the reply opens to, and the whole list
-    // is who will read it.
-    const readList = (field: OfficeRecipients | undefined, then: (names: string) => void) => {
-      if (!field) return then("");
-      if (Array.isArray(field)) return then(addressNames(field));
-      field.getAsync((r) =>
-        then(r.status === Office.AsyncResultStatus.Succeeded ? addressNames(r.value) : ""),
-      );
-    };
+        // Everyone on the message. A draft hands its recipients over only if
+        // you ask; one you are reading has them sitting there as an array.
+        const readList = (field: OfficeRecipients | undefined, then: (names: string) => void) => {
+          if (!field) return then("");
+          if (Array.isArray(field)) return then(addressNames(field));
+          field.getAsync((r) =>
+            then(r.status === Office.AsyncResultStatus.Succeeded ? addressNames(r.value) : ""),
+          );
+        };
 
-    const withRecipients = (subject: string) =>
-      readList(item.to, (to) => readList(item.cc, (cc) => finish(subject, to, cc)));
+        const withRecipients = (subject: string) =>
+          readList(item.to, (to) => readList(item.cc, (cc) => finish(subject, to, cc)));
 
-    if (typeof subjectField === "string") withRecipients(subjectField);
-    else if (composing)
-      // A draft's subject has to be asked for. Reading the body regardless of
-      // how that goes: in a reply the body already holds the thread being
-      // answered, which is the part that matters here.
-      subjectField.getAsync((r) =>
-        withRecipients(r.status === Office.AsyncResultStatus.Succeeded ? r.value || "" : ""),
-      );
-    else withRecipients("");
-  }, []);
+        try {
+          if (typeof subjectField === "string") withRecipients(subjectField);
+          else if (composing)
+            // A draft's subject has to be asked for. Reading the body
+            // regardless of how that goes: in a reply the body already holds
+            // the thread being answered, which is the part that matters here.
+            subjectField.getAsync((r) =>
+              withRecipients(r.status === Office.AsyncResultStatus.Succeeded ? r.value || "" : ""),
+            );
+          else withRecipients("");
+        } catch {
+          resolve(null);
+        }
+      }),
+    [],
+  );
 
   useEffect(() => {
     if (!officeReady || readied.current) return;
     readied.current = true;
     window.Office?.onReady(() => {
       setHostReady(true);
-      readOpenItem();
+      const profile = window.Office?.context?.mailbox?.userProfile;
+      if (profile)
+        setMe({ name: profile.displayName || "", email: profile.emailAddress || "" });
+      void readOpenItem();
     });
   }, [officeReady, readOpenItem]);
 
-  // The body, taken apart: what you typed, and then the thread underneath as
-  // the list of separate messages it actually is. A thread handed over whole is
-  // how the model ends up answering the newest message when you asked for the
-  // first one, and greeting a name it found at the top. lib/writer/quoted.ts
-  // carries the reasoning and the markers.
-  const { typed, messages } = useMemo<{ typed: string; messages: ThreadMessage[] }>(() => {
-    if (!email) return { typed: "", messages: [] };
-    if (email.composing) {
-      const split = splitComposeBody(email.body, htmlToPlain(settings?.signature || ""));
-      return { typed: split.mine.trim(), messages: splitThread(split.quoted) };
+
+  // A draft keeps changing after the pane opens — you type in Outlook, then
+  // come back here. There used to be a "Re-read my message" button for that,
+  // and it looked like a setting rather than something to press. Now the pane
+  // simply re-reads whenever you come back to it, and again the moment you
+  // press the button, so what it writes from is never stale.
+  const composingNow = !!email?.composing;
+  useEffect(() => {
+    if (!composingNow) return;
+    const onFocus = () => void readOpenItem();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [composingNow, readOpenItem]);
+
+  // The font the message is written in. A second read, in HTML this time,
+  // because the text coercion the rest of the pane uses has thrown exactly the
+  // part we need away. Composing only: a message you are reading is in the
+  // sender's font, and the reply window uses the person's own default —
+  // which is precisely what we want it to do.
+  useEffect(() => {
+    if (!composingNow) return;
+    const Office = window.Office;
+    const item = Office?.context?.mailbox?.item;
+    if (!Office || !item) return;
+    try {
+      item.body.getAsync(Office.CoercionType.Html, (r) => {
+        if (r.status !== Office.AsyncResultStatus.Succeeded) return;
+        const font = composeFont(r.value || "");
+        if (font) setBodyFont(font);
+      });
+    } catch {
+      // Nothing read means nothing declared, which is the safe default anyway.
     }
-    // A message you were sent is itself the newest message in the thread, and
-    // its headers came from Office rather than from a quoted block.
-    const split = splitComposeBody(email.body, "");
-    return {
-      typed: "",
-      messages: [
-        {
-          from: email.from,
-          to: email.to,
-          cc: email.cc,
-          sent: "",
-          subject: email.subject,
-          body: split.mine.trim(),
-        },
-        ...splitThread(split.quoted),
-      ],
-    };
-  }, [email, settings]);
+  }, [composingNow]);
+
+  // Which styles this piece gets. Derived rather than seeded by an effect: a
+  // voice is on until you turn it off, and an effect that wrote the default
+  // into state would fight anyone who turned it off before the styles loaded.
+  const activeStyleIds =
+    styleIds ?? styles.filter((s) => s.kind === "voice").map((s) => s.id);
+  const toggleStyle = (id: string) =>
+    setStyleIds(
+      activeStyleIds.includes(id)
+        ? activeStyleIds.filter((s) => s !== id)
+        : [...activeStyleIds, id],
+    );
+
+  // The signature, and the question that decides everything about it: is it a
+  // block of letterhead, or is it two lines of "Cheers, Zak"? A block is an
+  // object, stapled under the piece by whoever inserts it. A sign-off is the
+  // last sentence of the email, so the model writes it and nothing is stapled —
+  // see lib/writer/signature.ts.
+  const signatureHtml = settings?.signature || "";
+  const signature = htmlToPlain(signatureHtml);
+  const signsOff = !!signature.trim() && isShortSignOff(signature);
+  const {
+    typed,
+    messages,
+    dropped: outlookSignature,
+  } = useMemo(() => readBody(email, signature), [email, signature]);
 
   // Which message in the thread is being answered. Defaults to the newest,
   // which is right most of the time and wrong exactly when somebody says
@@ -333,76 +560,52 @@ export default function OutlookPage() {
   const [targetIdx, setTargetIdx] = useState(0);
   const pick = messages.length ? Math.min(targetIdx, messages.length - 1) : 0;
   const target = messages[pick];
-  // ONE RULE, and it has now been got wrong in three different ways: NOTHING
-  // THE ADD-IN READS EVER GOES IN THE BOX. The box is empty until the person
-  // types in it.
-  //
-  //   the message being answered  → `source`  → the model, as background
-  //   what they typed in Outlook  → `typed`   → the model, as the draft
-  //   what they type in this pane → the box   → the model, as the instruction
-  //
-  // All three reach the model. Only the third one is ever on screen in the box.
-  //
-  // The two failures it has had are the same failure: first it ignored the
-  // half-written draft and answered from nothing, then it pasted the email —
-  // signature, thread and all — into the box and called that reading it. A
-  // prefilled box cannot be typed in. "Make it longer" and "just edit what I
-  // wrote" are the normal things to want to say, and there is nowhere to say
-  // them when the box already holds forty lines of somebody else's email. The
-  // add-in can read the message by itself; that is the entire point of it being
-  // in Outlook, and it is exactly why the reading does not need to be shown
-  // back to you in the one place you were meant to write.
-  const source = useMemo(() => {
-    const thread = threadForPrompt(messages, pick);
-    if (!thread || !email?.composing) return thread;
-    // On a draft, who it will actually go to is known, and it is not always the
-    // same set as the message being answered.
-    const going = [email.to && `To: ${email.to}`, email.cc && `Cc: ${email.cc}`]
-      .filter(Boolean)
-      .join("; ");
-    return going
-      ? `Your reply is addressed to — ${going}. Everyone there will read it.\n\n${thread}`
-      : thread;
-  }, [messages, pick, email]);
-  // Whoever wrote the message being answered, which is the whole point of the
-  // picker above: on a thread the sender of the newest message and the sender
-  // of the one you meant are different people.
-  const recipient = target?.from || (email?.composing ? email.to : email?.from) || "";
+  const source = useMemo(
+    () => sourceFor(email, messages, pick, scope),
+    [email, messages, pick, scope],
+  );
+  // The whole thread, whatever the scope says: the summary is read once, when
+  // the pane opens, and is about the conversation, not about a dial.
+  const wholeThread = useMemo(
+    () => sourceFor(email, messages, pick, "thread"),
+    [email, messages, pick],
+  );
+  const boxText = htmlToPlain(draftHtml).trim();
+  // Words of yours to be faithful to: a draft started in Outlook, or anything
+  // typed here when there is no such draft. Without either there is nothing to
+  // "just fix", so that dial is not offered and the piece is written fresh.
+  const ownWords = !!typed || !!boxText;
+  const effectiveFidelity: Fidelity = ownWords ? fidelity : "draft";
   // Relative lengths are unanswerable before anything exists — shorter than
   // what? They are offered only when there is a draft of yours to be shorter
   // than; otherwise the same dial asks in absolute terms.
   const lengthOptions = typed ? LENGTHS : TARGET_LENGTHS;
   // A message to answer is on its own enough to write from — "just reply to
   // this" is a complete request, and the empty box is the normal state for it.
-  // So is a draft already half-written in Outlook. Nothing at all, though, and
-  // a model handed nothing writes a blank template for somebody else to fill
-  // in. Better to say so than to send it.
+  // Nothing at all, though, and a model handed nothing writes a blank template
+  // for somebody else to fill in. Better to say so than to send it.
   const hasIntake =
-    !!htmlToPlain(draftHtml).trim() ||
-    !!htmlToPlain(briefHtml).trim() ||
-    !!typed.trim() ||
-    !!source.trim();
+    !!boxText || !!htmlToPlain(briefHtml).trim() || !!typed.trim() || !!source.trim();
 
-  // Read the dials off the email itself. Who it is from and how it is written
-  // already answer most of "what tone, what audience" — asking you to pick them
-  // by hand for a message the add-in is looking at would be asking you to type
-  // out something it can see. Guesses, so they are flagged as guesses and one
-  // tap moves any of them.
+  // Read the dials off the email itself, and sum it up for the card at the top,
+  // in the one call. Who it is from and how it is written already answer most
+  // of "what tone, what audience" — asking you to pick them by hand for a
+  // message the add-in is looking at would be asking you to type out something
+  // it can see. Guesses, so they are flagged as guesses.
   const extracted = useRef(false);
   useEffect(() => {
     if (!email || !userId || !settings || extracted.current) return;
     // Your own words where there are any, the message being answered where
-    // there are not. Never both: a forty-line thread would otherwise pick the
-    // tone for a reply you have already written half of, and "how much license
-    // do I have with this draft" would be answered about somebody else's
-    // writing.
-    const material = typed || source;
+    // there are not. Never both for the dials: a forty-line thread would
+    // otherwise pick the tone for a reply you have already written half of.
+    // The thread still goes along when there is a draft, for the summary only.
+    const material = typed || wholeThread;
     if (!material.trim() && !email.subject.trim()) return;
     extracted.current = true;
     void (async () => {
       try {
-        // Only while composing: `source` already opens with the sender and the
-        // subject when it is a message that arrived.
+        // Only while composing: the thread already opens with the sender and
+        // the subject when it is a message that arrived.
         const header = email.composing
           ? [email.subject && `Subject: ${email.subject}`, email.to && `To: ${email.to}`]
               .filter(Boolean)
@@ -416,10 +619,13 @@ export default function OutlookPage() {
             action: "extract",
             docType: "email",
             brief: (header ? `${header}\n\n${material}` : material).slice(0, 20000),
+            summarize: messages.length > 0,
+            thread: typed ? wholeThread.slice(0, 20000) : "",
           }),
         });
         const { extracted: ex } = await res.json();
         if (!res.ok || !ex) return;
+        if (typeof ex.summary === "string") setSummary(ex.summary.trim());
         const filled: string[] = [];
         if (Array.isArray(ex.tone) && ex.tone.length) {
           setTone(ex.tone);
@@ -442,66 +648,49 @@ export default function OutlookPage() {
           }
         }
         // How much license the piece gets, but only over words that are
-        // actually yours. "Write it" is the right default for answering
-        // somebody else from scratch and the wrong one for a draft you have
-        // already written properly — handed that, this dial is the difference
-        // between a proofread and a stranger's letter.
+        // actually yours — handed a draft written properly, this dial is the
+        // difference between a proofread and a stranger's letter.
         if (typed && ex.fidelity && FIDELITY_OPTIONS.some((f) => f.key === ex.fidelity)) {
           setFidelity(ex.fidelity as Fidelity);
-          filled.push("how much to write");
+          filled.push("how much to change");
         }
         setAutoFilled(filled);
       } catch {
         // A failed guess is not worth a message: every dial has a usable
-        // default and you were going to check them anyway.
+        // default, and the card falls back to the message itself.
       } finally {
         setExtractDone(true);
       }
     })();
-    // `typed` and `quoted` are derived from `email` and `settings`, so listing
-    // them would not change when this runs; the ref is what makes it once.
+    // `typed`, `wholeThread` and `messages` are derived from `email` and
+    // `settings`, so listing them would not change when this runs; the ref is
+    // what makes it once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [email, userId, settings]);
 
   const reading = !!email && !!userId && !extractDone;
 
-  // There is deliberately no effect here putting anything into the box. The
-  // read lands in `typed` and `source` and goes straight to the model from
-  // there; see the rule above `source`.
-
-  // The pane reads the message once, when it opens. Open it on an empty reply,
-  // then type in Outlook, and it is still holding the read from before you
-  // typed — which from in here is indistinguishable from the add-in ignoring
-  // you. Always offered now: with nothing ever prefilled, a re-read cannot
-  // overwrite a word you typed in this panel, so the button no longer has to
-  // hide itself the moment there is something to lose.
-  function rereadMessage() {
-    extracted.current = false;
-    setExtractDone(false);
-    setAutoFilled([]);
-    setTargetIdx(0);
-    setError("");
-    readOpenItem();
-  }
-
   // The actual AI call, shared by the first write and every refine after it.
-  // `refineGuidance` present means "revise what's on screen"; absent means
-  // "write it from the intake". Either way the result lands in state and is
-  // persisted to the same row, so the doc this pane is working on never
-  // multiplies into several.
+  // Everything it writes from comes off the piece itself — the context saved
+  // with it when the button was pressed — so a refine revises what was
+  // actually asked for, not whatever the dials drifted to afterwards.
   async function runGenerate(
-    target: WriterDoc,
+    doc: WriterDoc,
     refineGuidance?: string,
     priorInstructions: string[] = [],
   ) {
     setGenerating(true);
     setError("");
     try {
+      const ctx = doc.context;
       const styleTexts = styles
-        .filter((s) => styleIds.includes(s.id))
+        .filter((s) => ctx.styleIds.includes(s.id))
         .map((s) => ({
           name: s.name,
           text: s.kind === "voice" ? s.voice_profile : s.rules,
+          // The writing the voice was learned from, not only the description of
+          // it. Sentences are a better guide than a summary of sentences.
+          samples: s.kind === "voice" ? s.samples || "" : "",
         }));
       const refining = !!refineGuidance && !!resultContent.trim();
       const res = await fetch("/api/writer/ai", {
@@ -511,26 +700,24 @@ export default function OutlookPage() {
         body: JSON.stringify({
           action: "generate",
           docType: "email",
-          original: htmlToPlain(target.original),
+          original: htmlToPlain(doc.original),
           previous: refining ? resultContent : "",
           guidance: refineGuidance || "",
-          fidelity,
+          fidelity: ctx.fidelity,
           context: {
-            ...emptyContext(),
-            fidelity,
-            tone,
-            audience,
-            length,
-            styleIds,
-            recipient,
-            // The message being answered. Handed over as background on
-            // purpose: it is what the reply has to make sense against, not a
-            // draft to improve and not something to quote back.
-            background: source,
-            brief: htmlToPlain(target.context.brief),
+            ...ctx,
+            // The message being answered travels as background on purpose: it
+            // is what the reply has to make sense against, not a draft to
+            // improve and not something to quote back.
+            brief: htmlToPlain(ctx.brief),
           },
           styles: styleTexts,
-          signature: settings?.signature ? htmlToPlain(settings.signature) : "",
+          signature,
+          // Whether the model ends on the sign-off itself or leaves room for a
+          // block to be stapled under it. The caller decides, because the
+          // caller is the one that knows whether it will staple anything.
+          signOff: signsOff,
+          wordSwaps: settings?.word_swaps || [],
           priorInstructions,
           variants: 1,
         }),
@@ -540,14 +727,12 @@ export default function OutlookPage() {
       const first = json.variants?.[0];
       if (!first) throw new Error("Nothing usable came back — try again");
       // The subject Outlook already has beats one the model invented: on a
-      // reply the thread's subject is the right answer, and a freshly made-up
-      // "Quick note" landing over the top of "RE: …" is only something to undo
-      // by hand. One typed in this panel outranks both; one the model wrote
-      // last time outranks nothing, or a bad first pass would hand its subject
-      // down to every pass after it.
+      // reply the thread's subject is the right answer. One typed in this panel
+      // outranks both; one the model wrote last time outranks nothing, or a
+      // bad first pass would hand its subject down to every pass after it.
       const subject =
         (subjectEdited.current ? subjectRef.current.trim() : "") ||
-        target.subject.trim() ||
+        doc.subject.trim() ||
         first.subject ||
         "";
       setResultContent(first.html);
@@ -555,7 +740,7 @@ export default function OutlookPage() {
       await supabase
         .from("writer_docs")
         .update({ content: first.html, subject })
-        .eq("id", target.id);
+        .eq("id", doc.id);
       void refresh();
       setGuidance("");
     } catch (e) {
@@ -572,41 +757,57 @@ export default function OutlookPage() {
     if (!email || generating || !hasIntake) return;
     const rewriting = resultDoc;
     setError("");
+    setGenerating(true);
     if (saveTimer.current) clearTimeout(saveTimer.current);
     pendingRef.current = {};
     try {
+      // A draft may have changed since the pane last looked. Read it again now
+      // rather than write from a stale copy — capped, so an Outlook that never
+      // answers costs a second, not the whole write.
+      const fresh = email.composing
+        ? ((await Promise.race([
+            readOpenItem(),
+            new Promise<null>((r) => setTimeout(() => r(null), 1500)),
+          ])) ?? email)
+        : email;
+      const now = readBody(fresh, signature);
+      const nowPick = now.messages.length ? Math.min(targetIdx, now.messages.length - 1) : 0;
+      const nowTarget = now.messages[nowPick];
+      const nowSource = sourceFor(fresh, now.messages, nowPick, scope);
+
       // "Re:" belongs on an answer, not on a message you're writing from
-      // scratch — composing already has whatever subject you've typed, if
-      // any, and it isn't a reply to prefix.
-      const isReply = !email.composing;
-      const subjectLine = email.subject
+      // scratch — composing already has whatever subject you've typed.
+      const isReply = !fresh.composing;
+      const subjectLine = fresh.subject
         ? isReply
-          ? `Re: ${email.subject}`
-          : email.subject
+          ? `Re: ${fresh.subject}`
+          : fresh.subject
         : "";
-      // The three inputs, sorted into the two fields the workspace's Draft and
+      // The inputs, sorted into the two fields the workspace's Draft and
       // "Anything else I should know?" boxes already save to.
       //
       // When Outlook has a half-written draft, THAT is the draft — the box is
-      // you talking about it ("make it longer", "just fix the grammar"), which
-      // is the brief. With no draft in Outlook the box is the only thing you
-      // have said, so it is the draft itself, exactly as the workspace reads
-      // its one box. Either way the thread stays in `background`: context for
-      // the reply, never something to rewrite.
-      const boxText = htmlToPlain(draftHtml).trim();
-      const original = typed ? plainToHtml(typed) : draftHtml;
-      const brief = typed && boxText ? `${draftHtml}${briefHtml}` : briefHtml;
-      const context = {
+      // you talking about it ("make it longer"), which is the brief. With no
+      // draft in Outlook the box is the only thing you have said, so it is the
+      // draft itself, exactly as the workspace reads its one box. Either way
+      // the thread stays in `background`: context, never something to rewrite.
+      const mine = now.typed;
+      const original = mine ? plainToHtml(mine) : draftHtml;
+      const brief = mine && boxText ? `${draftHtml}${briefHtml}` : briefHtml;
+      const context: WriterContext = {
         ...emptyContext(),
-        fidelity,
+        fidelity: mine || boxText ? fidelity : "draft",
         tone,
         audience,
         length,
-        styleIds,
-        recipient,
-        background: source,
+        styleIds: activeStyleIds,
+        recipient:
+          nowTarget?.from || (fresh.composing ? fresh.to : fresh.from) || "",
+        background: nowSource,
         brief,
       };
+      // (The recipient is whoever wrote the message being answered — on a
+      // thread, not necessarily the sender of the newest one.)
       const doc = rewriting
         ? { ...rewriting, subject: subjectLine, original, context }
         : await add({
@@ -635,6 +836,7 @@ export default function OutlookPage() {
       await runGenerate(doc);
     } catch (e) {
       setError((e as Error).message || "That didn't work");
+      setGenerating(false);
     }
   }
 
@@ -648,7 +850,111 @@ export default function OutlookPage() {
     await runGenerate(resultDoc, instruction, prior);
   }
 
-  // Back to the dials, to write it again from scratch a different way.
+  // --- Sounding like the person doing the writing ---------------------------
+  //
+  // Three separate complaints, and they need three separate answers, because
+  // they fail in three different ways:
+  //
+  //   "it doesn't sound like me"     → a voice, learned from real writing
+  //   "I would never say lovely"     → that one word, swapped for the one you do
+  //   "it doesn't sign off like me"  → the sign-off, saved once
+  //
+  // What the industry settled on for the first is what Gmail now does: read
+  // the person's own past emails. An add-in cannot go through the Sent folder,
+  // but it does not need to — half a thread is usually the person's own
+  // replies, already on screen, already parsed into separate messages.
+
+  /** Messages in this thread that this person wrote. Their writing, for free. */
+  const myMessages = useMemo(() => {
+    if (!me.name.trim() && !me.email.trim()) return [];
+    return messages.filter(
+      (m) => samePerson(m.from, me.name, me.email) && m.body.trim().length >= SAMPLE_FLOOR,
+    );
+  }, [messages, me]);
+
+  const voice = styles.find((s) => s.kind === "voice") || null;
+  const voiceCount = countSamples(voice?.samples);
+  // A draft of your own counts too: it is the most recent thing you have
+  // written, and it is about this very email.
+  const newSamples = [...myMessages.map((m) => m.body.trim()), typed.trim()]
+    .filter((s) => s.length >= SAMPLE_FLOOR)
+    // Nothing it has already been taught. Pressing the button twice on the same
+    // thread should say there is nothing new, not learn the same email again.
+    .filter((s) => !(voice?.samples || "").includes(s.slice(0, SAMPLE_FLOOR)));
+
+  /**
+   * Learn — or re-learn — the voice from those. Samples are kept alongside the
+   * profile, never replaced by it: a description of how somebody writes is a
+   * weaker guide than their actual sentences, and generate sends both.
+   */
+  async function learnVoice() {
+    if (!newSamples.length || learning) return;
+    setLearning(true);
+    setError("");
+    try {
+      const merged = [voice?.samples || "", ...newSamples]
+        .filter(Boolean)
+        .join(SAMPLE_SEPARATOR)
+        .slice(-24000);
+      const res = await fetch("/api/writer/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ action: "analyze_voice", samples: merged }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.profile) throw new Error(json.error || "Couldn't read your voice");
+      if (voice) {
+        await updateStyle(voice.id, { voice_profile: json.profile, samples: merged });
+        if (!activeStyleIds.includes(voice.id)) setStyleIds([...activeStyleIds, voice.id]);
+      } else {
+        const created = await addStyle({
+          name: "My voice",
+          kind: "voice",
+          voice_profile: json.profile,
+          samples: merged,
+        });
+        if (created) setStyleIds([...activeStyleIds, created.id]);
+      }
+      const n = newSamples.length;
+      setLearned(`Got it — ${n} ${n === 1 ? "piece" : "pieces"} of your writing added.`);
+      setTimeout(() => setLearned(""), 4000);
+    } catch (e) {
+      setError((e as Error).message || "Couldn't read your voice");
+    } finally {
+      setLearning(false);
+    }
+  }
+
+  const swaps: WordSwap[] = settings?.word_swaps || [];
+
+  /** "Never lovely, say great." Stored as a pair — see the type for why. */
+  async function addSwap() {
+    const avoid = swapAvoid.trim();
+    if (!avoid) return;
+    const next = [
+      ...swaps.filter((w) => w.avoid.toLowerCase() !== avoid.toLowerCase()),
+      { avoid, prefer: swapPrefer.trim() },
+    ].slice(-40);
+    setSwapAvoid("");
+    setSwapPrefer("");
+    await saveSettings({ word_swaps: next });
+  }
+
+  async function removeSwap(avoid: string) {
+    await saveSettings({ word_swaps: swaps.filter((w) => w.avoid !== avoid) });
+  }
+
+  async function saveSignOff(text: string) {
+    const clean = text.trim();
+    if (!clean) return;
+    await saveSettings({ signature: plainToHtml(clean) });
+    setSignOffDraft("");
+    setSignOffSaved(true);
+    setTimeout(() => setSignOffSaved(false), 3000);
+  }
+
+  // Back to the intake, to write it again from scratch a different way.
   function startOver() {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     pendingRef.current = {};
@@ -661,22 +967,38 @@ export default function OutlookPage() {
     setError("");
   }
 
-  // The other half of the loop: the reply is written, they are back in Outlook
-  // with a compose window open, and this drops the finished piece in where the
-  // cursor is — styled, because a paste into Outlook that keeps its paragraph
-  // breaks needs its spacing inline.
+  /**
+   * The signature to staple under the piece on its way into Outlook — which,
+   * more often than not, is nothing at all. Three ways it can already be
+   * handled, and each of them made a second copy appear before this:
+   *
+   * - a short sign-off is written by the model as the last lines of the piece;
+   * - Outlook has already dropped its own into this draft;
+   * - the user asked for it to be left off.
+   */
+  function signatureFor(useSig: boolean): string {
+    if (!useSig || !signatureHtml) return "";
+    if (signsOff) return "";
+    if (outlookSignature) return "";
+    return signatureHtml;
+  }
+
+  // The other half of the loop: the reply is written, and this drops the
+  // finished piece in where the cursor is — in the font the message is already
+  // written in, with one blank line between paragraphs and no margins on top
+  // of it. See toOutlookHtml: an insert is not a paste, and the shape that
+  // survives a paste is the shape that double-spaces an insert.
   function insertHtml(html: string, useSig: boolean) {
     const Office = window.Office;
     const item = Office?.context?.mailbox?.item;
     if (!Office || !item) return;
-    const withSig = toEmailHtml(html, useSig ? settings?.signature || "" : "");
+    const withSig = toOutlookHtml(html, signatureFor(useSig), bodyFont);
     const insert = item.body.setSelectedDataAsync;
     // A message you are only reading has no cursor to insert at, and Outlook
     // does not say so politely — the method is simply not there, and calling it
-    // throws inside a click handler where nothing is listening. That is what
-    // "the Add to email button didn't do anything" was.
+    // throws inside a click handler where nothing is listening.
     if (typeof insert !== "function") {
-      setError("Nowhere to put it in a message you're reading — open a reply below instead.");
+      setError("Nowhere to put it in a message you're reading — open a reply instead.");
       return;
     }
     try {
@@ -694,16 +1016,19 @@ export default function OutlookPage() {
   }
 
   /**
-   * The other half of the same intention, for a message you are reading: there
-   * is no draft to insert into, so make one. Outlook opens its own reply window
-   * with the piece already in it, above the quoted thread, exactly where a
-   * reply you typed yourself would go.
+   * The same intention, for a message you are reading: there is no draft to
+   * insert into, so make one. Outlook opens its own reply window with the piece
+   * already in it, above the quoted thread, exactly where a reply you typed
+   * yourself would go.
    */
   function openReply(html: string, useSig: boolean, all: boolean) {
     const Office = window.Office;
     const item = Office?.context?.mailbox?.item;
     if (!Office || !item) return;
-    const withSig = toEmailHtml(html, useSig ? settings?.signature || "" : "");
+    // No font here on purpose: the reply window does not exist yet, so there is
+    // nothing to match, and text with no font of its own takes the one the
+    // person set for writing mail. That is the right answer.
+    const withSig = toOutlookHtml(html, signatureFor(useSig));
     const open = all ? item.displayReplyAllForm : item.displayReplyForm;
     if (typeof open !== "function") {
       setError("This Outlook won't open a reply from the pane — copy it across instead.");
@@ -731,62 +1056,376 @@ export default function OutlookPage() {
   const progress = useProgress(generating, 20000);
   const recent = docs.filter((d) => htmlToPlain(d.content).trim()).slice(0, 6);
   const hasResult = !!resultContent.trim();
-  // Who will actually read this. Shown because it is the fact behind the model
-  // no longer offering to pass your note along to somebody who is copied on it.
+  // Who else will read this. Shown because it is the fact behind the model no
+  // longer offering to pass your note along to somebody who is copied on it.
   const onThread = (
     email?.composing ? [email.to, email.cc] : [target?.to, target?.cc]
   )
     .filter(Boolean)
     .join(", ");
+  const typedWords = typed ? typed.split(/\s+/).filter(Boolean).length : 0;
 
-  // The intake: the two boxes and the dials. Rendered on its own before
-  // anything has been written, and again — folded away — underneath what was
-  // written. "I pasted my message into the box and nothing happened" is what a
-  // panel that deletes the box you were meant to type in looks like from the
-  // outside: after the first pass there was nothing left on screen but an
-  // editor for the piece it had already written.
-  const intake = email && (
-    <>
-      {messages.length > 1 && (
+  // What the collapsed Options row says it is set to, so nobody has to open it
+  // to find out.
+  const lengthLabel = lengthOptions.find((l) => l.key === length && l.key !== "as_is")?.label;
+  const styleNames = styles.filter((s) => activeStyleIds.includes(s.id)).map((s) => s.name);
+  const optionBits = [...tone, ...audience, lengthLabel, ...styleNames].filter(Boolean);
+  const optionsSummary = optionBits.length ? optionBits.join(" · ") : "automatic";
+
+  const fidelityChoices = (
+    typed
+      ? FIDELITY_OPTIONS
+      : [
+          ...FIDELITY_OPTIONS.filter((f) => f.key === "draft"),
+          ...FIDELITY_OPTIONS.filter((f) => f.key !== "draft"),
+        ]
+  ).map((f) => ({ key: f.key, label: FIDELITY_LABELS[f.key] }));
+  const fidelityBlurb = FIDELITY_OPTIONS.find((f) => f.key === effectiveFidelity)?.blurb;
+
+  const buttonLabel = generating
+    ? "Writing it…"
+    : resultDoc
+      ? "Write it again"
+      : ownWords
+        ? BUTTON_FOR[effectiveFidelity]
+        : messages.length
+          ? "Write the reply"
+          : "Write it";
+
+  // The three ways it can fail to sound like you, in one fold. Folded because
+  // it is set up once and then forgotten, and on screen in both halves of the
+  // pane because "I'd never say that" is a thought you have while reading what
+  // came back, not while filling the form in.
+  const soundsBits = [
+    voiceCount ? "voice ✓" : "",
+    swaps.length ? `${swaps.length} word${swaps.length === 1 ? "" : "s"}` : "",
+    signature.trim() ? "sign-off ✓" : "",
+  ].filter(Boolean);
+  const outlookSignOff = outlookSignature.trim();
+
+  const soundsLikeYou = (
+    <details className="rounded-xl border border-border bg-surface">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 p-2">
+        <span className="text-[11px] font-semibold text-ink">
+          Make it sound like you <span className="font-normal text-muted">▾</span>
+        </span>
+        <span className="truncate text-[10px] text-muted">
+          {soundsBits.length ? soundsBits.join(" · ") : "not set up"}
+        </span>
+      </summary>
+      <div className="space-y-3 px-2 pb-2.5">
+        {/* 1. The voice, learned from writing you have already done. */}
         <div>
-          <label
-            htmlFor="answering"
-            className="mb-1 block text-sm font-semibold text-ink"
-          >
-            Which one are you answering?
-          </label>
-          <select
-            id="answering"
-            value={pick}
-            onChange={(e) => setTargetIdx(Number(e.target.value))}
-            className="w-full rounded-lg border border-border bg-surface px-2 py-1.5 text-[11px] outline-none focus:border-[var(--accent)]"
-          >
-            {messages.map((m, i) => (
-              <option key={i} value={i}>
-                {m.from || "unknown sender"}
-                {m.sent ? ` · ${m.sent}` : ""}
-                {i === 0 ? " · most recent" : ""}
-              </option>
-            ))}
-          </select>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+            Your voice
+          </p>
+          {voiceCount > 0 && (
+            <p className="mt-0.5 text-[11px] leading-snug text-ink">
+              ✓ Learned from {voiceCount} {voiceCount === 1 ? "piece" : "pieces"} of your
+              writing, and used on every reply.
+            </p>
+          )}
+          {newSamples.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => void learnVoice()}
+              disabled={learning}
+              className="mt-1 w-full rounded-lg border border-[var(--accent)] px-2 py-1.5 text-[11px] font-semibold text-[var(--accent)] transition hover:bg-[var(--accent-soft)] disabled:opacity-50"
+            >
+              {learning
+                ? "Reading how you write…"
+                : voiceCount
+                  ? `Add the ${newSamples.length} ${newSamples.length === 1 ? "message" : "messages"} you wrote here`
+                  : `Learn from the ${newSamples.length} ${newSamples.length === 1 ? "message" : "messages"} you wrote in this thread`}
+            </button>
+          ) : (
+            <p className="mt-0.5 text-[11px] leading-snug text-muted">
+              {voiceCount
+                ? "Nothing new here to learn from — open a thread you've replied on and I'll add those too."
+                : "Open a thread you've replied on and I'll learn from the messages you wrote in it. No pasting."}
+            </p>
+          )}
+          {learned && (
+            <p className="mt-1 rounded-lg border border-emerald-300 bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-700">
+              {learned}
+            </p>
+          )}
+        </div>
+
+        {/* 2. The one word. */}
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+            Words you&apos;d never use
+          </p>
+          {swaps.length > 0 && (
+            <ul className="mt-1 flex flex-wrap gap-1">
+              {swaps.map((w) => (
+                <li
+                  key={w.avoid}
+                  className="flex items-center gap-1 rounded-full border border-border bg-canvas px-2 py-0.5 text-[10px]"
+                >
+                  <span className="text-muted line-through">{w.avoid}</span>
+                  {w.prefer && <span className="font-medium text-ink">→ {w.prefer}</span>}
+                  <button
+                    type="button"
+                    aria-label={`Stop swapping ${w.avoid}`}
+                    onClick={() => void removeSwap(w.avoid)}
+                    className="text-muted transition hover:text-ink"
+                  >
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="mt-1 flex items-center gap-1">
+            <input
+              aria-label="Word to avoid"
+              value={swapAvoid}
+              onChange={(e) => setSwapAvoid(e.target.value)}
+              placeholder="lovely"
+              className="min-w-0 flex-1 rounded-md border border-border bg-canvas px-2 py-1 text-[11px] outline-none focus:border-[var(--accent)]"
+            />
+            <span className="shrink-0 text-[11px] text-muted">→</span>
+            <input
+              aria-label="Word to use instead"
+              value={swapPrefer}
+              onChange={(e) => setSwapPrefer(e.target.value)}
+              placeholder="great"
+              className="min-w-0 flex-1 rounded-md border border-border bg-canvas px-2 py-1 text-[11px] outline-none focus:border-[var(--accent)]"
+            />
+            <button
+              type="button"
+              onClick={() => void addSwap()}
+              disabled={!swapAvoid.trim()}
+              className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted transition hover:text-ink disabled:opacity-40"
+            >
+              Add
+            </button>
+          </div>
           <p className="mt-0.5 text-[10px] leading-snug text-muted">
-            A thread is several messages by different people. I answer this one
-            and greet whoever sent it; the rest is history I read but don&apos;t
-            reply to.
+            A swap, not a ban. Telling a model to avoid a word puts the word in front
+            of it and makes it more likely — giving it somewhere else to go works.
           </p>
         </div>
-      )}
 
-      {/* The two boxes the workspace itself uses — Draft and "Anything else I
-          should know?" — not a reinterpretation of them. This one is bigger
-          and comes first on purpose: it's the one thing only you know. It is
-          also EMPTY on purpose. Everything the add-in can read is read below,
-          not pasted in here — a box with the email already in it is a box you
-          cannot type "make it longer" into. */}
+        {/* 3. The sign-off. */}
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+            How you sign off
+          </p>
+          {signature.trim() ? (
+            <>
+              <p className="mt-0.5 whitespace-pre-wrap rounded-lg border border-border bg-canvas px-2 py-1 text-[11px] leading-snug text-ink">
+                {signature.trim()}
+              </p>
+              <p className="mt-0.5 text-[10px] leading-snug text-muted">
+                {signsOff
+                  ? "Written as the last lines of the email, in your own font — not pasted on after it."
+                  : "Added under every reply. Outlook won't be asked to add a second one."}
+              </p>
+            </>
+          ) : (
+            <p className="mt-0.5 text-[11px] leading-snug text-muted">
+              Nothing saved, so replies end on the last sentence.
+            </p>
+          )}
+          {/* Outlook already put the person's real sign-off in this draft. It is
+              the one piece of evidence the pane has, and it costs one tap. */}
+          {outlookSignOff && outlookSignOff !== signature.trim() && (
+            <button
+              type="button"
+              onClick={() => void saveSignOff(outlookSignOff)}
+              className="mt-1 w-full rounded-lg border border-[var(--accent)] px-2 py-1.5 text-left text-[11px] font-semibold text-[var(--accent)] transition hover:bg-[var(--accent-soft)]"
+            >
+              Use the one Outlook put in this message
+              <span className="mt-0.5 block truncate font-normal text-muted">
+                {outlookSignOff.replace(/\s*\n\s*/g, " · ").slice(0, 70)}
+              </span>
+            </button>
+          )}
+          <textarea
+            aria-label="Your sign-off"
+            value={signOffDraft}
+            onChange={(e) => setSignOffDraft(e.target.value)}
+            rows={2}
+            placeholder={"Cheers,\nZak"}
+            className="mt-1 w-full resize-none rounded-md border border-border bg-canvas px-2 py-1 text-[11px] leading-snug outline-none focus:border-[var(--accent)]"
+          />
+          <button
+            type="button"
+            onClick={() => void saveSignOff(signOffDraft)}
+            disabled={!signOffDraft.trim()}
+            className="mt-1 w-full rounded-lg border border-border px-2 py-1.5 text-[11px] font-medium text-muted transition hover:text-ink disabled:opacity-40"
+          >
+            {signOffSaved ? "Saved ✓" : signature.trim() ? "Replace it" : "Save it"}
+          </button>
+        </div>
+      </div>
+    </details>
+  );
+
+  // What the email says, and what the reply will be written against. First on
+  // screen, because "has it actually read the email?" is the question every
+  // other control depends on.
+  const emailCard = email && (
+    <section className="rounded-xl border border-border bg-surface p-2.5">
+      {messages.length ? (
+        <>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+            {email.composing ? "Replying to" : "From"}{" "}
+            <span className="normal-case text-ink">{target?.from || "unknown sender"}</span>
+          </p>
+          <p className="mt-0.5 truncate text-xs font-medium">
+            {target?.subject || email.subject || "(no subject)"}
+          </p>
+          <div className="mt-1.5 rounded-lg bg-canvas px-2 py-1.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-[var(--accent)]">
+              Summary
+            </p>
+            {reading && !summary ? (
+              <p className="mt-0.5 animate-pulse text-[11px] text-muted">Reading it…</p>
+            ) : (
+              <p
+                className={`mt-0.5 text-[11px] leading-relaxed text-ink ${summary ? "" : "line-clamp-3"}`}
+              >
+                {summary || target?.body || "(that one has no text in it)"}
+              </p>
+            )}
+          </div>
+          {onThread && (
+            <p className="mt-1 truncate text-[10px] text-muted">Also on it: {onThread}</p>
+          )}
+
+          {/* On a chain, how much of it to use. A real, pressable choice: the
+              whole thread is the safe default; one message is quicker and
+              keeps an old tangent out of the reply. */}
+          {messages.length > 1 && (
+            <div className="mt-2">
+              <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Write from
+              </p>
+              <div className="grid grid-cols-2 gap-1" role="group" aria-label="Write from">
+                {(
+                  [
+                    ["thread", `Whole thread (${messages.length})`],
+                    ["one", "Just this message"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    aria-pressed={scope === key}
+                    onClick={() => setScope(key)}
+                    className={`rounded-lg border px-2 py-1.5 text-[11px] font-medium transition ${
+                      scope === key
+                        ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
+                        : "border-border bg-canvas text-muted hover:text-ink"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <details className="mt-1.5">
+            <summary className="cursor-pointer list-none text-[10px] font-medium text-[var(--accent)]">
+              {messages.length > 1
+                ? `Show the ${messages.length} messages · pick which to answer ▾`
+                : "Show the whole email ▾"}
+            </summary>
+            <div className="mt-1 max-h-72 space-y-2 overflow-y-auto rounded-lg border border-border bg-canvas p-2">
+              {messages.map((m, i) => (
+                <div
+                  key={i}
+                  className={
+                    i === pick && messages.length > 1
+                      ? "rounded-md border-l-2 border-[var(--accent)] pl-2"
+                      : "pl-2 opacity-75"
+                  }
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="truncate text-[10px] font-semibold text-ink">
+                      {m.from || "unknown sender"}
+                      {m.sent ? ` · ${m.sent}` : ""}
+                      {i === 0 && messages.length > 1 ? " · newest" : ""}
+                    </p>
+                    {messages.length > 1 &&
+                      (i === pick ? (
+                        <span className="shrink-0 text-[10px] font-semibold text-[var(--accent)]">
+                          Answering
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setTargetIdx(i)}
+                          className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted hover:text-ink"
+                        >
+                          Answer this one
+                        </button>
+                      ))}
+                  </div>
+                  <p className="whitespace-pre-wrap text-[11px] leading-relaxed text-muted">
+                    {m.body || "(no text)"}
+                  </p>
+                </div>
+              ))}
+            </div>
+            <p className="mt-1 text-[10px] leading-snug text-muted">
+              Signatures are left off — they never go to the AI.
+            </p>
+          </details>
+        </>
+      ) : (
+        <>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+            New message{email.to ? " to" : ""}{" "}
+            {email.to && <span className="normal-case text-ink">{email.to}</span>}
+          </p>
+          <p className="mt-0.5 truncate text-xs font-medium">
+            {email.subject || "(no subject yet)"}
+          </p>
+        </>
+      )}
+    </section>
+  );
+
+  // The intake: the email, the one box, and the button. Rendered on its own
+  // before anything has been written, and again — folded away — underneath what
+  // was written, so the thing you wrote from is always one click away.
+  const intake = email && (
+    <>
+      {emailCard}
+
       <div>
-        <label className="mb-1 block text-sm font-semibold text-ink">
+        <label className="mb-1 flex items-baseline gap-1.5 text-sm font-semibold text-ink">
           What do you want to say?
+          <span className="rounded-full bg-canvas px-1.5 py-px text-[10px] font-medium text-muted">
+            optional
+          </span>
         </label>
+
+        {/* A draft already started in Outlook is used as the draft. Said here,
+            beside the box, so it is obvious the box is for what to DO with it —
+            and shown read-only, never loaded into the box. */}
+        {typed && (
+          <details className="mb-1.5 rounded-lg border border-[var(--accent)] bg-[var(--accent-soft)] px-2 py-1.5">
+            <summary className="cursor-pointer list-none text-[11px] font-medium text-[var(--accent)]">
+              ✓ Using the draft you started in Outlook ({typedWords}{" "}
+              {typedWords === 1 ? "word" : "words"}) ▾
+            </summary>
+            <p className="mt-1 whitespace-pre-wrap text-[11px] leading-relaxed text-ink">
+              {typed}
+            </p>
+            <p className="mt-1 text-[10px] leading-snug text-muted">
+              Your signature and the thread below it are left off. Keep typing in
+              Outlook if you like — I read it again when you press the button.
+            </p>
+          </details>
+        )}
+
         <RichText
           dense
           autoFocus={!resultDoc}
@@ -794,59 +1433,61 @@ export default function OutlookPage() {
           onChange={setDraftHtml}
           placeholder={
             typed
-              ? "e.g. 'make it longer' or 'just tidy up what I wrote' — I've got your draft"
-              : source
-                ? "e.g. 'reply saying I can do Thursday but not Tuesday' — or leave it empty and I'll just answer it"
-                : "Your message, or just what you want it to say — I'll work out which it is."
+              ? "e.g. “make it longer” or “warmer” — or leave empty"
+              : messages.length
+                ? "Leave empty and I'll write the reply. Or give me the gist — “yes to the 21st, ask if Glenn should come”."
+                : "What's it about? A few notes is plenty."
           }
-          minHeight="min-h-28"
+          minHeight="min-h-20"
         />
         <p className="mt-0.5 text-[10px] leading-snug text-muted">
           {typed
-            ? "I've already got the draft you started in Outlook — it's down below. This box is for what to do with it."
-            : source
-              ? "I've read the message — say what you want to come back with, or leave this empty and I'll just answer it."
-              : "Nothing in the message yet, so this is where you say it."}
+            ? boxText
+              ? "I'll apply this to your draft."
+              : "Empty is fine — I'll work on your draft as it is."
+            : boxText
+              ? "Notes or your own wording — both work."
+              : messages.length
+                ? "Empty is fine — I'll write the whole reply from the email."
+                : "Nothing to reply to here, so tell me what it's about."}
         </p>
       </div>
 
-      <div>
-        <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
-          Anything else I should know?
-        </p>
-        <RichText
-          dense
-          value={briefHtml}
-          onChange={setBriefHtml}
-          placeholder="Who it's for, what's at stake, what to change, anything to avoid…"
-          minHeight="min-h-12"
-        />
-      </div>
-
-      {/* Everything the workspace would ask, asked here instead — the
-          point of the pane is that you never have to go there to set a
-          dial. Left open, not tucked behind a chevron: a tone and style
-          picked after Generate has already been pressed doesn't count. */}
-      <div className="rounded-xl border border-border bg-surface">
-        <p className="p-2 pb-0 text-[10px] font-semibold uppercase tracking-wide text-muted">
-          How it should read
-          {reading ? (
-            <span className="ml-1 font-normal normal-case">reading it…</span>
-          ) : autoFilled.length > 0 ? (
-            <span className="ml-1 font-normal normal-case text-[var(--accent)]">
-              {autoFilled.join(", ")} filled in — check me
-            </span>
-          ) : null}
-        </p>
-        <div className="space-y-1.5 p-2">
+      {/* Only once there are words of yours. Before that there is nothing to
+          "just fix" — the piece is written fresh, and asking would only be a
+          question with one sensible answer. */}
+      {ownWords && (
+        <div>
           <ChipGroup
             dense
-            label="How much to write"
-            options={FIDELITY_OPTIONS.map((f) => ({ key: f.key, label: f.label }))}
-            selected={[fidelity]}
+            label={typed ? "How much should I change your draft?" : "What should I do with that?"}
+            options={fidelityChoices}
+            selected={[effectiveFidelity]}
             single
             onToggle={(k) => setFidelity(k as Fidelity)}
           />
+          {fidelityBlurb && (
+            <p className="mt-0.5 text-[10px] leading-snug text-muted">{fidelityBlurb}</p>
+          )}
+        </div>
+      )}
+
+      {/* Everything else the workspace would ask, one tap away and filled in
+          from the email. Folded, because most replies need none of it. */}
+      <details className="rounded-xl border border-border bg-surface">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-2 p-2">
+          <span className="text-[11px] font-semibold text-ink">
+            Options <span className="font-normal text-muted">▾</span>
+          </span>
+          <span className="truncate text-[10px] text-muted">
+            {reading
+              ? "reading the email…"
+              : autoFilled.length && optionBits.length
+                ? `${optionsSummary} · my guess`
+                : optionsSummary}
+          </span>
+        </summary>
+        <div className="space-y-1.5 px-2 pb-2">
           <ChipGroup
             dense
             label="Tone"
@@ -864,9 +1505,7 @@ export default function OutlookPage() {
             selected={audience}
             hue="violet"
             onToggle={(k) =>
-              setAudience((p) =>
-                p.includes(k) ? p.filter((a) => a !== k) : [...p, k],
-              )
+              setAudience((p) => (p.includes(k) ? p.filter((a) => a !== k) : [...p, k]))
             }
           />
           <ChipGroup
@@ -886,49 +1525,48 @@ export default function OutlookPage() {
                 key: s.id,
                 label: `${s.kind === "voice" ? "🎙️" : "📐"} ${s.name}`,
               }))}
-              selected={styleIds}
+              selected={activeStyleIds}
               hue="teal"
-              onToggle={(k) =>
-                setStyleIds((p) =>
-                  p.includes(k) ? p.filter((s) => s !== k) : [...p, k],
-                )
-              }
+              onToggle={toggleStyle}
             />
           )}
+          <div>
+            <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+              Anything else I should know?
+            </p>
+            <RichText
+              dense
+              value={briefHtml}
+              onChange={setBriefHtml}
+              placeholder="Background, what's at stake, anything to avoid…"
+              minHeight="min-h-12"
+            />
+          </div>
+          {autoFilled.length > 0 && (
+            <p className="text-[10px] leading-snug text-[var(--accent)]">
+              I guessed the {autoFilled.join(", ")} from the email — tap to change.
+            </p>
+          )}
         </div>
-      </div>
+      </details>
+
+      {/* Only on the intake proper. When there is a result, this same intake is
+          rendered folded away underneath it and the real copy sits up there,
+          next to the words that prompted the thought. */}
+      {!resultDoc && soundsLikeYou}
 
       <button
         onClick={writeReply}
         disabled={generating || !hasIntake}
         className="w-full rounded-lg bg-[var(--accent)] px-3 py-2.5 text-xs font-semibold text-white transition hover:opacity-90 disabled:opacity-50"
       >
-        {generating
-          ? "Writing it…"
-          : resultDoc
-            ? "Write it again"
-            : email.composing
-              ? "Write it"
-              : "Write the reply"}
+        {buttonLabel}
       </button>
-      <div className="space-y-1.5">
+      {!hasIntake && (
         <p className="text-[11px] leading-snug text-muted">
-          {hasIntake
-            ? "Writes it right here, then you can edit it or drop it into your reply below."
-            : "There's nothing here to write from yet — say what you want it to say above, or write a line or two in Outlook and read it back in."}
+          There&apos;s nothing to write from yet — say what it&apos;s about above.
         </p>
-        {/* Always available: the pane reads the message once, when it opens, so
-            anything typed in Outlook afterwards is invisible to it until this
-            is pressed. It used to hide itself as soon as there was anything to
-            write from, because re-reading would have overwritten the box —
-            nothing is prefilled any more, so there is nothing left to lose. */}
-        <button
-          onClick={rereadMessage}
-          className="rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-medium text-muted transition hover:text-ink"
-        >
-          Re-read my message
-        </button>
-      </div>
+      )}
     </>
   );
 
@@ -947,14 +1585,22 @@ export default function OutlookPage() {
         <header className="flex items-start justify-between gap-2">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">
-              Writing Studio
+              Omni · Writing Studio
             </p>
             <h1 className="text-base font-semibold">
-              {email?.composing ? "This draft" : "Answer this one"}
+              {!email
+                ? "Writing Studio"
+                : email.composing
+                  ? typed
+                    ? "Your draft"
+                    : messages.length
+                      ? "Write your reply"
+                      : "New message"
+                  : "Write a reply"}
             </h1>
           </div>
-          {/* The pane now stays signed in on its own, so it needs a way out
-              that means it: this also revokes the saved sign-in, where a plain
+          {/* The pane stays signed in on its own, so it needs a way out that
+              means it: this also revokes the saved sign-in, where a plain
               cookie sign-out would be quietly undone on the next open. */}
           {userId && !userLoading && (
             <button
@@ -984,12 +1630,9 @@ export default function OutlookPage() {
               on another tab doesn&apos;t count here.
             </p>
             {/* In place, not a new tab: on Outlook for Windows this pane runs in
-                its own WebView with its own cookies, so a session created
-                anywhere else never reaches it. */}
-            {/* ?next= brings the panel back here afterwards. Without it the
-                login lands on the dashboard, and a 400px panel with no address
-                bar has no way back to the add-in — which just looks like the
-                whole app crammed into a sliver. */}
+                its own WebView with its own cookies. ?next= brings the panel
+                back here afterwards — a 400px panel with no address bar has no
+                other way back. */}
             <button
               onClick={() => {
                 window.location.href = "/login?next=%2Foutlook";
@@ -1018,12 +1661,9 @@ export default function OutlookPage() {
           </p>
         )}
 
-        {/* Both jobs, always, for whichever of the two you came here to do.
-            This used to be an either/or keyed off the read-vs-compose guess,
-            and when the guess went the wrong way it left a list of old pieces
-            and no box to type in — no way to ask for anything, and nothing on
-            screen explaining why. A guess about which button you pressed is not
-            worth a dead end, so it now only changes the wording. */}
+        {/* Both jobs, always, whichever button opened this. A guess about read
+            vs compose once left a list of old pieces and no box to type in, so
+            it now only changes the wording. */}
         {userId && email && (
           <>
             {!resultDoc && intake}
@@ -1113,11 +1753,17 @@ export default function OutlookPage() {
                     </div>
                     <p className="text-[10px] leading-snug text-muted">
                       {!email.composing
-                        ? "Outlook opens its own reply window with this already in it, above the quoted thread."
+                        ? "Outlook opens its own reply window with this already in it, above the quoted thread. Nothing is sent until you send it."
                         : typed
-                          ? "Select the notes in your message first and this replaces them. Otherwise it lands wherever the cursor is."
-                          : "It lands wherever the cursor is in your message, formatted, with your signature."}
+                          ? "Select your draft in the message first and this replaces it. Otherwise it lands wherever the cursor is."
+                          : `It lands wherever the cursor is, in the font your message is already using${
+                              signatureFor(true) ? ", with your signature" : ""
+                            }.`}
                     </p>
+
+                    {/* Right under what it wrote, because "I would never say
+                        that" is a thought you have while reading it. */}
+                    {soundsLikeYou}
 
                     {asked.length > 0 && (
                       <div className="rounded-xl border border-border bg-surface p-2.5">
@@ -1180,104 +1826,6 @@ export default function OutlookPage() {
               </div>
             )}
 
-            {/* Context, not the point — folded down here so the box you
-                actually type into is the first thing on screen, not this. */}
-            <div className="rounded-xl border border-border bg-surface p-2.5">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                {email.composing ? "What I can see" : "What I'm answering"}
-              </p>
-              <p className="mt-0.5 truncate text-xs font-medium">
-                {target?.subject || email.subject || "(no subject)"}
-              </p>
-              <p className="truncate text-[11px] text-muted">
-                {target?.from
-                  ? `From: ${target.from}`
-                  : email.composing
-                    ? email.to
-                      ? `To: ${email.to}`
-                      : "(no recipient yet)"
-                    : email.from || "(unknown sender)"}
-              </p>
-              {onThread && (
-                <p className="truncate text-[11px] text-muted">
-                  Everyone on it: {onThread}
-                </p>
-              )}
-              {/* The draft you started in Outlook. It goes to the model as the
-                  draft — but it is shown HERE, read-only, rather than loaded
-                  into the box, so the box stays free for "make it longer".
-                  Without this there would be no way to tell a draft that was
-                  read from one that was missed, which is the complaint that
-                  put it in the box in the first place. */}
-              {typed && (
-                <details className="mt-1.5 rounded-lg border border-border bg-canvas p-1.5">
-                  <summary className="cursor-pointer list-none text-[10px] font-semibold uppercase tracking-wide text-[var(--accent)]">
-                    Your draft, read from Outlook ▾
-                  </summary>
-                  <p className="mt-1 whitespace-pre-wrap text-[11px] leading-relaxed text-muted">
-                    {typed}
-                  </p>
-                  <p className="mt-1 text-[10px] leading-snug text-muted">
-                    Your signature and the thread below it are left off. Edit it
-                    in Outlook, then press &ldquo;Re-read my message&rdquo;.
-                  </p>
-                </details>
-              )}
-              {messages.length ? (
-                <>
-                  <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted">
-                    {target?.body || "(that one has no text in it)"}
-                  </p>
-                  {/* The thread is not in the box any more, so this panel is the
-                      only place left to check what was actually read — and with
-                      several messages it is also where you confirm the right one
-                      is selected. Two clamped lines say "it has it"; the rest is
-                      one click away rather than forty lines standing between you
-                      and the button. */}
-                  <details className="mt-1">
-                    <summary className="cursor-pointer list-none text-[10px] font-medium text-[var(--accent)]">
-                      {messages.length > 1
-                        ? `Show all ${messages.length} messages ▾`
-                        : "Show the whole message ▾"}
-                    </summary>
-                    <div className="mt-1 max-h-64 space-y-2 overflow-y-auto rounded-lg border border-border bg-canvas p-2">
-                      {messages.map((m, i) => (
-                        <div
-                          key={i}
-                          className={
-                            i === pick && messages.length > 1
-                              ? "rounded-md border-l-2 border-[var(--accent)] pl-2"
-                              : "pl-2 opacity-70"
-                          }
-                        >
-                          <p className="text-[10px] font-semibold text-ink">
-                            {m.from || "unknown sender"}
-                            {m.sent ? ` · ${m.sent}` : ""}
-                            {i === pick && messages.length > 1 ? " · answering this" : ""}
-                          </p>
-                          <p className="whitespace-pre-wrap text-[11px] leading-relaxed text-muted">
-                            {m.body || "(no text)"}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </details>
-                </>
-              ) : (
-                <p className="mt-1 text-[11px] leading-relaxed text-muted">
-                  {typed
-                    ? "Nothing underneath it — a new message rather than a reply."
-                    : "(nothing in the message yet)"}
-                </p>
-              )}
-              {typed && source && (
-                <p className="mt-1 text-[10px] leading-snug text-muted">
-                  I write your draft against this thread; the thread itself I
-                  never rewrite or quote back.
-                </p>
-              )}
-            </div>
-
             {/* The other half of the loop, always in reach. Inserting only
                 works in a draft — Outlook has nowhere to put text in a message
                 you are only reading — so a failure here is reported rather than
@@ -1290,7 +1838,7 @@ export default function OutlookPage() {
                 <div className="space-y-1.5 px-2.5 pb-2.5">
                   <p className="text-[11px] leading-relaxed text-muted">
                     Put the cursor in your reply where it should go, then pick
-                    one. It arrives formatted, with your signature.
+                    one. It arrives in the font your message is already using.
                   </p>
                   {inserted && (
                     <p className="rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700">

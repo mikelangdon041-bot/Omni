@@ -16,8 +16,17 @@ export interface GenerateArgs {
   fidelity: string;
   noGreeting: boolean;
   ctx: Record<string, unknown>;
-  styles: { name: string; text: string }[];
+  /** `samples` is the real writing behind a voice, when the style has any. */
+  styles: { name: string; text: string; samples?: string }[];
   signature: string;
+  /** Words the user would not use, each with the one they would. */
+  wordSwaps?: { avoid: string; prefer: string }[];
+  /**
+   * True when `signature` is two lines of "Cheers, Zak" rather than a block of
+   * letterhead. Then the sign-off is part of the writing and the model ends on
+   * it; nothing is appended afterwards. See lib/writer/signature.ts.
+   */
+  signOff?: boolean;
   variants: number;
   /**
    * Every instruction given on this piece so far, oldest first. Without it each
@@ -207,10 +216,37 @@ export function buildGeneratePrompt(a: GenerateArgs): { system: string; user: st
   // which is the thing being fixed, not a second opinion worth having.
   const fixes = actionList.filter((v) => !(v in LEGACY_LENGTH_ACTIONS));
 
+  // A description of how somebody writes is a weaker guide than their actual
+  // sentences — imitation from a profile alone comes out as a generic version
+  // of the same voice. Where a style kept the writing it was learned from, a
+  // few of those pieces go in as well, capped: past four or five examples the
+  // gain flattens out and the prompt just gets longer.
   const styleBlock = a.styles.length
     ? `Writing styles to follow (treat these as binding rules):\n${a.styles
-        .map((s) => `--- Style "${s.name}" ---\n${s.text}`)
+        .map((s) => {
+          const samples = sampleBlock(s.samples);
+          return `--- Style "${s.name}" ---\n${s.text}${
+            samples
+              ? `\n\nActual writing by this person. Match this — the rhythm, the sentence length, the word choices, the way they open and close. Never copy their content, only how it sounds:\n${samples}`
+              : ""
+          }`;
+        })
         .join("\n")}`
+    : "";
+
+  // Framed as a direction rather than a prohibition on purpose: a list of
+  // banned words puts those words in front of the model and makes them MORE
+  // likely to come out. A swap gives it somewhere else to go.
+  const swaps = (a.wordSwaps || [])
+    .filter((w) => w?.avoid?.trim())
+    .slice(0, 40)
+    .map((w) =>
+      w.prefer?.trim()
+        ? `- Where you would write "${w.avoid.trim()}", write "${w.prefer.trim()}".`
+        : `- "${w.avoid.trim()}" is not a word this person uses. Say it another way.`,
+    );
+  const swapBlock = swaps.length
+    ? `THIS PERSON'S OWN WORDS. They have told you which words they would and would not use. These are absolute and outrank every style note above:\n${swaps.join("\n")}`
     : "";
 
   // How the note in the intake box is framed. On a first pass it is the order.
@@ -379,7 +415,33 @@ HARD RULES
 - Never hand back a fill-in-the-blank template. "[Add your message here]", "[insert the details]", "[your main point]" and the like are not writing, they are a form for somebody else to complete. If what you were given is genuinely too thin to make a piece from, write the short honest version of what they did give you.
 - Avoid AI tells: no "I hope this email finds you well", no "delve", no "moreover"/"furthermore" scaffolding, no exclamation stacking, no bullet lists the user didn't ask for, and no closing paragraph that restates what you already said.
 ${a.noGreeting ? '- NO GREETING: do not open with a salutation of any kind (no "Hi Sarah,", no "Hello,", no "Dear …"). Start on the first real sentence of the message.\n' : ""}${lengthRule ? `- ${lengthRule}\n` : ""}${TYPE_NOTES[a.docType] || TYPE_NOTES.other}
-${styleBlock ? `\n${styleBlock}` : ""}${a.signature ? `\n(The user's emails get this signature appended automatically after your body, so end on the last sentence or at most a short "Thanks," line. Never write your own sign-off block with a name and contact details.)` : ""}`;
+${styleBlock ? `\n${styleBlock}` : ""}${swapBlock ? `\n\n${swapBlock}` : ""}${signatureNote(a)}`;
 
   return { system, user: `${intake ? `Intake:\n${intake}\n\n` : ""}${task}` };
+}
+
+/** Up to four pieces of somebody's real writing, trimmed to keep the prompt sane. */
+function sampleBlock(samples?: string): string {
+  const pieces = (samples || "")
+    .split(/\n\s*(?:---+|===+)\s*\n|\n{3,}/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 40)
+    .slice(0, 4)
+    .map((s) => s.slice(0, 1200));
+  return pieces.map((s, i) => `<sample ${i + 1}>\n${s}\n</sample ${i + 1}>`).join("\n\n");
+}
+
+/**
+ * What to do about the sign-off, which depends entirely on which kind it is.
+ *
+ * A letterhead block gets stapled on after the body by whoever is copying or
+ * inserting, so the model must not write one. Two lines of "Cheers, Zak" are
+ * the last sentence of the email, and are written here — see
+ * lib/writer/signature.ts for why that distinction exists at all.
+ */
+function signatureNote(a: GenerateArgs): string {
+  if (!a.signature) return "";
+  if (!a.signOff)
+    return `\n(The user's emails get this signature appended automatically after your body, so end on the last sentence or at most a short "Thanks," line. Never write your own sign-off block with a name and contact details.)`;
+  return `\n\nHOW TO END IT. This person signs off exactly like this, and nothing is added after your text, so write it yourself as the last lines of the piece — these exact words, on their own lines, and nothing after them:\n${a.signature.trim()}\n(No other closing line before it, no job title, no contact details.)`;
 }

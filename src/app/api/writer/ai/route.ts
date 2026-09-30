@@ -177,6 +177,13 @@ Rules:
       const docType = String(body?.docType || "email");
       if (!brief.trim())
         return NextResponse.json({ error: "Nothing to extract" }, { status: 400 });
+      // The Outlook pane also wants the email it is answering summed up in a
+      // line or two, and it is already paying for this call when it opens. Opt
+      // in, so the workspace's own extract is untouched. `thread` is only sent
+      // when it is not already the brief — a half-written draft in Outlook is
+      // the brief, and the thread under it is what the summary is about.
+      const summarize = body?.summarize === true;
+      const thread = summarize ? String(body?.thread || "").slice(0, 30000) : "";
 
       const EXTRACT_SCHEMA = {
         type: "object" as const,
@@ -209,6 +216,7 @@ Rules:
           noGreeting: { type: "boolean" as const },
           research: { type: "boolean" as const },
           researchQuestion: { type: "string" as const },
+          ...(summarize ? { summary: { type: "string" as const } } : {}),
         },
         required: [
           "title",
@@ -224,6 +232,7 @@ Rules:
           "noGreeting",
           "research",
           "researchQuestion",
+          ...(summarize ? ["summary"] : []),
         ],
         additionalProperties: false,
       };
@@ -248,9 +257,21 @@ Rules:
 - fidelity: how much license they are giving you. "light" if they want a proofread or only the specific fixes they named (this is the safe default). "polish" if they want it improved but still theirs. "rewrite" if they asked for a rewrite of a real draft. "draft" when what they gave you is shorthand rather than prose — fragments, bullets, a few notes plus context — and they plainly expect you to write the actual piece from it.
 - noGreeting: true only if they said not to open with a greeting ("no hi", "skip the pleasantries", "get straight to it"). Otherwise false.
 - research: true only if they asked for something to be looked up or checked that you would otherwise have to invent — "find out how others are doing this", "look up the guidance", "get the rationale", "what's the current recommendation", "check what the data says". False when they only want their own material written better.
-- researchQuestion: if research is true, the one question a researcher should go and answer, written as a standalone search-ready question with the specifics filled in from their material (e.g. "How are pharma field teams structuring KOL advisory boards for rare disease launches in 2026?"). Empty string when research is false.
+- researchQuestion: if research is true, the one question a researcher should go and answer, written as a standalone search-ready question with the specifics filled in from their material (e.g. "How are pharma field teams structuring KOL advisory boards for rare disease launches in 2026?"). Empty string when research is false.${
+          summarize
+            ? `
+- summary: what the email being answered says, for the writer to glance at before replying. One to three short plain sentences, at most 60 words, addressed to the writer and naming people ("Shane can do the 14th or the 21st and wants to know which, and whether Glenn should be invited."). Lead with what they are asking for or need, then any dates, numbers or decisions. On a thread, summarise the message marked as the one being answered, bringing in earlier messages only where they change what it means. Leave out greetings, sign-offs, signatures, disclaimers and quoted boilerplate. "" if there is no email being answered.`
+            : ""
+        }
 Return only the JSON.`,
-        messages: [{ role: "user", content: `Brief:\n\n${brief}` }],
+        messages: [
+          {
+            role: "user",
+            content: thread
+              ? `Brief:\n\n${brief}\n\nThe email being answered. Use it ONLY for "summary"; every other field comes from the brief above:\n\n${thread}`
+              : `Brief:\n\n${brief}`,
+          },
+        ],
       });
 
       const extracted = JSON.parse(firstText(res) || "{}");
@@ -266,10 +287,26 @@ Return only the JSON.`,
       const previous = String(body?.previous || "").slice(0, 30000);
       const guidance = String(body?.guidance || "").slice(0, 4000);
       const ctx = body?.context || {};
-      const styles: { name: string; text: string }[] = Array.isArray(body?.styles)
+      const styles: { name: string; text: string; samples?: string }[] = Array.isArray(
+        body?.styles,
+      )
         ? body.styles
         : [];
       const signature = String(body?.signature || "");
+      // A short "Cheers, Zak" is written by the model as the last lines of the
+      // piece; a block of letterhead is stapled on afterwards by whoever copies
+      // or inserts it. The caller decides which, because the caller is the one
+      // that knows whether it will be doing any stapling.
+      const signOff = !!body?.signOff;
+      const wordSwaps: { avoid: string; prefer: string }[] = Array.isArray(body?.wordSwaps)
+        ? body.wordSwaps
+            .slice(0, 40)
+            .map((w: { avoid?: unknown; prefer?: unknown }) => ({
+              avoid: String(w?.avoid || "").slice(0, 80),
+              prefer: String(w?.prefer || "").slice(0, 80),
+            }))
+            .filter((w: { avoid: string }) => !!w.avoid.trim())
+        : [];
       const variants = Math.min(4, Math.max(1, Number(body?.variants) || 1));
 
       const { system, user: userMessage } = buildGeneratePrompt({
@@ -282,6 +319,8 @@ Return only the JSON.`,
         ctx,
         styles,
         signature,
+        signOff,
+        wordSwaps,
         variants,
         priorInstructions: Array.isArray(body?.priorInstructions)
           ? body.priorInstructions.slice(-12).map((s: unknown) => String(s).slice(0, 500))

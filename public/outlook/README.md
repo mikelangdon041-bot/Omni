@@ -6,20 +6,68 @@ you need to know". Four of those five steps are carrying the same email across a
 gap Outlook didn't need to have. The add-in reads the open message directly, so
 the only thing left to type is the part only you know.
 
-It works both ways:
+**Open Writing Studio** (in the **Omni** group on the ribbon) opens the same pane
+whether you are reading an email or writing one:
 
-- **Reading an email** — "Answer this" on the ribbon opens a pane showing what
-  it's about to work from, with one box: _anything else I need to know?_ Press
-  the button and the piece opens in your browser with the email, the sender and
-  the subject already in, set to write a reply rather than proofread the email
-  it was sent.
-- **Writing a reply** — "Drop a piece in" lists what you've written recently and
-  inserts the one you pick at the cursor, formatted, with your signature. This
-  is the half that closes the loop; without it you'd still be copying something.
+- **At the top**, a two-line summary of the email being answered, with
+  signatures left out. On a thread you choose whether it works from the whole
+  thread or just that one message, and which message you're answering.
+- **One optional box**, _what do you want to say?_ Leave it empty and it writes
+  the reply. Put the gist in, or have a draft started in Outlook, and it asks
+  how much to change your words: write it from this, just fix it, polish it or
+  rewrite it. The button says which it is about to do.
+- **Options**, folded away: tone, audience, length, your styles, and anything
+  else it should know. It fills in its own guesses from the email.
+- **Make it sound like you**, folded away too — the three things below.
+- **The result** is written in the pane, where you can edit it or ask for
+  changes, then goes into Outlook: a reply window when you're reading, at the
+  cursor when you're writing. Pieces you wrote earlier can be dropped in the
+  same way.
 
-Nothing is duplicated. The pane creates an ordinary Writing Studio piece and
-hands off to the workspace, so every prompt, chip, style and version stays in
-one place.
+## Making it sound like you
+
+Three different complaints, so three different answers. All of them live under
+**Make it sound like you**, which is on screen both before you write and right
+underneath what came back — that second one matters, because "I'd never say
+that" is a thought you have while reading it, not while filling a form in.
+
+- **Your voice.** Gmail learns this by reading your sent mail; an add-in can't
+  go through your Sent folder, and doesn't need to. Half of any thread is
+  usually your own replies, already open, already separated out. One tap turns
+  the messages you wrote in this thread into writing samples. The samples are
+  kept, not just the summary of them — a description of how somebody writes is
+  a weaker guide than their actual sentences, so the model gets both. Teach it
+  again on another thread and it adds to what it has.
+- **Words you'd never use.** "Never _lovely_, say _great_." Stored as a swap
+  and never as a bare ban: a list of forbidden words puts those words in front
+  of the model and makes it _more_ likely to reach for them, where a
+  replacement gives it somewhere else to go. It applies everywhere you write,
+  including the browser.
+- **How you sign off.** If Outlook has already dropped your signature into the
+  message, one tap saves it. Two lines of "Cheers, Zak" are treated as the last
+  sentence of the email and written by the model, in your own font, rather than
+  pasted on underneath; a block of letterhead is still stapled on after the
+  body, and never twice.
+
+## What lands in Outlook
+
+Inserting is not pasting, and the difference used to show. A paste has to
+declare a font and put both a margin and a blank line between paragraphs,
+because Word throws the margin away. Handed straight to a message, all of that
+survives, so paragraphs came out double-spaced in Calibri 11 whatever font the
+message was being written in.
+
+Now the pane reads the font off the message you're in and hands it back, with
+one blank line between paragraphs and no margins — the shape Outlook itself
+writes when you press Enter twice. Replying to a message you're reading
+declares no font at all, so the reply window uses the default you set for
+writing mail.
+
+Nothing is duplicated. The pane creates an ordinary Writing Studio piece, so
+every prompt, chip, style and version stays in one place.
+
+Changing a ribbon label means **reinstalling the manifest**: Outlook reads the
+labels from the copy it installed, not from the site.
 
 ## Installing it
 

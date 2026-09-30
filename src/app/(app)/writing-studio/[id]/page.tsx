@@ -822,6 +822,9 @@ export default function WriterDocPage() {
         .map((s) => ({
           name: s.name,
           text: s.kind === "voice" ? s.voice_profile : s.rules,
+          // The writing behind the voice, not only the description of it: real
+          // sentences are a better guide than a summary of them.
+          samples: s.kind === "voice" ? s.samples || "" : "",
         }));
       const refining = !!refineGuidance && !!cur.content.trim();
       const res = await fetch("/api/writer/ai", {
@@ -858,6 +861,12 @@ export default function WriterDocPage() {
           },
           styles: styleTexts,
           signature: signatureOn ? htmlToPlain(settings?.signature || "") : "",
+          // Words this person would not use. A fact about them, so it applies
+          // to everything they write here, not to one style. `signOff` is not
+          // sent: the workspace staples the signature on when you copy, so the
+          // model must not write one as well. (The Outlook pane does the
+          // opposite, and says so.)
+          wordSwaps: settings?.word_swaps || [],
           variants: refining ? 1 : settings?.variant_count ?? 1,
           // Every instruction given on this piece so far, plus the last few
           // versions. Without them a refine has no memory: a constraint from two

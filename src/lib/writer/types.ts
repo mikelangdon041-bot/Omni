@@ -123,8 +123,28 @@ export interface WriterStyle {
   kind: "rules" | "voice";
   rules: string;
   voice_profile: string;
+  /**
+   * The writing the voice was learned from, kept rather than thrown away once
+   * the profile exists. A description of how somebody writes is a weaker guide
+   * than the sentences themselves, so generate shows the model both: the
+   * profile to reason from, a few real samples to hear.
+   */
+  samples: string;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * A word the user would not use, and the one they would instead.
+ *
+ * Stored as a pair, never as a bare ban, and that is not a detail. A list of
+ * forbidden words puts those words in the model's context and makes them more
+ * likely, not less; a swap points somewhere to go instead. "Never say lovely"
+ * is a landmine. "Where you would write lovely, write great" is a direction.
+ */
+export interface WordSwap {
+  avoid: string;
+  prefer: string;
 }
 
 export interface WriterSettings {
@@ -134,6 +154,8 @@ export interface WriterSettings {
   variant_count: number;
   /** Versions older than this are deleted automatically. 0 = keep forever. */
   version_retention_days: number;
+  /** Applies to everything you write: it is a fact about you, not about a style. */
+  word_swaps: WordSwap[];
 }
 
 export const RETENTION_OPTIONS = [

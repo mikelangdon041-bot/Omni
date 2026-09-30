@@ -11,7 +11,12 @@ import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 import { AutoRichField } from "@/components/ui/AutoRichField";
 import { useToast, useConfirm } from "@/components/ui/Feedback";
-import { RETENTION_OPTIONS, type WriterSettings, type WriterStyle } from "@/lib/writer/types";
+import {
+  RETENTION_OPTIONS,
+  type WordSwap,
+  type WriterSettings,
+  type WriterStyle,
+} from "@/lib/writer/types";
 
 export function SettingsModal({
   open,
@@ -40,6 +45,11 @@ export function SettingsModal({
   const [samples, setSamples] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
   const [editing, setEditing] = useState<WriterStyle | null>(null);
+  const [avoidWord, setAvoidWord] = useState("");
+  const [preferWord, setPreferWord] = useState("");
+
+  const swaps: WordSwap[] = settings?.word_swaps || [];
+  const saveSwaps = (next: WordSwap[]) => saveSettings({ word_swaps: next.slice(-40) });
 
   async function analyzeAndSave() {
     if (!name.trim() || !samples.trim()) return;
@@ -53,7 +63,15 @@ export function SettingsModal({
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Analysis failed");
-      await addStyle({ name: name.trim(), kind: "voice", voice_profile: json.profile });
+      // The samples are kept, not thrown away once the profile exists: a
+      // description of how somebody writes is a weaker guide than their actual
+      // sentences, and generate sends both.
+      await addStyle({
+        name: name.trim(),
+        kind: "voice",
+        voice_profile: json.profile,
+        samples,
+      });
       toast("success", `Voice "${name.trim()}" saved — review it any time.`);
       setAdding(null);
       setName("");
@@ -83,6 +101,65 @@ export function SettingsModal({
               minHeight="min-h-20"
             />
           )}
+        </section>
+
+        {/* Words you'd never use. Stored as a swap and never as a bare ban —
+            see WordSwap in lib/writer/types.ts for why that matters. */}
+        <section>
+          <p className="mb-2 text-xs text-muted">
+            Words you&apos;d never use, and the one you&apos;d use instead. A swap, not
+            a ban: telling a model to avoid a word puts the word in front of it and
+            makes it more likely.
+          </p>
+          {swaps.length > 0 && (
+            <ul className="mb-2 flex flex-wrap gap-1.5">
+              {swaps.map((w) => (
+                <li
+                  key={w.avoid}
+                  className="flex items-center gap-1.5 rounded-full border border-border bg-canvas px-2.5 py-1 text-xs"
+                >
+                  <span className="text-muted line-through">{w.avoid}</span>
+                  {w.prefer && <span className="font-medium">→ {w.prefer}</span>}
+                  <button
+                    aria-label={`Stop swapping ${w.avoid}`}
+                    onClick={() => void saveSwaps(swaps.filter((s) => s.avoid !== w.avoid))}
+                    className="text-muted transition hover:text-ink"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="flex items-end gap-2">
+            <Input
+              label="Never say"
+              value={avoidWord}
+              onChange={(e) => setAvoidWord(e.target.value)}
+              placeholder="lovely"
+            />
+            <Input
+              label="Say instead"
+              value={preferWord}
+              onChange={(e) => setPreferWord(e.target.value)}
+              placeholder="great"
+            />
+            <Button
+              size="sm"
+              disabled={!avoidWord.trim()}
+              onClick={() => {
+                const avoid = avoidWord.trim();
+                void saveSwaps([
+                  ...swaps.filter((s) => s.avoid.toLowerCase() !== avoid.toLowerCase()),
+                  { avoid, prefer: preferWord.trim() },
+                ]);
+                setAvoidWord("");
+                setPreferWord("");
+              }}
+            >
+              <Plus size={14} /> Add
+            </Button>
+          </div>
         </section>
 
         {/* Toggles */}
@@ -136,7 +213,7 @@ export function SettingsModal({
             <div>
               <h3 className="text-sm font-semibold">Styles & voices</h3>
               <p className="text-xs text-muted">
-                Rules you write ("no em dashes, be direct") or a voice analyzed
+                Rules you write (&ldquo;no em dashes, be direct&rdquo;) or a voice analyzed
                 from your past writing. Attach them to any piece.
               </p>
             </div>

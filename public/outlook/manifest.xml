@@ -26,11 +26,11 @@
   <!-- Regenerate this GUID if you ever publish a second, separate add-in from
        the same deployment; Outlook keys the installation off it. -->
   <Id>4a2f6d18-9c31-4b7e-8d0a-6f5c2b1e7a94</Id>
-  <Version>1.0.0.0</Version>
+  <Version>1.1.0.0</Version>
   <ProviderName>Omni</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
   <DisplayName DefaultValue="Writing Studio" />
-  <Description DefaultValue="Answer the email you're looking at without copying it anywhere. Say what else matters, get a draft in your voice, and drop it back into the reply." />
+  <Description DefaultValue="Open Omni's Writing Studio beside the email you're on. It reads the message for you, writes or polishes the reply in your voice, and puts it straight into Outlook." />
   <IconUrl DefaultValue="https://omni-nine-navy.vercel.app/icon-192.png" />
   <HighResolutionIconUrl DefaultValue="https://omni-nine-navy.vercel.app/icon-512.png" />
   <SupportUrl DefaultValue="https://omni-nine-navy.vercel.app/writing-studio" />
@@ -81,7 +81,10 @@
         <DesktopFormFactor>
           <FunctionFile resid="paneUrl" />
 
-          <!-- Reading an email: the button that starts the reply. -->
+          <!-- Reading an email. Both buttons open the same pane and say so: it
+               does the reply and the drop-in wherever it is opened, so a label
+               promising one job ("Answer this") undersold it and read as if the
+               click would send something. -->
           <ExtensionPoint xsi:type="MessageReadCommandSurface">
             <OfficeTab id="TabDefault">
               <Group id="omniWriterGroupRead">
@@ -105,7 +108,7 @@
             </OfficeTab>
           </ExtensionPoint>
 
-          <!-- Writing an email: the button that drops a finished piece in. -->
+          <!-- Writing an email: the same pane, the same label. -->
           <ExtensionPoint xsi:type="MessageComposeCommandSurface">
             <OfficeTab id="TabDefault">
               <Group id="omniWriterGroupCompose">
@@ -142,13 +145,13 @@
         <bt:Url id="paneUrl" DefaultValue="https://omni-nine-navy.vercel.app/outlook" />
       </bt:Urls>
       <bt:ShortStrings>
-        <bt:String id="groupLabel" DefaultValue="Writing Studio" />
-        <bt:String id="replyLabel" DefaultValue="Answer this" />
-        <bt:String id="insertLabel" DefaultValue="Drop a piece in" />
+        <bt:String id="groupLabel" DefaultValue="Omni" />
+        <bt:String id="replyLabel" DefaultValue="Open Writing Studio" />
+        <bt:String id="insertLabel" DefaultValue="Open Writing Studio" />
       </bt:ShortStrings>
       <bt:LongStrings>
-        <bt:String id="replyTip" DefaultValue="Read this email into Writing Studio, say what else matters, and get a reply written in your voice." />
-        <bt:String id="insertTip" DefaultValue="Insert a piece you've written into this reply, formatted, at the cursor." />
+        <bt:String id="replyTip" DefaultValue="Opens Omni Writing Studio beside this email. It reads the message and writes a reply in your voice; nothing is sent until you send it." />
+        <bt:String id="insertTip" DefaultValue="Opens Omni Writing Studio beside this draft. It can write or polish what you have typed, or drop in a piece you wrote earlier." />
       </bt:LongStrings>
     </Resources>
   </VersionOverrides>

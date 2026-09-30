@@ -373,6 +373,7 @@ const DEFAULT_SETTINGS: Omit<WriterSettings, "user_id"> = {
   show_diff: false,
   variant_count: 1,
   version_retention_days: 10,
+  word_swaps: [],
 };
 
 export function useWriterSettings(userId: string | null) {
@@ -388,9 +389,16 @@ export function useWriterSettings(userId: string | null) {
       .maybeSingle()
       .then(({ data }) => {
         if (!active) return;
+        const row = data as WriterSettings | null;
         setSettings(
-          data
-            ? { ...DEFAULT_SETTINGS, ...(data as WriterSettings) }
+          row
+            ? {
+                ...DEFAULT_SETTINGS,
+                ...row,
+                // A row written before the column existed reads as null, and a
+                // null here would be .map()ed on every render.
+                word_swaps: Array.isArray(row.word_swaps) ? row.word_swaps : [],
+              }
             : { user_id: userId, ...DEFAULT_SETTINGS },
         );
       });
