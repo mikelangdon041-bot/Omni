@@ -28,6 +28,7 @@ import {
   alreadyLearned,
   generatedDetector,
   joinSamples,
+  readsLikeAI,
   splitSamples,
 } from "@/lib/writer/voice";
 import {
@@ -363,6 +364,10 @@ export default function OutlookPage() {
   // default for that one", which is on unless Omni wrote it.
   const [picked, setPicked] = useState<Record<string, boolean>>({});
   const [pasted, setPasted] = useState("");
+  // What the model said about each candidate, keyed the same way the ticklist
+  // is. Only holds the rejections — a candidate it accepted needs no note.
+  const [judgement, setJudgement] = useState<Record<string, string>>({});
+  const [judging, setJudging] = useState(false);
   const [swapAvoid, setSwapAvoid] = useState("");
   const [swapPrefer, setSwapPrefer] = useState("");
   const [signOffDraft, setSignOffDraft] = useState("");
@@ -889,7 +894,7 @@ export default function OutlookPage() {
    */
   const candidates = useMemo(() => {
     const seen = new Set<string>();
-    const out: { key: string; text: string; source: string; ours: boolean }[] = [];
+    const out: { key: string; text: string; source: string; ours: boolean; why: string }[] = [];
     const push = (text: string, source: string) => {
       const t = text.trim();
       if (t.length < SAMPLE_FLOOR) return;
@@ -897,7 +902,28 @@ export default function OutlookPage() {
       if (seen.has(key)) return;
       seen.add(key);
       if (alreadyLearned(t, voice?.samples || "")) return;
-      out.push({ key, text: t, source, ours: wasGenerated(t) });
+      // Three chances to catch something that is not this person's writing,
+      // strongest first. The exact one knows only what went through Omni; the
+      // reading one is free and weak; the third is a model comparing it to
+      // writing they have confirmed, and is the one that works. See
+      // lib/writer/voice.ts and the "authorship" action in the AI route.
+      if (wasGenerated(t)) {
+        out.push({ key, text: t, source, ours: true, why: "Omni wrote this" });
+        return;
+      }
+      const judged = judgement[key];
+      if (judged) {
+        out.push({ key, text: t, source, ours: true, why: judged });
+        return;
+      }
+      const reads = readsLikeAI(t, learnedSamples);
+      out.push({
+        key,
+        text: t,
+        source,
+        ours: reads.flagged,
+        why: reads.flagged ? reads.reasons.join("; ") : "",
+      });
     };
     if (me.name.trim() || me.email.trim())
       for (const m of messages)
@@ -907,10 +933,61 @@ export default function OutlookPage() {
     // single most likely thing to have come out of this pane.
     push(typed, "the draft open in Outlook");
     return out;
-  }, [messages, me, typed, voice?.samples, wasGenerated]);
+  }, [messages, me, typed, voice?.samples, wasGenerated, judgement, learnedSamples]);
 
   const offered = candidates.filter((c) => !c.ours);
   const chosenCandidates = candidates.filter((c) => picked[c.key] ?? !c.ours);
+
+  /**
+   * Ask the model whether each of these was written by the same person as the
+   * samples already confirmed. Needs confirmed samples to compare against, so
+   * it does nothing until the voice has some — which is the honest shape of it:
+   * you cannot tell somebody's writing from a stranger's without seeing theirs.
+   *
+   * Runs when the section is opened, and before anything is kept automatically.
+   * Cached by candidate, so opening the fold twice costs one round of calls.
+   */
+  const judged = useRef(new Set<string>());
+  const judgeCandidates = useCallback(
+    async (list: { key: string; text: string }[]) => {
+      if (learnedSamples.length < 2) return {} as Record<string, string>;
+      const todo = list.filter((c) => !judged.current.has(c.key)).slice(0, 4);
+      if (!todo.length) return {} as Record<string, string>;
+      for (const c of todo) judged.current.add(c.key);
+      setJudging(true);
+      const found: Record<string, string> = {};
+      try {
+        await Promise.all(
+          todo.map(async (c) => {
+            try {
+              const res = await fetch("/api/writer/ai", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "same-origin",
+                body: JSON.stringify({
+                  action: "authorship",
+                  samples: learnedSamples.slice(-6),
+                  candidate: c.text,
+                }),
+              });
+              const json = await res.json();
+              // Only a confident no counts. A maybe is not enough to take
+              // somebody's own writing off the list.
+              if (res.ok && json.sameAuthor === false && json.confidence !== "low")
+                found[c.key] = String(json.reason || "doesn't read like your writing");
+            } catch {
+              // A check that could not run is not a rejection.
+            }
+          }),
+        );
+        if (Object.keys(found).length) setJudgement((prev) => ({ ...prev, ...found }));
+      } finally {
+        setJudging(false);
+      }
+      return found;
+    },
+    [learnedSamples],
+  );
 
   /**
    * Learn — or re-learn — the voice from a list of pieces. Samples are kept
@@ -1021,25 +1098,30 @@ export default function OutlookPage() {
   const autoDone = useRef("");
   useEffect(() => {
     if (!autoKey || autoDone.current === autoKey) return;
-    const take = candidates.filter((c) => !c.ours).map((c) => c.text);
-    if (!take.length) return;
+    const maybe = candidates.filter((c) => !c.ours);
+    if (!maybe.length) return;
     autoDone.current = autoKey;
 
-    const all = [...learnedSamples, ...take];
-    // Re-read the profile on the first batch and every third after that. In
-    // between, the new writing still reaches the model — it goes as samples,
-    // and the profile is only the description of them, which can afford to lag.
-    const restate =
-      !voice?.voice_profile ||
-      Math.floor(all.length / 3) > Math.floor(learnedSamples.length / 3);
     // Out of the commit, so opening the pane paints first and this happens
     // behind it. It is housekeeping; nothing on screen is waiting for it.
     const id = setTimeout(() => {
-      void (restate
-        ? learnVoice(all, `Picked up ${take.length} more of your writing.`)
-        : voice
-          ? updateStyle(voice.id, { samples: joinSamples(all).slice(-24000) })
-          : Promise.resolve());
+      void (async () => {
+        // Nobody is reviewing this batch, so the model check is not optional
+        // here the way it is on the ticklist.
+        const rejected = await judgeCandidates(maybe);
+        const take = maybe.filter((c) => !rejected[c.key]).map((c) => c.text);
+        if (!take.length) return;
+        const all = [...learnedSamples, ...take];
+        // Re-read the profile on the first batch and every third after that.
+        // In between the new writing still reaches the model — it goes as
+        // samples, and the profile is only the description of them.
+        const restate =
+          !voice?.voice_profile ||
+          Math.floor(all.length / 3) > Math.floor(learnedSamples.length / 3);
+        if (restate) await learnVoice(all, `Picked up ${take.length} more of your writing.`);
+        else if (voice)
+          await updateStyle(voice.id, { samples: joinSamples(all).slice(-24000) });
+      })();
     }, 0);
     return () => clearTimeout(id);
     // Everything else is read off the render this key belongs to; listing it
@@ -1225,7 +1307,15 @@ export default function OutlookPage() {
   const outlookSignOff = outlookSignature.trim();
 
   const soundsLikeYou = (
-    <details className="rounded-xl border border-border bg-surface">
+    <details
+      className="rounded-xl border border-border bg-surface"
+      // The model check runs when you open this, not on every pane load, so
+      // the ticks are already right by the time you are looking at them and
+      // nobody pays for a check they never read.
+      onToggle={(e) => {
+        if (e.currentTarget.open) void judgeCandidates(candidates.filter((c) => !c.ours));
+      }}
+    >
       <summary className="flex cursor-pointer list-none items-center justify-between gap-2 p-2">
         <span className="text-[11px] font-semibold text-ink">
           Make it sound like you <span className="font-normal text-muted">▾</span>
@@ -1292,7 +1382,8 @@ export default function OutlookPage() {
               <p className="text-[10px] leading-snug text-muted">
                 {offered.length
                   ? "On this thread. Tick what you actually wrote yourself:"
-                  : "On this thread — but Omni wrote all of it, so none of it is ticked:"}
+                  : "On this thread — but none of it reads like your own writing, so none is ticked:"}
+                {judging && <span className="animate-pulse"> checking…</span>}
               </p>
               <ul className="mt-1 space-y-1">
                 {candidates.map((c) => {
@@ -1316,8 +1407,15 @@ export default function OutlookPage() {
                           </span>
                           <span className="mt-0.5 block text-[10px] text-muted">
                             {c.source}
-                            {c.ours && " · Omni wrote this — leave it off"}
                           </span>
+                          {/* Never a bare verdict. The reason is the whole
+                              point: only you know whether you wrote it, and
+                              you can only judge that against what it noticed. */}
+                          {c.ours && c.why && (
+                            <span className="mt-0.5 block text-[10px] leading-snug text-amber-700">
+                              Probably not yours — {c.why}. Tick it if I&apos;m wrong.
+                            </span>
+                          )}
                         </span>
                       </label>
                     </li>

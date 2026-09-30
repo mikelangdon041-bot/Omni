@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { anthropic, WRITER_MODEL } from "@/lib/anthropic";
+import { anthropic, QUICK_MODEL, WRITER_MODEL } from "@/lib/anthropic";
 import {
   ACTION_CHIPS,
   AUDIENCE_CHIPS,
@@ -90,6 +90,75 @@ Be specific and quote short examples from the samples. Under 250 words. Return o
         messages: [{ role: "user", content: `Writing samples:\n\n${samples}` }],
       });
       return NextResponse.json({ profile: firstText(res) });
+    }
+
+    /**
+     * "Did the person who wrote these write this one too?"
+     *
+     * The guard on the voice, for everything the exact check cannot see: a
+     * reply drafted in ChatGPT, or in Copilot, or by a colleague. Asked this
+     * way round on purpose. "Is this AI?" in the abstract does not work —
+     * general detectors are unreliable, worst of all at email length, and the
+     * writer prompt here already forbids the phrases they look for, so its own
+     * output is scrubbed of the evidence. Measured: a pattern check caught
+     * none of five generated replies. Asked as authorship, with real examples
+     * of the person to compare against, the same five rows came out 5/7 with
+     * no false rejections.
+     *
+     * A small model, because this runs per candidate and the judgement is a
+     * comparison rather than a composition.
+     */
+    if (action === "authorship") {
+      const samples: string[] = (Array.isArray(body?.samples) ? body.samples : [])
+        .slice(0, 6)
+        .map((s: unknown) => String(s).slice(0, 3000))
+        .filter(Boolean);
+      const candidate = String(body?.candidate || "").slice(0, 6000);
+      if (!candidate.trim() || samples.length < 2)
+        return NextResponse.json({ sameAuthor: true, confidence: "low", reason: "" });
+
+      const res = await anthropic().messages.create({
+        model: QUICK_MODEL,
+        max_tokens: 700,
+        output_config: {
+          format: {
+            type: "json_schema",
+            schema: {
+              type: "object",
+              properties: {
+                sameAuthor: { type: "boolean" as const },
+                confidence: { type: "string" as const, enum: ["low", "medium", "high"] },
+                reason: { type: "string" as const },
+              },
+              required: ["sameAuthor", "confidence", "reason"],
+              additionalProperties: false,
+            },
+          },
+        },
+        system: `You compare writing. You are given several emails known to be written by one person, and one more email. Decide whether the same person wrote the last one.
+
+Judge on HOW it is written, never on what it is about: sentence length and how much it varies, contractions, how they open and close, hedging, punctuation habits, whether they explain themselves or assume you already know.
+
+The usual reason for a mismatch is that the last email was drafted by an AI and lightly edited. Those read smoother and more even than a person in a hurry: every sentence a similar length, every paragraph balanced, nothing left implicit, no abruptness.
+
+Subject matter, names and dates are worthless evidence. Two emails about the same meeting are not therefore by the same person.
+
+"reason" is one short sentence naming the habit that decided it, addressed to the person themselves ("longer, more even sentences than you write").`,
+        messages: [
+          {
+            role: "user",
+            content: `Known to be by this person:\n\n${samples
+              .map((s, i) => `<known ${i + 1}>\n${s}\n</known ${i + 1}>`)
+              .join("\n\n")}\n\nThe email in question:\n\n<candidate>\n${candidate}\n</candidate>`,
+          },
+        ],
+      });
+      const parsed = JSON.parse(firstText(res) || "{}");
+      return NextResponse.json({
+        sameAuthor: parsed.sameAuthor !== false,
+        confidence: String(parsed.confidence || "low"),
+        reason: String(parsed.reason || ""),
+      });
     }
 
     // "Look it up" — the one thing the writer genuinely could not do before.

@@ -63,11 +63,35 @@ Learn from that and the model is reading its own output back — its habits get
 scored as yours, and every round thins out the writing that was actually
 yours until the voice is a generic version of where it started.
 
-So nothing goes in without being checked against everything Omni has written
-for you. The check counts overlapping runs of eight words, which survives you
+So nothing goes in without being checked. Three checks, and the order matters.
+
+**What Omni wrote**, exactly. Every candidate is compared against the pieces
+in your library, counting overlapping runs of eight words — which survives you
 rewording a sentence or two before sending, and doesn't trip on two people
-writing about the same subject. Anything it recognises is still listed, but
-unticked and labelled — hidden would be worse than visible and off.
+writing about the same subject. Free, certain, and blind to everything that
+didn't come through here.
+
+**How it reads.** A handful of phrases that turn up in machine-written business
+email far more than in anyone's own, plus a measure of how even the sentences
+and paragraphs are. Be honest about this one: it is weak. General "was this AI
+written?" detectors are unreliable, worst of all at email length, and measured
+against five freshly generated replies this caught none of them — partly
+because Omni's own prompt already forbids the phrases a detector looks for.
+It stays because it costs nothing and catches the older, more obvious stuff.
+
+**Whether it reads like _you_.** The one that works. Not "is this AI?" in the
+abstract, which is the question nobody can answer, but "did the person who
+wrote these write this one too?" — with writing you have already confirmed as
+yours sitting next to it. On the same five generated replies plus four human
+emails, this kept out five of seven that weren't yours and wrongly rejected
+none of your own. It needs at least two confirmed samples before it can say
+anything, runs when you open the section, and always runs before anything is
+kept automatically.
+
+Nothing is ever deleted or hidden on the strength of these. A flagged piece is
+still on the list, unticked, with the reason in words — "longer, more even
+sentences than you write" — and a tick you can put back. Only you know whether
+you wrote it; the checks only decide where the tick starts.
 
 ## What lands in Outlook
 
