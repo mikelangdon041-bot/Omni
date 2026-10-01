@@ -1,12 +1,19 @@
 "use client";
 
-// Meeting Prep — Brief: the generated brief in a two-column magazine layout.
-// Every section is editable; redo any section with optional guidance; refine
-// the whole brief; brainstorm extra ideas & angles; export Word / Outlook
-// invite; push the checklist to the to-do list. Generation itself lives at
-// the page level so it keeps running while you switch tabs.
+// Meeting Prep — Brief: the generated brief, as one readable column.
+//
+// It used to be two magazine columns with a toolbar of seven buttons, an
+// always-open "refine" box at the bottom and a bordered control strip under
+// every single section. Read all at once that is a wall, and the thing you
+// came for — the words you are going to say — competes with its own chrome
+// for attention. So: one column at a readable measure, one row of controls,
+// everything occasional behind a menu or a modal, and each box's own actions
+// as quiet icons that only matter once you are looking at that box.
+//
+// Generation itself lives at the page level so it keeps running while you
+// switch tabs.
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   CalendarPlus,
@@ -30,6 +37,7 @@ import {
   Sparkles,
   Target,
   Users,
+  Wand2,
   X,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -37,13 +45,13 @@ import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { RichText } from "@/components/ui/RichText";
-import { RegenerateControl } from "@/components/ui/RegenerateControl";
 import { useToast } from "@/components/ui/Feedback";
 import { htmlToPlain } from "@/lib/writer/types";
 import type { GenerateOpts } from "@/lib/meetingprep/useBriefGenerator";
 import {
   meetingContextText,
   orderSections,
+  sectionTitle,
   type CustomSection,
   type IdeaSuggestion,
   type MpMeeting,
@@ -120,6 +128,7 @@ export function BriefTab({
   userId,
   busy,
   briefStale,
+  briefOutdated = false,
   generateDirect,
   generateWithPreview,
   goSetup,
@@ -134,11 +143,13 @@ export function BriefTab({
   userId: string | null;
   busy: string | null;
   briefStale: boolean;
+  /** Written by an older version of the writing engine. */
+  briefOutdated?: boolean;
   /** 0–100 while the whole brief is being built. */
   progress?: number;
   /** What that generation is doing right now. */
   stage?: string;
-  /** The user's arrangement of the brief's boxes, from My brief. */
+  /** The user's arrangement of the brief's boxes, from Brief settings. */
   sectionOrder?: string[];
   /** Only for the very first generation — applies straight away. */
   generateDirect: (opts?: GenerateOpts) => Promise<void>;
@@ -151,12 +162,12 @@ export function BriefTab({
   const toast = useToast();
   const [showAdd, setShowAdd] = useState(false);
   const [showIdeas, setShowIdeas] = useState(false);
-  const [guidance, setGuidance] = useState("");
+  const [showRefine, setShowRefine] = useState(false);
   const [pushedTasks, setPushedTasks] = useState(false);
 
   // Stored order vs. displayed order. Edits and appends work on the stored
   // array so nothing is silently rewritten; only what's rendered follows the
-  // arrangement the user chose in "My brief".
+  // arrangement the user chose in Brief settings.
   const storedSections = m.brief?.sections || [];
   const sections = orderSections(storedSections, sectionOrder);
   const hasBrief = sections.length > 0;
@@ -200,7 +211,7 @@ export function BriefTab({
 
   // Only boxes the model added on its own can be dropped from here — the
   // blueprint ones come back on the next update anyway, and saved custom
-  // sections are managed in My brief.
+  // sections are managed in Brief settings.
   const removeSection = (key: string) =>
     save({
       brief: { ...m.brief, sections: storedSections.filter((s) => s.key !== key) },
@@ -214,8 +225,8 @@ export function BriefTab({
       },
     });
 
-  // Append a brainstormed idea into the "More angles & ideas" section
-  // (creating the section on first use).
+  // Append a brainstormed idea into the "Extra ideas" section (creating the
+  // section on first use).
   function addIdeaToBrief(idea: IdeaSuggestion) {
     const html = `<p><b>${esc(idea.title)}.</b> ${esc(idea.detail)}</p>`;
     const existing = storedSections.find((s) => s.key === IDEAS_SECTION_KEY);
@@ -225,7 +236,7 @@ export function BriefTab({
         )
       : [
           ...storedSections,
-          { key: IDEAS_SECTION_KEY, title: "More angles & ideas", content: html },
+          { key: IDEAS_SECTION_KEY, title: "Extra ideas", content: html },
         ];
     save({
       brief: { ...m.brief, sections: nextSections },
@@ -237,7 +248,7 @@ export function BriefTab({
   // Empty / generating state.
   if (!hasBrief) {
     return (
-      <div className="grid place-items-center rounded-xl border border-dashed border-border bg-surface px-6 py-16 text-center">
+      <div className="mx-auto grid max-w-3xl place-items-center rounded-xl border border-dashed border-border bg-surface px-6 py-16 text-center">
         {busy === "all" ? (
           <>
             <ProgressRing percent={progress} />
@@ -275,14 +286,17 @@ export function BriefTab({
   }
 
   return (
-    <div className="space-y-4">
-      {/* Stale-setup banner: the plain "regenerate" only appears when the
-          setup actually changed since this brief was written. */}
-      {briefStale && (
+    <div className="mx-auto max-w-3xl space-y-4">
+      {/* One banner, two reasons. The setup moving on is the writer's doing;
+          the engine moving on is ours, and until this existed there was no
+          way for the app to admit the second one had happened. */}
+      {(briefStale || briefOutdated) && (
         <div className="flex flex-col gap-2 rounded-xl border border-amber-300 bg-amber-50 p-3 sm:flex-row sm:items-center">
           <p className="flex flex-1 items-start gap-2 text-sm text-amber-900">
             <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-600" />
-            Your setup changed since this brief was generated.
+            {briefStale
+              ? "Your setup changed since this brief was written."
+              : "This brief was written before the latest improvements to how briefs are written."}
           </p>
           <Button
             size="sm"
@@ -291,123 +305,105 @@ export function BriefTab({
             onClick={() => void generateWithPreview()}
           >
             <RefreshCw size={14} className={busy === "all" ? "animate-spin" : ""} />
-            {busy === "all" ? `Updating… ${progress}%` : "Update the brief"}
+            {busy === "all" ? `Rewriting… ${progress}%` : "Rewrite it"}
           </Button>
         </div>
       )}
 
-      {/* Action bar */}
+      {/* One row. Everything occasional lives behind the menu or a modal. */}
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" variant="secondary" onClick={() => setShowIdeas(true)}>
-          <Lightbulb size={14} /> Brainstorm ideas
+        <Button size="sm" variant="secondary" onClick={() => setShowRefine(true)}>
+          <Wand2 size={14} /> Change the whole brief
         </Button>
         <Button size="sm" variant="secondary" onClick={() => setShowAdd(true)}>
-          <Plus size={14} /> Add section
+          <Plus size={14} /> Add a section
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => setShowIdeas(true)}>
+          <Lightbulb size={14} /> Ideas
         </Button>
         {collapsedKeys.size > 0 ? (
-          <Button size="sm" variant="secondary" onClick={() => setCollapsed(new Set())}>
+          <Button size="sm" variant="ghost" onClick={() => setCollapsed(new Set())}>
             <ChevronsUpDown size={14} /> Expand all
           </Button>
         ) : (
           <Button
             size="sm"
-            variant="secondary"
+            variant="ghost"
             onClick={() => setCollapsed(new Set(sections.map((s) => s.key)))}
           >
             <ChevronsDownUp size={14} /> Collapse all
           </Button>
         )}
         <span className="flex-1" />
-        <Button size="sm" variant="secondary" onClick={() => void exportBriefDocx(m)}>
-          <FileDown size={14} /> Word
-        </Button>
-        <Button
-          size="sm"
-          variant="secondary"
-          disabled={!m.date}
-          title={m.date ? "Download an Outlook invite" : "Set a date in Setup first"}
-          onClick={() => downloadMeetingInvite(m)}
-        >
-          <CalendarPlus size={14} /> Outlook invite
-        </Button>
-        <Button size="sm" variant="secondary" disabled={pushedTasks} onClick={pushChecklist}>
-          <ListTodo size={14} /> {pushedTasks ? "Added to to-dos" : "Checklist → to-dos"}
-        </Button>
+        <ExportMenu
+          onWord={() => void exportBriefDocx(m)}
+          onInvite={m.date ? () => downloadMeetingInvite(m) : undefined}
+          onChecklist={pushedTasks ? undefined : pushChecklist}
+          checklistDone={pushedTasks}
+        />
       </div>
 
-      {/* Sections — two-column magazine layout on large screens (item 11).
-          Each one collapses (remembered per meeting) and carries its own
-          regenerate control: a plain "Redo" only once there's something to
-          redo (hand-edited, or the setup moved on since generation), plus an
-          always-available "Adjust" for explicit guidance. */}
-      <div className="gap-4 lg:columns-2">
+      {/* The brief itself. One column at a readable measure — this is a
+          document you read top to bottom, not a dashboard. */}
+      <div className="space-y-3">
         {sections.map((s) => {
           const Icon = SECTION_ICONS[s.key] || (s.origin === "ai" ? Sparkles : FileText);
           const sectionBusy = busy === s.key;
           const isCollapsed = collapsedKeys.has(s.key);
           const isDirty = s.generatedContent !== undefined && s.content !== s.generatedContent;
           return (
-            <section
-              key={s.key}
-              className="mb-4 break-inside-avoid rounded-xl border border-border bg-surface shadow-sm"
-            >
-              <div className="flex items-center rounded-t-xl border-b border-border bg-canvas/50">
+            <section key={s.key} className="rounded-xl border border-border bg-surface">
+              <div className="flex items-center gap-1 border-b border-border px-1 py-1">
                 <button
                   type="button"
                   onClick={() => toggleCollapsed(s.key)}
-                  className="flex min-w-0 flex-1 items-center justify-between gap-2 px-4 py-2.5 text-left"
+                  className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-3 py-1.5 text-left transition hover:bg-canvas/60"
                 >
-                  <h3 className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-sm font-semibold">
-                    <Icon size={15} className="shrink-0 text-[var(--accent)]" />
-                    {s.title}
-                    {s.origin === "ai" && (
-                      <span
-                        title={s.prompt || "Added because this meeting needed it"}
-                        className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[11px] font-medium text-[var(--accent)]"
-                      >
-                        Added for this meeting
-                      </span>
-                    )}
-                  </h3>
                   <ChevronDown
-                    size={16}
+                    size={15}
                     className={`shrink-0 text-muted transition-transform ${isCollapsed ? "-rotate-90" : ""}`}
                   />
+                  <Icon size={15} className="shrink-0 text-[var(--accent)]" />
+                  <h3 className="min-w-0 truncate text-sm font-semibold">
+                    {sectionTitle(s.key, s.title)}
+                  </h3>
+                  {s.origin === "ai" && (
+                    <span
+                      title={s.prompt || "Added because this meeting needed it"}
+                      className="shrink-0 rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--accent)]"
+                    >
+                      Added for this meeting
+                    </span>
+                  )}
                 </button>
-                {s.origin === "ai" && (
-                  <button
-                    type="button"
-                    aria-label={`Remove "${s.title}"`}
-                    title="Remove this box"
-                    onClick={() => {
-                      removeSection(s.key);
-                      toast("info", `Removed "${s.title}"`);
-                    }}
-                    className="mr-2 grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted hover:bg-canvas hover:text-ink"
-                  >
-                    <X size={14} />
-                  </button>
+                {!isCollapsed && (
+                  <SectionActions
+                    busy={sectionBusy}
+                    canRedoPlain={isDirty || briefStale || briefOutdated}
+                    onAddMore={() =>
+                      void generateWithPreview({ onlyKey: s.key, extend: true })
+                    }
+                    onRedo={() => void generateWithPreview({ onlyKey: s.key })}
+                    onChange={(g) => void generateWithPreview({ onlyKey: s.key, guidance: g })}
+                    onRemove={
+                      s.origin === "ai"
+                        ? () => {
+                            removeSection(s.key);
+                            toast("info", `Removed "${s.title}"`);
+                          }
+                        : undefined
+                    }
+                  />
                 )}
               </div>
               {!isCollapsed && (
-                <>
-                  <div className={`p-3 ${sectionBusy ? "opacity-50" : ""}`}>
-                    <RichText
-                      value={s.content}
-                      onChange={(html) => setSection(s.key, html)}
-                      minHeight="min-h-16"
-                    />
-                  </div>
-                  <div className="border-t border-border px-3 py-2">
-                    <RegenerateControl
-                      canRedoPlain={isDirty || briefStale}
-                      busy={sectionBusy}
-                      onRegenerate={(g) =>
-                        void generateWithPreview({ onlyKey: s.key, guidance: g })
-                      }
-                    />
-                  </div>
-                </>
+                <div className={`px-3 py-2 ${sectionBusy ? "opacity-50" : ""}`}>
+                  <RichText
+                    value={s.content}
+                    onChange={(html) => setSection(s.key, html)}
+                    minHeight="min-h-16"
+                  />
+                </div>
               )}
             </section>
           );
@@ -434,32 +430,15 @@ export function BriefTab({
         </details>
       )}
 
-      {/* Refine loop */}
-      <section className="rounded-xl border border-[var(--accent)]/30 bg-[var(--accent-soft)]/25 p-4">
-        <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
-          <Sparkles size={13} className="text-[var(--accent)]" />
-          Refine the whole brief with new guidance
-        </p>
-        <Textarea
-          value={guidance}
-          onChange={(e) => setGuidance(e.target.value)}
-          placeholder='e.g. "They just published a negative trial — factor that in" or "make the agenda 20 minutes, not 45"'
-          className="min-h-16 bg-surface"
-        />
-        <div className="mt-2 flex justify-end">
-          <Button
-            size="sm"
-            disabled={!!busy || !guidance.trim()}
-            onClick={async () => {
-              const g = guidance.trim();
-              await generateWithPreview({ refine: true, guidance: g });
-              setGuidance("");
-            }}
-          >
-            <Sparkles size={14} /> {busy === "all" ? "Refining…" : "Refine brief"}
-          </Button>
-        </div>
-      </section>
+      <RefineModal
+        open={showRefine}
+        busy={busy === "all"}
+        onClose={() => setShowRefine(false)}
+        onRefine={async (g) => {
+          setShowRefine(false);
+          await generateWithPreview({ refine: true, guidance: g });
+        }}
+      />
 
       {/* Creative brainstorm — suggestions you can add one by one. */}
       <IdeasModal
@@ -481,6 +460,230 @@ export function BriefTab({
         }}
       />
     </div>
+  );
+}
+
+// Per-section actions. Quiet icons rather than the bordered strip that used
+// to sit under every box — the actions matter once you are reading that one
+// box, and the brief is easier to read when they are not shouting from ten
+// places at once.
+//
+// "Add more" is the one that was missing: a redo replaces what is there, and
+// most of the time what you want is the same box with more in it.
+function SectionActions({
+  busy,
+  canRedoPlain,
+  onAddMore,
+  onRedo,
+  onChange,
+  onRemove,
+}: {
+  busy: boolean;
+  /** Only offer a no-guidance redo when there's a reason for one. */
+  canRedoPlain: boolean;
+  onAddMore: () => void;
+  onRedo: () => void;
+  onChange: (guidance: string) => void;
+  onRemove?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [guidance, setGuidance] = useState("");
+
+  return (
+    <>
+      <div className="flex shrink-0 items-center gap-0.5 pr-1">
+        <SmallBtn label="Write more in this box" disabled={busy} onClick={onAddMore}>
+          <Plus size={14} />
+        </SmallBtn>
+        {canRedoPlain && (
+          <SmallBtn label="Redo this box" disabled={busy} onClick={onRedo}>
+            <RefreshCw size={13} className={busy ? "animate-spin" : ""} />
+          </SmallBtn>
+        )}
+        <SmallBtn label="Tell me what to change" disabled={busy} onClick={() => setOpen(true)}>
+          <Wand2 size={13} />
+        </SmallBtn>
+        {onRemove && (
+          <SmallBtn label="Remove this box" onClick={onRemove}>
+            <X size={14} />
+          </SmallBtn>
+        )}
+      </div>
+      <Modal open={open} onClose={() => setOpen(false)} title="What should be different?" size="sm">
+        <Textarea
+          autoFocus
+          value={guidance}
+          onChange={(e) => setGuidance(e.target.value)}
+          placeholder="e.g. &quot;shorter, and cut the part about pricing&quot;"
+          className="min-h-20"
+        />
+        <div className="mt-3 flex justify-end gap-2">
+          <Button variant="ghost" onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
+          <Button
+            disabled={busy || !guidance.trim()}
+            onClick={() => {
+              onChange(guidance.trim());
+              setGuidance("");
+              setOpen(false);
+            }}
+          >
+            <RefreshCw size={14} /> Rewrite this box
+          </Button>
+        </div>
+      </Modal>
+    </>
+  );
+}
+
+function SmallBtn({
+  label,
+  onClick,
+  disabled,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={onClick}
+      className="grid h-7 w-7 place-items-center rounded-md text-muted transition hover:bg-canvas hover:text-ink disabled:opacity-30"
+    >
+      {children}
+    </button>
+  );
+}
+
+// Word / invite / to-dos. Three things you do once, at the end — they do not
+// deserve three permanent buttons next to the ones you use while writing.
+function ExportMenu({
+  onWord,
+  onInvite,
+  onChecklist,
+  checklistDone,
+}: {
+  onWord: () => void;
+  onInvite?: () => void;
+  onChecklist?: () => void;
+  checklistDone: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  const run = (fn?: () => void) => () => {
+    fn?.();
+    setOpen(false);
+  };
+
+  return (
+    <div ref={ref} className="relative">
+      <Button size="sm" variant="secondary" onClick={() => setOpen((v) => !v)}>
+        <FileDown size={14} /> Export
+        <ChevronDown size={13} className={open ? "rotate-180 transition" : "transition"} />
+      </Button>
+      {open && (
+        <div className="absolute right-0 z-30 mt-1 w-60 overflow-hidden rounded-lg border border-border bg-surface py-1 shadow-lg">
+          <MenuItem icon={FileDown} label="Download as Word" onClick={run(onWord)} />
+          <MenuItem
+            icon={CalendarPlus}
+            label="Outlook invite"
+            hint={onInvite ? undefined : "needs a date"}
+            onClick={onInvite && run(onInvite)}
+          />
+          <MenuItem
+            icon={ListTodo}
+            label={checklistDone ? "Checklist added" : "Checklist to my to-dos"}
+            onClick={onChecklist && run(onChecklist)}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MenuItem({
+  icon: Icon,
+  label,
+  hint,
+  onClick,
+}: {
+  icon: React.ComponentType<{ size?: number | string; className?: string }>;
+  label: string;
+  hint?: string;
+  /** Absent = the action isn't available yet, and says why in `hint`. */
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={!onClick}
+      onClick={onClick}
+      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition hover:bg-canvas disabled:opacity-45 disabled:hover:bg-transparent"
+    >
+      <Icon size={14} className="shrink-0 text-[var(--accent)]" />
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {hint && <span className="shrink-0 text-[11px] text-muted">{hint}</span>}
+    </button>
+  );
+}
+
+function RefineModal({
+  open,
+  busy,
+  onClose,
+  onRefine,
+}: {
+  open: boolean;
+  busy: boolean;
+  onClose: () => void;
+  onRefine: (guidance: string) => void;
+}) {
+  const [guidance, setGuidance] = useState("");
+  return (
+    <Modal open={open} onClose={onClose} title="Change the whole brief">
+      <p className="mb-3 text-sm text-muted">
+        Tell me what&apos;s wrong with it, or what changed, and I&apos;ll rework
+        every box around that. You see the changes before they land.
+      </p>
+      <Textarea
+        autoFocus
+        value={guidance}
+        onChange={(e) => setGuidance(e.target.value)}
+        placeholder='e.g. "They just published a negative trial — factor that in" or "make the agenda 20 minutes, not 45"'
+        className="min-h-24"
+      />
+      <div className="mt-3 flex justify-end gap-2">
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button
+          disabled={busy || !guidance.trim()}
+          onClick={() => {
+            onRefine(guidance.trim());
+            setGuidance("");
+          }}
+        >
+          <Sparkles size={14} /> {busy ? "Reworking…" : "Rework the brief"}
+        </Button>
+      </div>
+    </Modal>
   );
 }
 
@@ -543,9 +746,9 @@ function IdeasModal({
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Brainstorm ideas & angles" size="lg">
+    <Modal open={open} onClose={onClose} title="What else could you bring up?" size="lg">
       <p className="mb-3 text-sm text-muted">
-        I&apos;ll suggest what else you could bring up or showcase — the things
+        I&apos;ll suggest what else you could raise or showcase — the things
         the sharpest people walking into this kind of meeting would prepare.
         Add the ones you like straight into the brief.
       </p>
@@ -558,7 +761,7 @@ function IdeasModal({
         />
         <Button disabled={busy} onClick={() => void brainstorm()} className="shrink-0">
           <Lightbulb size={15} />
-          {busy ? "Thinking…" : ideas.length ? "Brainstorm again" : "Brainstorm"}
+          {busy ? "Thinking…" : ideas.length ? "Think again" : "Give me ideas"}
         </Button>
       </div>
 
@@ -639,7 +842,7 @@ function AddSectionModal({
             onChange={(e) => setPermanent(e.target.checked)}
             className="h-4 w-4 accent-[var(--accent)]"
           />
-          Save to my profile — include in every future brief
+          Keep this section in every future brief
         </label>
         <div className="flex justify-end">
           <Button
@@ -651,7 +854,7 @@ function AddSectionModal({
               setPermanent(false);
             }}
           >
-            <Plus size={14} /> Add & generate
+            <Plus size={14} /> Add & write it
           </Button>
         </div>
       </div>

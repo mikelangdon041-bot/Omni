@@ -23,7 +23,7 @@ import { useMpFolders, useMpMeetings, useUserId } from "@/lib/meetingprep/hooks"
 import {
   folderMovePatch,
   inFolder,
-  isUnfiled,
+  needsFiling,
   meetingTypeLabel,
   type FolderKind,
   type MpFolder,
@@ -51,7 +51,7 @@ export default function FolderPage() {
   const groupKind: FolderKind = folder?.kind === "topic" ? "person" : "topic";
 
   const list = useMemo(() => {
-    const rows = meetings.filter((m) => (isUncategorized ? isUnfiled(m) : inFolder(m, id)));
+    const rows = meetings.filter((m) => (isUncategorized ? needsFiling(m) : inFolder(m, id)));
     return [...rows].sort((a, b) => {
       const ta = a.date ? +new Date(a.date) : +new Date(a.created_at);
       const tb = b.date ? +new Date(b.date) : +new Date(b.created_at);

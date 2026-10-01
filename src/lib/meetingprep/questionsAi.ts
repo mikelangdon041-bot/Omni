@@ -57,6 +57,7 @@ export async function writeQuestions({
   categories = [],
   count = 20,
   focus = "",
+  guidance = "",
 }: {
   meeting: MeetingPayload;
   kolBlock?: string;
@@ -70,6 +71,8 @@ export async function writeQuestions({
   count?: number;
   /** "more on AI", "shorter", "harder" — what this batch should be about. */
   focus?: string;
+  /** A standing correction from the writer that every batch must obey. */
+  guidance?: string;
 }): Promise<WrittenQuestion[]> {
   const context = [
     meetingContext(meeting, kolBlock),
@@ -85,12 +88,15 @@ export async function writeQuestions({
     output_config: { format: { type: "json_schema", schema: QUESTIONS_SCHEMA } },
     system: `You write the question bank someone carries into a meeting. Exactly ${count} questions.
 
+Before you write a single question, find the subject of this session in the context and hold it in front of you. If a line marked THE SUBJECT OF THIS SESSION is there, that is the subject, and the meeting's name is not: a question that would still make sense if the subject were swapped for a different one does not belong in this bank. Every question must be about that subject, in the specific terms that subject is argued about. Read the subject closely enough to name its parts: if it says one thing is turned into another, ask about the turning, about what is lost on the way, and about how anyone would know it worked.
+
 ${SEAT_RULE}
 
 ${DOMAIN_RULE}
 
 Every question:
 - is written word for word, exactly as it would be said out loud, short enough to say in one breath and to read off a card at a glance. No preamble, no stage directions, no "you might ask".
+- serves the session's stated subject. Not the industry around it, not the meeting's title, that subject.
 - is one only someone who knows this subject could ask. A question that hands the meeting's own title back ("what does the future of X look like?") or that could be asked at any meeting in any industry ("what are your biggest challenges?") is filler. Name the specific change, number, trade-off or disagreement underneath it.
 - opens something up. Never a yes/no unless the yes/no is the point and the follow-up does the work.
 
@@ -119,7 +125,11 @@ Plain prose. No markdown, no bold, no emoji, no quotation marks around the quest
                 .map((c) => `- ${c}`)
                 .join("\n")}`
             : ""
-        }${focus ? `\n\nWhat this batch should focus on: ${focus}` : ""}`,
+        }${focus ? `\n\nWhat this batch should focus on: ${focus}` : ""}${
+          guidance
+            ? `\n\nA standing instruction from the writer about how these questions must be written. It overrides your own habits and it applies to every single question, not just some of them:\n${guidance}`
+            : ""
+        }`,
       },
     ],
   });

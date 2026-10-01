@@ -1,6 +1,6 @@
 "use client";
 
-// Meeting Prep — Grill me: the AI plays the hardest version of the other
+// Meeting Prep — Practice: the AI plays the hardest version of the other
 // side. Answer by typing or speaking; get coaching on YOUR answer, then see
 // the model answer.
 

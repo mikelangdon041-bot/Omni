@@ -27,8 +27,9 @@ export const maxDuration = 300;
 
 // Meeting Prep AI — powered by Claude (same model as Writing Studio). Actions:
 //   research { meeting, kolId? }               → { notes } (live web search)
-//   questions{ meeting, kolId?, research?, briefText?, existing:[], count?,
-//              focus? }                        → { questions:[...] } (the bank)
+//   questions{ meeting, kolId?, research?, briefText?, existing:[],
+//              categories:[], count?, focus?, guidance? }
+//                                              → { questions:[...] } (the bank)
 //   brief    { meeting, sections:[{key,title,prompt}], kolId?, guidance?,
 //              previousSections? }             → { sections:[{key,title,content,
 //              prompt?,origin?}] } (origin "ai" = a box the model added)
@@ -218,6 +219,7 @@ export async function POST(req: Request) {
           previous: body?.previousSections,
           onlyKey: String(body?.onlyKey || ""),
           research: String(body?.research || "").slice(0, 20000),
+          extend: Boolean(body?.extend),
         });
         return NextResponse.json({ sections: out });
       } catch (e) {
@@ -249,8 +251,12 @@ export async function POST(req: Request) {
         research: String(body?.research || "").slice(0, 20000),
         briefText: String(body?.briefText || "").slice(0, 12000),
         existing: Array.isArray(body?.existing) ? body.existing.map(String).slice(0, 120) : [],
+        categories: Array.isArray(body?.categories)
+          ? body.categories.map(String).slice(0, 20)
+          : [],
         count: Math.min(30, Math.max(6, Number(body?.count) || 20)),
         focus: String(body?.focus || "").slice(0, 500),
+        guidance: String(body?.guidance || "").slice(0, 2000),
       });
       return NextResponse.json({ questions });
     }

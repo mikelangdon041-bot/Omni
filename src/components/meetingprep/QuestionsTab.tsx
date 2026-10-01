@@ -14,6 +14,7 @@
 
 import { useMemo, useState } from "react";
 import {
+  AlertTriangle,
   ArrowDown,
   ArrowUp,
   Check,
@@ -24,9 +25,11 @@ import {
   Pencil,
   Play,
   Plus,
+  RefreshCw,
   Sparkles,
   Star,
   Trash2,
+  Wand2,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
@@ -35,7 +38,10 @@ import { Modal } from "@/components/ui/Modal";
 import { useToast } from "@/components/ui/Feedback";
 import { htmlToPlain } from "@/lib/writer/types";
 import {
+  QUESTIONS_ENGINE,
+  engineBehind,
   meetingTypeLabel,
+  setupFingerprint,
   type MpMeeting,
   type QuestionItem,
 } from "@/lib/meetingprep/types";
@@ -46,6 +52,7 @@ const newId = () => `q${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
 function payloadOf(m: MpMeeting) {
   return {
     title: m.title,
+    topic: m.topic,
     meetingType: meetingTypeLabel(m.meeting_type),
     date: m.date,
     durationMin: m.duration_min,
@@ -75,6 +82,7 @@ export function QuestionsTab({
   const [showAsk, setShowAsk] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [showMore, setShowMore] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [openCats, setOpenCats] = useState<Set<string>>(new Set());
   const [dragId, setDragId] = useState<string | null>(null);
@@ -100,6 +108,22 @@ export function QuestionsTab({
 
   const setItems = (next: QuestionItem[]) =>
     save({ questions: { ...m.questions, items: next } });
+
+  // The standing correction, if the writer has given one. It is kept on the
+  // bank so it survives: telling the model once to stop opening every
+  // question the same way should not wear off at the next batch.
+  const guidance = m.questions?.guidance || "";
+
+  // Behind for one of two reasons: the setup moved (most often the topic,
+  // which is the whole point of the bank) or the question writer itself got
+  // better since these were written.
+  const fingerprint = setupFingerprint(m);
+  const questionsStale = Boolean(
+    items.length && m.questions?.sourceFingerprint && m.questions.sourceFingerprint !== fingerprint,
+  );
+  const questionsOutdated = Boolean(
+    items.length && engineBehind(m.questions?.engine, QUESTIONS_ENGINE),
+  );
 
   const patch = (id: string, p: Partial<QuestionItem>) =>
     setItems(items.map((q) => (q.id === id ? { ...q, ...p } : q)));
@@ -127,13 +151,28 @@ export function QuestionsTab({
     );
   }
 
-  async function generate(opts: { more?: boolean; focus?: string } = {}) {
+  /**
+   * Writes a batch of questions.
+   *
+   * `replace` is the "I told you what was wrong with these, do them again"
+   * path: every AI-written question goes and a fresh set takes its place,
+   * written to the new instruction. Questions the writer typed themselves are
+   * never touched by it — those are theirs.
+   */
+  async function generate(
+    opts: { focus?: string; guidance?: string; replace?: boolean } = {},
+  ) {
     setBusy(true);
     try {
       await flush();
       const briefText = (m.brief?.sections || [])
         .map((s) => `${s.title}:\n${htmlToPlain(s.content)}`)
         .join("\n\n");
+      // A rewrite starts from a blank sheet, so it must not be told to avoid
+      // the questions it is replacing, nor to file into the categories that
+      // the correction may well be about.
+      const kept = opts.replace ? items.filter((q) => q.source === "user") : items;
+      const nextGuidance = opts.guidance ?? guidance;
       const res = await fetch("/api/meeting/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -146,10 +185,11 @@ export function QuestionsTab({
           // the same subject and it was gathered for this meeting.
           research: m.brief?.research?.notes || "",
           briefText,
-          existing: items.map((q) => q.text),
-          categories: [...new Set(items.map((q) => q.category))],
+          existing: kept.map((q) => q.text),
+          categories: opts.replace ? [] : [...new Set(items.map((q) => q.category))],
           count: 20,
           focus: opts.focus || "",
+          guidance: nextGuidance,
         }),
       });
       const json = await res.json();
@@ -157,7 +197,9 @@ export function QuestionsTab({
       // Ranks are per batch, so a second batch's "1" would sort above the
       // first batch's best question inside the same category. Offsetting
       // keeps a merged category in a sensible order.
-      const rankOffset = items.reduce((n, q) => Math.max(n, q.rank), 0);
+      const rankOffset = opts.replace
+        ? 0
+        : items.reduce((n, q) => Math.max(n, q.rank), 0);
       const fresh: QuestionItem[] = (json.questions || []).map(
         (q: Omit<WrittenShape, "id">, i: number) => ({
           id: newId(),
@@ -175,15 +217,33 @@ export function QuestionsTab({
         }),
       );
       if (!fresh.length) throw new Error("Nothing came back — try again.");
-      setItems([...items, ...fresh]);
-      // A second batch is easiest to read with every group open.
+      save({
+        questions: {
+          ...m.questions,
+          items: [...kept, ...fresh],
+          guidance: nextGuidance,
+          generatedAt: new Date().toISOString(),
+          // Only a batch written against the whole setup can claim to be
+          // current; topping up an old bank leaves the old ones in it.
+          ...(opts.replace || !items.length
+            ? { engine: QUESTIONS_ENGINE, sourceFingerprint: fingerprint }
+            : {}),
+        },
+      });
+      // A fresh batch is easiest to read with every group open.
       setOpenCats(new Set([...new Set(fresh.map((q) => q.category))]));
-      toast("success", `${fresh.length} question${fresh.length === 1 ? "" : "s"} added`);
+      toast(
+        "success",
+        opts.replace
+          ? `Rewritten — ${fresh.length} new question${fresh.length === 1 ? "" : "s"}`
+          : `${fresh.length} question${fresh.length === 1 ? "" : "s"} added`,
+      );
     } catch (e) {
       toast("error", (e as Error).message);
     } finally {
       setBusy(false);
       setShowMore(false);
+      setShowGuide(false);
     }
   }
 
@@ -210,8 +270,8 @@ export function QuestionsTab({
               meeting.
             </p>
             <div className="mt-4">
-              <Button onClick={() => void generate()}>
-                <Sparkles size={16} /> Build the question list
+              <Button onClick={() => void generate({ replace: true })}>
+                <Sparkles size={16} /> Write my questions
               </Button>
             </div>
           </>
@@ -222,12 +282,41 @@ export function QuestionsTab({
 
   return (
     <div className="space-y-5">
+      {/* Behind, and the only two reasons it can be. Worth a banner rather
+          than a quiet button: a bank written about the wrong subject looks
+          exactly as confident as one written about the right subject. */}
+      {(questionsStale || questionsOutdated) && (
+        <div className="flex flex-col gap-2 rounded-xl border border-amber-300 bg-amber-50 p-3 sm:flex-row sm:items-center">
+          <p className="flex flex-1 items-start gap-2 text-sm text-amber-900">
+            <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-600" />
+            {questionsStale
+              ? "Your setup changed since these questions were written — the topic they were built around may not be the one you're on now."
+              : "These were written before the latest improvements to how questions are written."}
+          </p>
+          <Button
+            size="sm"
+            className="shrink-0 !bg-amber-600 hover:!bg-amber-700"
+            disabled={busy}
+            onClick={() => void generate({ replace: true })}
+          >
+            <RefreshCw size={14} className={busy ? "animate-spin" : ""} />
+            {busy ? "Rewriting…" : "Rewrite them"}
+          </Button>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-2">
+        {/* Three buttons that used to read as two. "More questions" and "Add
+            your own" sat side by side looking like the same thing done twice;
+            one asks the model for twenty more, the other is you typing one. */}
         <Button size="sm" disabled={busy} onClick={() => setShowMore(true)}>
-          <Plus size={14} /> {busy ? "Writing…" : "More questions"}
+          <Sparkles size={14} /> {busy ? "Writing…" : "Write me 20 more"}
         </Button>
         <Button size="sm" variant="secondary" onClick={() => setShowAdd(true)}>
-          <Pencil size={14} /> Add your own
+          <Pencil size={14} /> Type one of my own
+        </Button>
+        <Button size="sm" variant="secondary" disabled={busy} onClick={() => setShowGuide(true)}>
+          <Wand2 size={14} /> Change how they&apos;re written
         </Button>
         <span className="flex-1" />
         <Button
@@ -240,6 +329,21 @@ export function QuestionsTab({
           <Play size={14} /> Ask mode
         </Button>
       </div>
+
+      {guidance && (
+        <p className="flex items-start gap-1.5 rounded-lg border border-border bg-canvas/50 px-3 py-2 text-xs text-muted">
+          <Wand2 size={13} className="mt-0.5 shrink-0 text-[var(--accent)]" />
+          <span className="min-w-0 flex-1">
+            Every batch follows your instruction: <b className="font-medium text-ink">{guidance}</b>
+          </span>
+          <button
+            className="shrink-0 underline-offset-2 hover:underline"
+            onClick={() => save({ questions: { ...m.questions, guidance: "" } })}
+          >
+            clear
+          </button>
+        </p>
+      )}
 
       {/* Your list — the questions you carry in, in your order. */}
       <section className="rounded-xl border border-[var(--accent)]/30 bg-[var(--accent-soft)]/20 p-3">
@@ -402,6 +506,7 @@ export function QuestionsTab({
       <AskMode
         open={showAsk}
         onClose={() => setShowAsk(false)}
+        topic={m.topic || ""}
         picked={picked}
         onToggleAsked={(q) => patch(q.id, { asked: !q.asked })}
         onResetTicks={() => setItems(items.map((q) => ({ ...q, asked: false })))}
@@ -411,7 +516,15 @@ export function QuestionsTab({
         open={showMore}
         busy={busy}
         onClose={() => setShowMore(false)}
-        onGenerate={(focus) => void generate({ more: true, focus })}
+        onGenerate={(focus) => void generate({ focus })}
+      />
+
+      <GuidanceModal
+        open={showGuide}
+        busy={busy}
+        current={guidance}
+        onClose={() => setShowGuide(false)}
+        onApply={(g) => void generate({ guidance: g, replace: true })}
       />
 
       <AddOwnModal
@@ -489,12 +602,15 @@ function IconBtn({
 function AskMode({
   open,
   onClose,
+  topic,
   picked,
   onToggleAsked,
   onResetTicks,
 }: {
   open: boolean;
   onClose: () => void;
+  /** The subject, on screen while you are standing in front of the room. */
+  topic: string;
   picked: QuestionItem[];
   onToggleAsked: (q: QuestionItem) => void;
   onResetTicks: () => void;
@@ -540,6 +656,11 @@ function AskMode({
 
   return (
     <Modal open={open} onClose={onClose} title="Ask mode" size="lg">
+      {topic && (
+        <p className="mb-3 rounded-lg bg-[var(--accent-soft)]/50 px-3 py-2 text-sm font-medium">
+          {topic}
+        </p>
+      )}
       <div className="mb-3 flex items-center gap-3">
         <p className="flex-1 text-sm text-muted">
           Tap a question to tick it off. {done} of {picked.length} asked.
@@ -584,10 +705,12 @@ function MoreModal({
 }) {
   const [focus, setFocus] = useState("");
   return (
-    <Modal open={open} onClose={onClose} title="More questions">
+    <Modal open={open} onClose={onClose} title="Write me 20 more">
       <p className="mb-3 text-sm text-muted">
-        Another twenty, none of them repeats of what you already have. Say what
-        this batch should be about, or leave it blank for more of everything.
+        I&apos;ll write another twenty and add them to what you already have.
+        None of them will repeat a question that is already in the list. Say
+        what this batch should be about, or leave it blank for more of
+        everything.
       </p>
       <Input
         value={focus}
@@ -624,7 +747,7 @@ function AddOwnModal({
   const [category, setCategory] = useState("");
   const [followUp, setFollowUp] = useState("");
   return (
-    <Modal open={open} onClose={onClose} title="Add your own question">
+    <Modal open={open} onClose={onClose} title="Type one of my own">
       <div className="space-y-3">
         <Textarea
           label="The question, as you'd say it"
@@ -662,6 +785,58 @@ function AddOwnModal({
             <Plus size={14} /> Add to my list
           </Button>
         </div>
+      </div>
+    </Modal>
+  );
+}
+
+// "Don't open every question with a consultancy's name." The correction
+// arrives after you have read the batch, not before, so it has to be able to
+// land on questions that already exist — which means rewriting them, not
+// adding twenty more in the same style.
+function GuidanceModal({
+  open,
+  busy,
+  current,
+  onClose,
+  onApply,
+}: {
+  open: boolean;
+  busy: boolean;
+  current: string;
+  onClose: () => void;
+  onApply: (guidance: string) => void;
+}) {
+  const [text, setText] = useState(current);
+  return (
+    <Modal open={open} onClose={onClose} title="Change how they're written">
+      <p className="mb-3 text-sm text-muted">
+        Tell me what&apos;s wrong with these questions and I&apos;ll write the
+        whole set again to that instruction. It sticks: every batch after this
+        one follows it too, until you clear it.
+      </p>
+      <Textarea
+        autoFocus
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder={`e.g. "Stop opening questions with 'McKinsey says'. Don't cite consultancies at all, ask the question directly." Or: "Shorter. Nothing over fifteen words."`}
+        className="min-h-24"
+      />
+      <p className="mt-2 text-xs text-muted">
+        Questions you typed yourself are kept exactly as they are. Everything I
+        wrote is replaced, so anything you had picked goes back in the pool.
+      </p>
+      <div className="mt-3 flex justify-end gap-2">
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button
+          disabled={busy || !text.trim()}
+          onClick={() => onApply(text.trim())}
+        >
+          <RefreshCw size={14} className={busy ? "animate-spin" : ""} />
+          {busy ? "Rewriting…" : "Rewrite them all"}
+        </Button>
       </div>
     </Modal>
   );

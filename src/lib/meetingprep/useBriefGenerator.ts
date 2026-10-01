@@ -14,7 +14,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useToast } from "@/components/ui/Feedback";
 import { canAutofill, runAutofill } from "./autofill";
 import {
+  BRIEF_ENGINE,
   DEFAULT_BRIEF_SECTIONS,
+  engineBehind,
   meetingTypeLabel,
   orderSections,
   setupFingerprint,
@@ -32,6 +34,8 @@ export interface GenerateOpts {
   refine?: boolean;
   /** Generate one brand-new section and append it. */
   extra?: { key: string; title: string; prompt: string };
+  /** With onlyKey: keep every word that's there and add more to the end. */
+  extend?: boolean;
 }
 
 export interface GenerateResult {
@@ -46,6 +50,7 @@ export interface GenerateResult {
 function payloadOf(m: MpMeeting) {
   return {
     title: m.title,
+    topic: m.topic,
     meetingType: meetingTypeLabel(m.meeting_type),
     date: m.date,
     durationMin: m.duration_min,
@@ -221,6 +226,7 @@ export function useBriefGenerator({
             guidance: opts.guidance || "",
             previousSections,
             onlyKey: opts.onlyKey || "",
+            extend: Boolean(opts.extend),
           }),
         });
         const json = await res.json();
@@ -273,6 +279,9 @@ export function useBriefGenerator({
             ? { research: { notes: research, at: new Date().toISOString() } }
             : {}),
           generatedAt: new Date().toISOString(),
+          // Only a whole-brief write can claim the current engine — redoing
+          // one box leaves the other nine written by the old prompt.
+          ...(fullRegen ? { engine: BRIEF_ENGINE } : {}),
           // A single section redo (or adding one new section) only
           // refreshes part of the brief — the rest may still be stale
           // relative to the current setup, so only a full regenerate or
@@ -287,18 +296,25 @@ export function useBriefGenerator({
   );
 
   const m = meeting;
+  const hasBrief = Boolean(m && (m.brief?.sections || []).length > 0);
+  // Two different reasons a brief is behind, and they need different words:
+  // the writer changed the setup, or we changed how briefs are written. The
+  // second one used to be invisible, so a shipped improvement reached nobody
+  // who already had a brief.
   const briefStale = Boolean(
-    m &&
-      (m.brief?.sections || []).length > 0 &&
+    hasBrief &&
+      m &&
       m.brief?.sourceFingerprint &&
       m.brief.sourceFingerprint !== setupFingerprint(m),
   );
+  const briefOutdated = Boolean(hasBrief && engineBehind(m?.brief?.engine, BRIEF_ENGINE));
 
   return {
     busy,
     generate,
     applyGenerated,
     briefStale,
+    briefOutdated,
     progress: Math.round(progress),
     stage,
   };

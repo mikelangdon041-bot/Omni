@@ -67,6 +67,25 @@ export function useMpMeetings(userId: string | null) {
     [userId],
   );
 
+  // Change one field on one meeting from the list, without opening it.
+  // Optimistic: the card has to move the moment it is clicked, and both
+  // caches have to agree or going back to the list shows the old state.
+  const patch = useCallback(
+    async (id: string, partial: Partial<MpMeeting>) => {
+      setMeetings((prev) => {
+        const next = prev.map((m) => (m.id === id ? { ...m, ...partial } : m));
+        if (userId) {
+          setCached(`meetings:${userId}`, next);
+          const row = next.find((m) => m.id === id);
+          if (row) setCached(`mtg:${userId}:${id}`, { _t: Date.now(), row });
+        }
+        return next;
+      });
+      await supabase.from("mp_meetings").update(partial).eq("id", id);
+    },
+    [userId],
+  );
+
   const remove = useCallback(
     async (id: string) => {
       setMeetings((prev) => {
@@ -80,7 +99,7 @@ export function useMpMeetings(userId: string | null) {
     [userId],
   );
 
-  return { meetings, loading, add, remove, refresh };
+  return { meetings, loading, add, patch, remove, refresh };
 }
 
 /**

@@ -7,6 +7,9 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   CalendarClock,
+  CalendarOff,
+  CalendarPlus,
+  CheckCircle2,
   ChevronDown,
   ChevronUp,
   FileAudio,
@@ -14,6 +17,7 @@ import {
   Plus,
   Settings2,
   Trash2,
+  Undo2,
 } from "lucide-react";
 import { ModuleHero } from "@/components/ui/ModuleHero";
 import { useChatScope } from "@/components/chat/ChatScope";
@@ -23,7 +27,6 @@ import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { useConfirm } from "@/components/ui/Feedback";
-import { createClient } from "@/lib/supabase/client";
 import { CreateFolderModal, FolderPairSelect } from "@/components/meetingprep/FolderPicker";
 import {
   useMpFolders,
@@ -34,8 +37,9 @@ import {
 import {
   DEFAULT_BRIEF_SECTIONS,
   folderMovePatch,
-  isUnfiled,
+  isHeld,
   meetingTypeLabel,
+  needsFiling,
   orderSections,
   type CustomSection,
   type FolderKind,
@@ -43,13 +47,11 @@ import {
   type MpMeeting,
 } from "@/lib/meetingprep/types";
 
-const supabase = createClient();
-
 export default function MeetingPrepPage() {
   const router = useRouter();
   const confirm = useConfirm();
   const { userId } = useUserId();
-  const { meetings, loading, add, remove, refresh } = useMpMeetings(userId);
+  const { meetings, loading, add, remove, refresh, patch } = useMpMeetings(userId);
   const { settings, save: saveSettings } = useMpSettings(userId);
   const { folders } = useMpFolders(userId);
   const [creatingFolderKind, setCreatingFolderKind] = useState<FolderKind | null>(null);
@@ -59,7 +61,11 @@ export default function MeetingPrepPage() {
   const [creatingFolderFor, setCreatingFolderFor] = useState<MpMeeting | null>(null);
 
   async function moveFolder(m: MpMeeting, kind: FolderKind, folder: MpFolder | null) {
-    await supabase.from("mp_meetings").update(folderMovePatch(kind, folder)).eq("id", m.id);
+    // Touching either select is an answer, even when the answer is "neither".
+    // Without this, picking "No topic" on an unfiled meeting changed nothing
+    // at all and the amber "file this" chip stayed put — which is exactly
+    // what it looks like when a control is broken.
+    await patch(m.id, { ...folderMovePatch(kind, folder), filing_reviewed: true });
     await refresh();
   }
   // Every meeting on the list, so "what have I got next week" and "start a prep
@@ -73,6 +79,7 @@ export default function MeetingPrepPage() {
           m.title || "(untitled)",
           meetingTypeLabel(m.meeting_type),
           m.date ? new Date(m.date).toLocaleString() : "no date set",
+          isHeld(m) ? "already held" : "still to come",
           (m.brief?.sections || []).length ? "briefed" : "no brief yet",
         ].join(" | "),
       ),
@@ -84,17 +91,18 @@ export default function MeetingPrepPage() {
   const [creating, setCreating] = useState(false);
 
   const { upcoming, past } = useMemo(() => {
-    const now = Date.now();
     const upcoming: MpMeeting[] = [];
     const past: MpMeeting[] = [];
-    for (const m of meetings) {
-      if (m.date && new Date(m.date).getTime() < now - 3600_000) past.push(m);
-      else upcoming.push(m);
-    }
+    for (const m of meetings) (isHeld(m) ? past : upcoming).push(m);
     upcoming.sort((a, b) => {
       if (!a.date) return -1;
       if (!b.date) return 1;
       return +new Date(a.date) - +new Date(b.date);
+    });
+    past.sort((a, b) => {
+      const at = a.held_at || a.date || a.updated_at;
+      const bt = b.held_at || b.date || b.updated_at;
+      return +new Date(bt) - +new Date(at);
     });
     return { upcoming, past };
   }, [meetings]);
@@ -114,10 +122,35 @@ export default function MeetingPrepPage() {
   const briefed = meetings.filter((m) => (m.brief?.sections || []).length > 0).length;
   // "Uncategorized" isn't every undated meeting — plenty of upcoming ones are
   // still being prepped and have nothing to file yet. It's specifically a
-  // recording that finished (a transcript or notes exist) with nowhere to go.
+  // recording that finished (a transcript or notes exist) with nowhere to go,
+  // and whose owner hasn't already said it belongs nowhere.
   const uncategorizedRecorded = meetings.filter(
-    (m) => isUnfiled(m) && ((m.debrief?.transcript || "").trim() || (m.debrief?.notesHtml || "").trim()),
+    (m) =>
+      needsFiling(m) &&
+      ((m.debrief?.transcript || "").trim() || (m.debrief?.notesHtml || "").trim()),
   ).length;
+
+  const listProps = {
+    folders,
+    onOpen: (id: string) => router.push(`/meeting-prep/${id}`),
+    onMoveFolder: moveFolder,
+    onPatch: patch,
+    onRequestCreateFolder: (kind: FolderKind, m: MpMeeting) => {
+      setCreatingFolderKind(kind);
+      setCreatingFolderFor(m);
+    },
+    onDelete: async (m: MpMeeting) => {
+      if (
+        await confirm({
+          title: `Delete "${m.title || "this meeting"}"?`,
+          message: "The brief, rehearsal, and debrief are removed.",
+          confirmLabel: "Delete",
+          danger: true,
+        })
+      )
+        await remove(m.id);
+    },
+  };
 
   return (
     <>
@@ -144,7 +177,7 @@ export default function MeetingPrepPage() {
               className="!border-white/40 !bg-white/15 !text-white hover:!bg-white/25"
               onClick={() => setShowSettings(true)}
             >
-              <Settings2 size={16} /> My brief
+              <Settings2 size={16} /> Brief settings
             </Button>
             <Button
               variant="secondary"
@@ -189,51 +222,8 @@ export default function MeetingPrepPage() {
         />
       ) : (
         <div className="space-y-8">
-          <MeetingList
-            title="Upcoming & undated"
-            meetings={upcoming}
-            folders={folders}
-            onOpen={(id) => router.push(`/meeting-prep/${id}`)}
-            onMoveFolder={moveFolder}
-            onRequestCreateFolder={(kind, m) => {
-              setCreatingFolderKind(kind);
-              setCreatingFolderFor(m);
-            }}
-            onDelete={async (m) => {
-              if (
-                await confirm({
-                  title: `Delete "${m.title || "this meeting"}"?`,
-                  message: "The brief, rehearsal, and debrief are removed.",
-                  confirmLabel: "Delete",
-                  danger: true,
-                })
-              )
-                await remove(m.id);
-            }}
-          />
-          {past.length > 0 && (
-            <MeetingList
-              title="Past"
-              meetings={past}
-              folders={folders}
-              onOpen={(id) => router.push(`/meeting-prep/${id}`)}
-              onMoveFolder={moveFolder}
-              onRequestCreateFolder={(kind, m) => {
-                setCreatingFolderKind(kind);
-                setCreatingFolderFor(m);
-              }}
-              onDelete={async (m) => {
-                if (
-                  await confirm({
-                    title: `Delete "${m.title || "this meeting"}"?`,
-                    confirmLabel: "Delete",
-                    danger: true,
-                  })
-                )
-                  await remove(m.id);
-              }}
-            />
-          )}
+          <MeetingList title="Coming up" meetings={upcoming} {...listProps} />
+          <MeetingList title="Already happened" meetings={past} held {...listProps} />
         </div>
       )}
 
@@ -261,20 +251,103 @@ export default function MeetingPrepPage() {
   );
 }
 
+// The date line on a card, which is also where a date gets set or waived.
+// Three states, one click each: no answer yet (offer both), a date, or a
+// deliberate "there isn't one" — because being asked for a date you don't
+// have, on every visit, forever, is the thing that made this list nag.
+function CardDate({
+  m,
+  onPatch,
+}: {
+  m: MpMeeting;
+  onPatch: (id: string, p: Partial<MpMeeting>) => void;
+}) {
+  const [picking, setPicking] = useState(false);
+  const d = m.date ? new Date(m.date) : null;
+
+  if (d)
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        {d.toLocaleString(undefined, {
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        })}
+      </span>
+    );
+
+  if (picking)
+    return (
+      <input
+        type="datetime-local"
+        autoFocus
+        className="rounded-md border border-[var(--accent)] bg-surface px-1.5 py-0.5 text-xs outline-none"
+        onBlur={() => setPicking(false)}
+        onChange={(e) => {
+          if (!e.target.value) return;
+          onPatch(m.id, {
+            date: new Date(e.target.value).toISOString(),
+            no_date: false,
+          });
+          setPicking(false);
+        }}
+      />
+    );
+
+  if (m.no_date)
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        No date
+        <button
+          className="font-medium text-[var(--accent)] underline-offset-2 hover:underline"
+          onClick={() => setPicking(true)}
+        >
+          add one
+        </button>
+      </span>
+    );
+
+  return (
+    <span className="inline-flex items-center gap-2">
+      <button
+        className="inline-flex items-center gap-1 font-medium text-[var(--accent)] underline-offset-2 hover:underline"
+        onClick={() => setPicking(true)}
+      >
+        <CalendarPlus size={12} /> Set a date
+      </button>
+      <span className="text-border">|</span>
+      <button
+        className="inline-flex items-center gap-1 hover:text-ink"
+        title="This meeting doesn't need a date — stop asking"
+        onClick={() => onPatch(m.id, { no_date: true })}
+      >
+        <CalendarOff size={12} /> No date
+      </button>
+    </span>
+  );
+}
+
 function MeetingList({
   title,
   meetings,
   folders,
+  held = false,
   onOpen,
   onMoveFolder,
+  onPatch,
   onRequestCreateFolder,
   onDelete,
 }: {
   title: string;
   meetings: MpMeeting[];
   folders: MpFolder[];
+  /** This list is the "already happened" one. */
+  held?: boolean;
   onOpen: (id: string) => void;
   onMoveFolder: (m: MpMeeting, kind: FolderKind, folder: MpFolder | null) => void;
+  onPatch: (id: string, p: Partial<MpMeeting>) => void;
   onRequestCreateFolder: (kind: FolderKind, m: MpMeeting) => void;
   onDelete: (m: MpMeeting) => void;
 }) {
@@ -287,8 +360,11 @@ function MeetingList({
     [folderName(m.person_folder_id), folderName(m.topic_folder_id)].filter(Boolean).join(" · ");
   return (
     <section>
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">
+      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted">
         {title}
+        <span className="rounded-full bg-canvas px-2 py-0.5 text-[11px] font-semibold normal-case tracking-normal">
+          {meetings.length}
+        </span>
       </h2>
       <ul className="grid gap-3 sm:grid-cols-2">
         {meetings.map((m) => {
@@ -300,12 +376,18 @@ function MeetingList({
           return (
             <li
               key={m.id}
-              className="group cursor-pointer rounded-xl border border-border bg-surface p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-[var(--accent)]/40 hover:shadow-md"
+              className="group cursor-pointer rounded-xl border border-border bg-surface p-4 transition hover:border-[var(--accent)]/50 hover:shadow-md"
               onClick={() => onOpen(m.id)}
             >
               <div className="flex items-start gap-3">
                 {/* Date block */}
-                <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-[var(--grad-from)] to-[var(--grad-via)] text-white shadow-sm">
+                <div
+                  className={`grid h-12 w-12 shrink-0 place-items-center rounded-xl text-white ${
+                    held
+                      ? "bg-ink/70"
+                      : "bg-gradient-to-br from-[var(--grad-from)] to-[var(--grad-via)]"
+                  }`}
+                >
                   {d ? (
                     <div className="text-center leading-none">
                       <p className="text-[9px] font-bold uppercase tracking-wide opacity-90">
@@ -313,18 +395,33 @@ function MeetingList({
                       </p>
                       <p className="mt-0.5 text-lg font-bold">{d.getDate()}</p>
                     </div>
+                  ) : held ? (
+                    <CheckCircle2 size={18} className="opacity-90" />
                   ) : (
                     <CalendarClock size={18} className="opacity-90" />
                   )}
                 </div>
 
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-start gap-2">
+                  <div className="flex items-start gap-1">
                     <p className="min-w-0 flex-1 truncate text-sm font-semibold">
                       {m.title || "Untitled meeting"}
                     </p>
+                    {/* The one-click way a meeting leaves "Coming up" — or
+                        comes back, when it was marked by mistake. */}
                     <button
-                      className="rounded p-1 text-muted opacity-0 transition hover:text-red-600 group-hover:opacity-100"
+                      className="rounded p-1 text-muted opacity-0 transition hover:bg-canvas hover:text-[var(--accent)] group-hover:opacity-100"
+                      aria-label={held ? "Move back to coming up" : "Mark as already happened"}
+                      title={held ? "Move back to coming up" : "I've had this meeting"}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onPatch(m.id, { held_at: held ? null : new Date().toISOString() });
+                      }}
+                    >
+                      {held ? <Undo2 size={13} /> : <CheckCircle2 size={13} />}
+                    </button>
+                    <button
+                      className="rounded p-1 text-muted opacity-0 transition hover:bg-red-50 hover:text-red-600 group-hover:opacity-100"
                       aria-label="Delete meeting"
                       onClick={(e) => {
                         e.stopPropagation();
@@ -334,17 +431,21 @@ function MeetingList({
                       <Trash2 size={13} />
                     </button>
                   </div>
-                  <p className="mt-0.5 truncate text-xs text-muted">
-                    {d
-                      ? d.toLocaleString(undefined, {
-                          weekday: "short",
-                          hour: "numeric",
-                          minute: "2-digit",
-                        })
-                      : "No date set"}
-                    {names.length > 0 && ` · ${names.slice(0, 3).join(", ")}`}
-                    {names.length > 3 && ` +${names.length - 3}`}
-                  </p>
+                  {m.topic && (
+                    <p className="mt-0.5 truncate text-xs text-muted">{m.topic}</p>
+                  )}
+                  <div
+                    className="mt-1 flex flex-wrap items-center gap-x-1.5 text-xs text-muted"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <CardDate m={m} onPatch={onPatch} />
+                    {names.length > 0 && (
+                      <span className="truncate">
+                        · {names.slice(0, 3).join(", ")}
+                        {names.length > 3 && ` +${names.length - 3}`}
+                      </span>
+                    )}
+                  </div>
                   <div className="mt-2 flex flex-wrap items-center gap-1.5">
                     <span className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--accent)]">
                       {meetingTypeLabel(m.meeting_type)}
@@ -352,6 +453,11 @@ function MeetingList({
                     {hasBrief && (
                       <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
                         Briefed
+                      </span>
+                    )}
+                    {(m.questions?.items || []).length > 0 && (
+                      <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700">
+                        {(m.questions?.items || []).length} questions
                       </span>
                     )}
                     {m.territory_logged && (
@@ -362,17 +468,19 @@ function MeetingList({
                   </div>
                   {/* Folder chip + quick move — the same control the meeting
                       detail page and the recorder use, dropped here so a
-                      meeting can be filed without opening it. */}
+                      meeting can be filed without opening it. The selects
+                      stay visible rather than appearing on hover: a control
+                      nobody can see is a control nobody uses. */}
                   <div
                     className="mt-2 flex flex-wrap items-center gap-1.5"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <span
                       className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                        isUnfiled(m) ? "bg-amber-50 text-amber-700" : "bg-canvas text-muted"
+                        needsFiling(m) ? "bg-amber-50 text-amber-700" : "bg-canvas text-muted"
                       }`}
                     >
-                      {filedAs(m) || "Uncategorized"}
+                      {filedAs(m) || (m.filing_reviewed ? "Not filed" : "Uncategorized")}
                     </span>
                     <FolderPairSelect
                       folders={folders}
@@ -380,7 +488,7 @@ function MeetingList({
                       topicFolderId={m.topic_folder_id}
                       onChange={(kind, folder) => onMoveFolder(m, kind, folder)}
                       onRequestCreate={(kind) => onRequestCreateFolder(kind, m)}
-                      className="rounded-md border border-transparent bg-transparent px-1 py-0.5 text-[10px] text-muted opacity-0 outline-none transition group-hover:opacity-100 focus:opacity-100 focus:border-[var(--accent)]"
+                      className="rounded-md border border-transparent bg-transparent px-1 py-0.5 text-[10px] text-muted outline-none transition hover:border-border focus:border-[var(--accent)]"
                     />
                   </div>
                 </div>
@@ -393,8 +501,8 @@ function MeetingList({
   );
 }
 
-// "My brief": the order the boxes come in, plus the custom sections appended
-// to every future brief.
+// "Brief settings": the order the boxes come in, plus the custom sections
+// appended to every future brief.
 function BriefSettingsModal({
   open,
   onClose,
@@ -431,7 +539,7 @@ function BriefSettingsModal({
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="My brief">
+    <Modal open={open} onClose={onClose} title="Brief settings">
       <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
         Order of the brief
       </p>
@@ -485,7 +593,7 @@ function BriefSettingsModal({
       )}
 
       <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-        Custom sections
+        Your own sections
       </p>
       <p className="mb-3 text-sm text-muted">
         Sections you add here appear in <b>every</b> brief from now on.

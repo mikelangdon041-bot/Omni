@@ -68,6 +68,7 @@ export function SetupTab({
   userId,
   busy,
   briefStale,
+  briefOutdated = false,
   hasBrief,
   onGenerate,
   onViewBrief,
@@ -79,6 +80,8 @@ export function SetupTab({
   userId: string | null;
   busy: string | null;
   briefStale: boolean;
+  /** The brief was written by an older version of the writing engine. */
+  briefOutdated?: boolean;
   hasBrief: boolean;
   /** 0–100 while a brief is being built. */
   progress?: number;
@@ -176,6 +179,21 @@ export function SetupTab({
           onChange={(e) => save({ title: e.target.value })}
           placeholder='e.g. "Intro meeting with Dr. Chen"'
         />
+        <div>
+          <Input
+            label="What it's about"
+            value={m.topic}
+            onChange={(e) => save({ topic: e.target.value })}
+            placeholder='e.g. "Value communication: turning scientific exchange into outcomes"'
+          />
+          <p className="mt-1 text-[11px] leading-snug text-muted">
+            The subject itself, when it is not the same as the name above — a
+            panel&apos;s published title, the question on the table. This is
+            what the research, the brief and the questions are written to
+            serve, so it is worth getting exactly right. It also shows at the
+            top of every tab, and you can change it from there.
+          </p>
+        </div>
         <div className="grid grid-cols-2 gap-3">
           <Select
             label="Type"
@@ -197,14 +215,30 @@ export function SetupTab({
             <option value="video_call">Video call</option>
             <option value="phone">Phone</option>
           </Select>
-          <Input
-            label="Date & time"
-            type="datetime-local"
-            value={toLocalInput(m.date)}
-            onChange={(e) =>
-              save({ date: e.target.value ? new Date(e.target.value).toISOString() : null })
-            }
-          />
+          <div>
+            <Input
+              label="Date & time"
+              type="datetime-local"
+              value={toLocalInput(m.date)}
+              onChange={(e) =>
+                save({
+                  date: e.target.value ? new Date(e.target.value).toISOString() : null,
+                  no_date: false,
+                })
+              }
+            />
+            {!m.date && (
+              <label className="mt-1 flex items-center gap-1.5 text-[11px] text-muted">
+                <input
+                  type="checkbox"
+                  checked={m.no_date}
+                  onChange={(e) => save({ no_date: e.target.checked })}
+                  className="h-3.5 w-3.5 accent-[var(--accent)]"
+                />
+                There isn&apos;t one — stop asking
+              </label>
+            )}
+          </div>
           <Input
             label="Duration (min)"
             type="number"
@@ -425,14 +459,18 @@ export function SetupTab({
               ? "Ready? Generate your brief."
               : briefStale
                 ? "Your setup changed since the last brief."
-                : "Your brief is up to date."}
+                : briefOutdated
+                  ? "This brief was written by an older version of me."
+                  : "Your brief is up to date."}
           </p>
           <p className="mt-0.5 text-xs text-muted">
             {!hasBrief
               ? "I'll read what you wrote, fill in the details below, and write the full brief — you can edit, refine, or redo any section afterwards."
               : briefStale
                 ? "Regenerate it so it reflects your latest changes, or open it as-is."
-                : "Open it on the Brief tab — refine it there or redo any section."}
+                : briefOutdated
+                  ? "Briefs have got better since this one was written. Rewrite it and you'll see the difference — you review every change before it lands."
+                  : "Open it on the Brief tab — refine it there or redo any section."}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -441,13 +479,13 @@ export function SetupTab({
               View brief <ArrowRight size={15} />
             </Button>
           )}
-          {(!hasBrief || briefStale) && (
+          {(!hasBrief || briefStale || briefOutdated) && (
             <Button disabled={busy === "all"} onClick={onGenerate}>
               <Sparkles size={15} />
               {busy === "all"
                 ? `Building your brief… ${progress}%`
                 : hasBrief
-                  ? "Update the brief"
+                  ? "Rewrite the brief"
                   : "Generate my brief"}
             </Button>
           )}

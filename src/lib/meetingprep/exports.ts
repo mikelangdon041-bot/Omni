@@ -6,7 +6,7 @@
 import { Document, HeadingLevel, Packer, Paragraph, TextRun } from "docx";
 import { saveBlob } from "@/lib/conference/exports";
 import { htmlToPlain } from "@/lib/writer/types";
-import { meetingTypeLabel, type BriefSection, type MpMeeting } from "./types";
+import { meetingTypeLabel, sectionTitle, type BriefSection, type MpMeeting } from "./types";
 
 // HTML section content → docx paragraphs: bullets become real bullets,
 // everything else becomes plain paragraphs.
@@ -76,7 +76,7 @@ export async function exportBriefDocx(m: MpMeeting): Promise<void> {
   for (const s of sections) {
     children.push(
       new Paragraph({
-        text: s.title,
+        text: sectionTitle(s.key, s.title),
         heading: HeadingLevel.HEADING_1,
         spacing: { before: 280 },
       }),

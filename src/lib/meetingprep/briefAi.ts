@@ -9,6 +9,8 @@ import { stripHtml } from "@/lib/territory/utils";
 
 export interface MeetingPayload {
   title?: string;
+  /** The subject of the session itself, when that isn't the meeting's name. */
+  topic?: string;
   meetingType?: string;
   date?: string;
   durationMin?: number | null;
@@ -50,6 +52,8 @@ export function meetingContext(m: MeetingPayload, kolBlock: string): string {
     .join("\n");
   return [
     m.title && `Meeting: ${m.title}`,
+    m.topic &&
+      `THE SUBJECT OF THIS SESSION, in the writer's own words: ${m.topic}\nThis is what the meeting is actually about. Where it and the meeting's name point in different directions, this wins: every question, talking point and piece of research has to serve THIS subject, not the title.`,
     m.meetingType && `Type: ${m.meetingType}`,
     m.date && `When: ${m.date}`,
     // Only a length the writer actually gave. An unset duration used to go
@@ -322,6 +326,7 @@ export async function writeBrief({
   previous,
   onlyKey = "",
   research = "",
+  extend = false,
 }: {
   meeting: MeetingPayload;
   sections: BriefSectionSpec[];
@@ -329,6 +334,8 @@ export async function writeBrief({
   guidance?: string;
   previous?: unknown;
   onlyKey?: string;
+  /** Keep every word that is there and add to it, instead of rewriting it. */
+  extend?: boolean;
   /** Findings from researchMeeting(), treated as the freshest facts available. */
   research?: string;
 }): Promise<WrittenSection[]> {
@@ -370,7 +377,12 @@ Hard rules:
 - NEVER invent facts, names, data or commitments about this meeting or these people that the context doesn't give. That restriction is about them, not about the subject — see the rule above on bringing what you know.
 - When the context is thin on the people, do NOT fall back to advice about how to have a meeting. Fill the space with substance about the subject instead: the real questions, the live debates, what is actually changing. Process advice with no subject matter in it is the one thing this brief must never be.
 - Never state a length, date, time of day or headcount that the context doesn't give, including in scripted lines: not "these four panelists", not "good afternoon", not "over the next thirty minutes". Write around it ("our panel", "welcome") or use a placeholder. If the duration is "not given", don't assume one: express timings as a share of the time and say once that they firm up when the slot length is confirmed.
-- When a previous version of a section is provided, that is the user's own current text (possibly hand-edited). Build on it and extend it — keep everything in it that the guidance didn't ask you to change. Do not silently rewrite it into your own voice or drop details it already has. Only make the specific change the guidance asks for; if no guidance is given, make the smallest improvement that adds real value (fix a gap, sharpen something vague, write out words the section only describes) rather than a wholesale rewrite.
+${
+      extend
+        ? `- THIS IS AN "ADD MORE" REQUEST. Return the section's existing content verbatim, every word of it in its existing order, and then append genuinely new material to the end of it. Do not reword, reorder, merge, trim or "tidy" a single existing line. The new material must be additional points, questions or lines that are not already there in any form, written to the same rules and to the same depth as what is already in the box. If you can only think of repetition, add less rather than padding.
+`
+        : ""
+    }- When a previous version of a section is provided, that is the user's own current text (possibly hand-edited). Build on it and extend it — keep everything in it that the guidance didn't ask you to change. Do not silently rewrite it into your own voice or drop details it already has. Only make the specific change the guidance asks for; if no guidance is given, make the smallest improvement that adds real value (fix a gap, sharpen something vague, write out words the section only describes) rather than a wholesale rewrite.
 - Be concrete and practical — things you could actually say or do, not platitudes.
 - Suggested answers must be usable verbatim as a starting point.
 - Keep each section tight; this is read on the way into the room. Cut commentary before you cut scripted lines.

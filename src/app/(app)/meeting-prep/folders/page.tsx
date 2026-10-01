@@ -14,7 +14,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { useConfirm } from "@/components/ui/Feedback";
 import { CreateFolderModal } from "@/components/meetingprep/FolderPicker";
 import { useMpFolders, useMpMeetings, useUserId } from "@/lib/meetingprep/hooks";
-import { isUnfiled, type FolderKind, type MpFolder } from "@/lib/meetingprep/types";
+import { needsFiling, type FolderKind, type MpFolder } from "@/lib/meetingprep/types";
 
 export default function FoldersPage() {
   const router = useRouter();
@@ -36,7 +36,7 @@ export default function FoldersPage() {
       for (const id of [m.person_folder_id, m.topic_folder_id]) {
         if (id) map.set(id, (map.get(id) || 0) + 1);
       }
-      if (isUnfiled(m)) uncategorized += 1;
+      if (needsFiling(m)) uncategorized += 1;
     }
     return { byFolder: map, uncategorized };
   }, [meetings]);

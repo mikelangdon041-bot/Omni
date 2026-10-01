@@ -37,9 +37,26 @@ export interface BriefSection {
   origin?: "ai";
 }
 
+// How good the writing engine was when a piece of this meeting was written.
+// Bumped by hand whenever the prompts behind the brief or the question bank
+// get materially better.
+//
+// It exists because of a real afternoon lost: the prompts were rewritten, the
+// app shipped, and the meeting still showed the old brief with nothing to say
+// so. The setup fingerprint can only notice the user changing something; it
+// has no way to notice US changing something. This does.
+//
+// Raise BRIEF_ENGINE when the brief's prompt improves, QUESTIONS_ENGINE when
+// the question bank's does. Anything stored below the current number offers
+// itself for a rewrite.
+export const BRIEF_ENGINE = 2;
+export const QUESTIONS_ENGINE = 2;
+
 export interface Brief {
   sections?: BriefSection[];
   generatedAt?: string;
+  /** The BRIEF_ENGINE value in force when this brief was written. */
+  engine?: number;
   // Fingerprint of the setup fields the brief was generated from, so the UI
   // can tell when the setup changed and the brief is stale. Only bumped by a
   // full regenerate/refine — a single section redo shouldn't mark the whole
@@ -99,6 +116,14 @@ export interface QuestionItem {
 export interface QuestionBank {
   items?: QuestionItem[];
   generatedAt?: string;
+  /** The QUESTIONS_ENGINE value in force when these were written. */
+  engine?: number;
+  /** Setup these were written from, so a changed topic can flag them stale. */
+  sourceFingerprint?: string;
+  // What the writer told the model to do differently ("stop opening every
+  // question with a consultancy's name"). Kept so every later batch obeys it
+  // too, rather than the correction lasting exactly one regenerate.
+  guidance?: string;
 }
 
 export interface GrillItem {
@@ -223,6 +248,21 @@ export function isUnfiled(m: Pick<MpMeeting, "person_folder_id" | "topic_folder_
   return !m.person_folder_id && !m.topic_folder_id;
 }
 
+// Filed nowhere AND never asked about. Uncategorized is only a gap while the
+// writer hasn't answered; once they pick "No person" / "No topic" they have
+// answered, and the amber "file this" nagging has to stop.
+export function needsFiling(
+  m: Pick<MpMeeting, "person_folder_id" | "topic_folder_id" | "filing_reviewed">,
+): boolean {
+  return isUnfiled(m) && !m.filing_reviewed;
+}
+
+// Done with. Either the writer said so, or the clock did.
+export function isHeld(m: Pick<MpMeeting, "held_at" | "date">): boolean {
+  if (m.held_at) return true;
+  return Boolean(m.date && new Date(m.date).getTime() < Date.now() - 3600_000);
+}
+
 // Whether a meeting belongs to one folder, in either slot — a person folder's
 // view and a topic folder's view ask the same question of the same meeting.
 export function inFolder(
@@ -236,8 +276,21 @@ export interface MpMeeting {
   id: string;
   user_id: string;
   title: string;
+  // What the session itself is about, when that isn't the same as its name:
+  // a panel's published title, the agenda line, the question on the table.
+  // Shown at the top of every tab and treated as the subject the research,
+  // the brief and the question bank all have to serve.
+  topic: string;
   meeting_type: MeetingType;
   date: string | null;
+  // "We had this one." A meeting used to leave Upcoming only by having a date
+  // in the past, which left every undated meeting there forever.
+  held_at: string | null;
+  // "There is no date, on purpose" — the difference between not having
+  // answered yet and having answered none. Stops the app asking.
+  no_date: boolean;
+  // The person/topic folders were set deliberately, including to neither.
+  filing_reviewed: boolean;
   // null until the writer (or the Explain pre-pass) gives a length.
   duration_min: number | null;
   format: MeetingFormat;
@@ -326,6 +379,7 @@ export function meetingContextText(m: MpMeeting): string {
     .join("\n");
   return [
     m.title && `Meeting: ${m.title}`,
+    m.topic && `What the session is about (the subject itself): ${m.topic}`,
     `Type: ${meetingTypeLabel(m.meeting_type)}`,
     m.date && `When: ${new Date(m.date).toLocaleString()}`,
     m.duration_min && `Duration: ${m.duration_min} minutes`,
@@ -346,11 +400,20 @@ export function meetingContextText(m: MpMeeting): string {
     .join("\n\n");
 }
 
+/**
+ * Is this brief (or bank) older than the engine that would write it now?
+ * A piece written before the stamp existed counts as behind, because it was.
+ */
+export function engineBehind(stored: number | undefined, current: number): boolean {
+  return (stored ?? 0) < current;
+}
+
 // Fingerprint of everything the brief is generated from — lets the UI detect
 // when the setup changed after the brief was written (stale brief).
 export function setupFingerprint(m: MpMeeting): string {
   const src = JSON.stringify([
     m.title,
+    m.topic,
     m.meeting_type,
     m.date,
     m.duration_min,
@@ -377,16 +440,24 @@ export function setupFingerprint(m: MpMeeting): string {
 // want in front of you: the shape of the meeting, start to finish. Everything
 // after it is depth on one part of that run-of-show. The user can reorder all
 // of this in My brief → Order of the brief.
+// A box's name is whatever the blueprint calls it TODAY. Briefs store the
+// title they were written with, so without this a brief generated last month
+// would keep the old wording for good — and renaming these for clarity would
+// only reach briefs nobody has written yet.
+export function sectionTitle(key: string, stored: string): string {
+  return DEFAULT_BRIEF_SECTIONS.find((s) => s.key === key)?.title || stored;
+}
+
 export const DEFAULT_BRIEF_SECTIONS: { key: string; title: string; prompt: string }[] = [
   {
     key: "agenda",
-    title: "How the meeting should go",
+    title: "Agenda: how to run it",
     prompt:
       "The run of show, start to finish, as a nested outline. Each top-level item is one phase of the meeting with a rough timing in parentheses (e.g. \"Opening and rapport (0-5 min)\"), sequenced so the meeting reaches the objective. If a duration is given, fit it in minutes; if not, give each phase its share of the time (e.g. \"(about a fifth of the time)\") and never state a total. Nested under each phase: what to do in it, with the actual words to say or ask written out beneath each move, and what a good outcome of that phase looks like before moving on. This is the section the writer reads walking in — make it the shape of the whole meeting, not a list of topics.",
   },
   {
     key: "objective",
-    title: "Objective & what success looks like",
+    title: "Your goal",
     prompt:
       "The writer's objective(s) restated sharply, plus 2-3 concrete markers of what a successful meeting produces.",
   },
@@ -398,7 +469,7 @@ export const DEFAULT_BRIEF_SECTIONS: { key: string; title: string; prompt: strin
   },
   {
     key: "landscape",
-    title: "What's moving in this space right now",
+    title: "What's new in this space",
     prompt:
       "The state of the subject itself, built from the research notes: 3-5 developments, debates, figures or changes that are live right now, each named specifically with its source and year, and nested under each one the line about why it matters for THIS meeting and how the writer can use it. This is the section that makes the writer sound like they have been paying attention. No generic observations about the industry; if the research notes are empty, use what you know of the field and mark anything checkable.",
   },
@@ -410,19 +481,19 @@ export const DEFAULT_BRIEF_SECTIONS: { key: string; title: string; prompt: strin
   },
   {
     key: "questions_theyll_ask",
-    title: "Questions they'll likely ask you",
+    title: "Questions you'll get asked",
     prompt:
       "The 4-6 most probable questions the writer will be asked (by the other side, or by the audience or group if they are presenting or moderating), each with a crisp suggested answer written out in full.",
   },
   {
     key: "questions_to_ask",
-    title: "Smart questions to ask them",
+    title: "Questions to ask",
     prompt:
       "4-6 questions the writer should ask that advance the objective and build the relationship, each written out in full exactly as they would say it. When there are several people to ask, say who each question is for, and nest a follow-up probe under the ones worth pushing on.",
   },
   {
     key: "objections",
-    title: "Objections & how to handle them",
+    title: "Pushback to expect",
     prompt:
       "Likely pushback or sensitive moments, each with how to handle it and the actual words to say.",
   },

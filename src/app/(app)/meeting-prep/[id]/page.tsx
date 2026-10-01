@@ -1,12 +1,12 @@
 "use client";
 
-// One meeting: Setup → Brief → Grill me → Debrief.
+// One meeting: Setup -> Brief -> Questions -> Practice -> Debrief.
 // Brief generation lives here (not in the Brief tab) so it keeps running in
 // the background while the user moves between tabs.
 
 import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Check, CloudUpload, Trash2 } from "lucide-react";
+import { Check, CloudUpload, Pencil, Target, Trash2 } from "lucide-react";
 import { BackButton } from "@/components/BackButton";
 import { useChatScope } from "@/components/chat/ChatScope";
 import { meetingContext } from "@/lib/chat/context";
@@ -28,8 +28,74 @@ import { useBriefGenerator, type GenerateOpts } from "@/lib/meetingprep/useBrief
 import { folderMovePatch, meetingTypeLabel, type BriefSection } from "@/lib/meetingprep/types";
 import { usePersistedState } from "@/lib/usePersistedState";
 
-const TABS = ["Setup", "Brief", "Questions", "Grill me", "Debrief"] as const;
+// Plain names. "Grill me" was cute and told you nothing about what the tab
+// does; "Practice" does. The stored per-meeting tab falls back to Setup when
+// a name changes, which is the right behaviour for a rename.
+const TABS = ["Setup", "Brief", "Questions", "Practice", "Debrief"] as const;
 type Tab = (typeof TABS)[number];
+
+// The subject line of the session, pinned above the tabs. Click it to change
+// it — one field, no modal, no trip to Setup.
+function TopicBar({ topic, onSave }: { topic: string; onSave: (t: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(topic);
+
+  function commit() {
+    setEditing(false);
+    const next = draft.trim();
+    if (next !== topic) onSave(next);
+  }
+
+  if (editing)
+    return (
+      <div className="mb-4 rounded-xl border border-[var(--accent)] bg-[var(--accent-soft)]/40 px-3 py-2">
+        <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--accent)]">
+          What this session is about
+        </p>
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            if (e.key === "Escape") {
+              setDraft(topic);
+              setEditing(false);
+            }
+          }}
+          placeholder="e.g. the panel's published title, or the question on the table"
+          className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm outline-none focus:border-[var(--accent)]"
+        />
+        <p className="mt-1 text-[11px] text-muted">
+          This is the subject the research, the brief and the questions are all
+          written to serve. Change it and both offer to be rewritten around it.
+        </p>
+      </div>
+    );
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        setDraft(topic);
+        setEditing(true);
+      }}
+      className="group mb-4 flex w-full items-center gap-2 rounded-xl border border-[var(--accent)]/30 bg-[var(--accent-soft)]/40 px-3 py-2 text-left transition hover:border-[var(--accent)]"
+    >
+      <Target size={15} className="shrink-0 text-[var(--accent)]" />
+      <span className="min-w-0 flex-1">
+        <span className="block text-[10px] font-semibold uppercase tracking-wide text-[var(--accent)]">
+          What this session is about
+        </span>
+        <span className={`block truncate text-sm ${topic ? "font-medium text-ink" : "text-muted"}`}>
+          {topic || "Not set — click to add the topic, and everything gets written to it"}
+        </span>
+      </span>
+      <Pencil size={13} className="shrink-0 text-muted transition group-hover:text-[var(--accent)]" />
+    </button>
+  );
+}
 
 export default function MeetingPage() {
   const { id } = useParams<{ id: string }>();
@@ -224,6 +290,13 @@ export default function MeetingPage() {
         </div>
       </div>
 
+      {/* What the session is actually about, in front of you on every tab.
+          Editable in place: the topic of a panel changes right up to the
+          week before, and the fix for that cannot be "ask someone to go and
+          change it in the database". Changing it marks the brief and the
+          questions stale, so both offer to be rewritten around the new one. */}
+      <TopicBar topic={meeting.topic || ""} onSave={(topic) => save({ topic })} />
+
       <Tabs tabs={TABS} active={tab} onChange={setTab} />
 
       {tab === "Setup" && (
@@ -233,6 +306,7 @@ export default function MeetingPage() {
           userId={userId}
           busy={generator.busy}
           briefStale={generator.briefStale}
+          briefOutdated={generator.briefOutdated}
           hasBrief={hasBrief}
           onGenerate={() => {
             setTab("Brief");
@@ -253,6 +327,7 @@ export default function MeetingPage() {
           userId={userId}
           busy={generator.busy}
           briefStale={generator.briefStale}
+          briefOutdated={generator.briefOutdated}
           generateDirect={generateDirect}
           generateWithPreview={generateWithPreview}
           goSetup={() => setTab("Setup")}
@@ -264,7 +339,7 @@ export default function MeetingPage() {
         />
       )}
       {tab === "Questions" && <QuestionsTab m={meeting} save={save} flush={flush} />}
-      {tab === "Grill me" && <GrillTab m={meeting} save={save} flush={flush} />}
+      {tab === "Practice" && <GrillTab m={meeting} save={save} flush={flush} />}
       {tab === "Debrief" && <DebriefTab m={meeting} save={save} userId={userId} />}
 
       <DiffPreviewModal
