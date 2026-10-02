@@ -32,6 +32,7 @@ export const maxDuration = 300;
 //              categories:[], count?, focus?, guidance?, coverage? }
 //                                              → { questions:[...] } (the bank)
 //   brief    { meeting, sections:[{key,title,prompt}], kolId?, guidance?,
+//              spokenGuidance?,
 //              previousSections? }             → { sections:[{key,title,content,
 //              prompt?,origin?}] } (origin "ai" = a box the model added)
 //   review   { meeting, kolId?, briefText?, questionsText?, sectionKeys:[],
@@ -225,6 +226,7 @@ export async function POST(req: Request) {
           onlyKey: String(body?.onlyKey || ""),
           research: String(body?.research || "").slice(0, 20000),
           extend: Boolean(body?.extend),
+          spokenGuidance: String(body?.spokenGuidance || "").slice(0, 2000),
         });
         return NextResponse.json({ sections: out });
       } catch (e) {

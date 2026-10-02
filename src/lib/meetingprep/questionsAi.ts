@@ -9,6 +9,7 @@
 
 import { anthropic, WRITER_MODEL } from "@/lib/anthropic";
 import { DOMAIN_RULE, SEAT_RULE, meetingContext, type MeetingPayload } from "./briefAi";
+import { allowedNames, namedSource } from "./spokenSources";
 
 export interface WrittenQuestion {
   text: string;
@@ -80,6 +81,121 @@ Work in two passes, and do the second one properly.
    - There is no quota. "Include some on X and Y" never means a fixed number of each, and it never means the bank becomes about X and Y. The rest of the subject keeps the room it deserves.
 
 Return only the finished second-pass list. Never mention the passes, the instructions, or that you revised anything.`;
+}
+
+const REPAIR_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    fixes: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: {
+          index: { type: "number" as const },
+          text: { type: "string" as const },
+          why: { type: "string" as const },
+          followUp: { type: "string" as const },
+        },
+        required: ["index", "text", "why", "followUp"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["fixes"],
+  additionalProperties: false,
+};
+
+/**
+ * Rewrites the questions that came back with a source named in them.
+ *
+ * Told not to, with the instruction in the system prompt and the writer's own
+ * words above it saying they outrank everything, one question in twenty two
+ * still came back as "McKinsey says whoever masters the evidence wins". A
+ * rule the output has to pass is a check, not a sentence in a prompt. So the
+ * output gets checked, the failures get sent back one more time with the
+ * exact offending phrase quoted at them, and anything still naming a source
+ * after that is dropped. A bank of nineteen is better than a bank of twenty
+ * with a line in it the writer has now asked twice not to be given.
+ */
+async function scrubNamedSources(
+  questions: WrittenQuestion[],
+  allow: string[],
+  guidance: string,
+): Promise<WrittenQuestion[]> {
+  let out = [...questions];
+  for (let round = 0; round < 2; round++) {
+    const bad = out
+      .map((q, index) => ({ index, q, hit: namedSource(q.text, allow) }))
+      .filter((r) => r.hit);
+    if (!bad.length) {
+      if (round) console.warn(`[questions] name-drop repair fixed all ${round} round(s)`);
+      return out;
+    }
+    console.warn(
+      `[questions] round ${round + 1}: ${bad.length} question(s) named a source - ${bad
+        .map((r) => r.hit)
+        .join(", ")}`,
+    );
+
+    const res = await anthropic().messages.create({
+      model: WRITER_MODEL,
+      max_tokens: 4000,
+      output_config: { format: { type: "json_schema", schema: REPAIR_SCHEMA } },
+      system: `You are fixing questions that broke one rule, and nothing else about them.
+
+The rule: the question is said OUT LOUD, so the name of a consultancy, analyst house, report, study, survey or author can never appear in it. Not at the front, not in a clause, not as "according to", not as "their 2025 survey". The writer has asked for this twice. Take the finding, drop the name, and ask the thing underneath it, in their own voice. Where the source matters, it goes in "why" instead, so the writer can cite it themselves if they decide to.
+
+Each question below is quoted with the exact phrase that broke the rule. Rewrite that question so it does the same job in the conversation, just as strong and just as specific, with no source named. Do not make it vaguer to get around the rule: if the only thing the question had going for it was the citation, write a different question about the same thing. Keep it short enough to say in one breath.
+${guidance ? `\nThe writer also said this about how their questions must be written, and it still applies:\n${guidance}\n` : ""}
+Return "index" exactly as given, the new "text", a "why" of at most 15 words that may name the source, and a "followUp" probe written word for word. Plain prose, no markdown, never an em dash or en dash.`,
+      messages: [
+        {
+          role: "user",
+          content: bad
+            .map(
+              (r) =>
+                `index ${r.index}\nbroke the rule with: ${r.hit}\nquestion: ${r.q.text}\nwhy it was picked: ${r.q.why}\nits probe: ${r.q.followUp}`,
+            )
+            .join("\n\n"),
+        },
+      ],
+    });
+    if (res.stop_reason === "refusal") break;
+    const parsed = JSON.parse(firstText(res) || "{}");
+    const byIndex = new Map<number, { text: string; why: string; followUp: string }>();
+    for (const f of Array.isArray(parsed.fixes) ? parsed.fixes : []) {
+      const i = Number(f?.index);
+      const text = String(f?.text || "").trim();
+      if (!Number.isInteger(i) || !text) continue;
+      byIndex.set(i, {
+        text,
+        why: String(f?.why || "").trim(),
+        followUp: String(f?.followUp || "").trim(),
+      });
+    }
+    if (!byIndex.size) break;
+    out = out.map((q, i) => {
+      const fix = byIndex.get(i);
+      // Only take the replacement if it actually passes. A fix that names a
+      // different source is not a fix.
+      if (!fix) return q;
+      const still = namedSource(fix.text, allow);
+      if (still) {
+        console.warn(`[questions] the repair named "${still}" as well, keeping the original`);
+        return q;
+      }
+      return { ...q, text: fix.text, why: fix.why || q.why, followUp: fix.followUp || q.followUp };
+    });
+  }
+  // Last resort, and the only one that cannot fail.
+  const dropped = out.filter((q) => namedSource(q.text, allow));
+  if (dropped.length)
+    console.warn(
+      `[questions] dropped ${dropped.length} question(s) that would not come clean: ${dropped
+        .map((q) => q.text.slice(0, 60))
+        .join(" | ")}`,
+    );
+  return out.filter((q) => !namedSource(q.text, allow));
 }
 
 function firstText(res: { content: { type: string; text?: string }[] }): string {
@@ -192,5 +308,10 @@ ${instructionBlock(guidance.trim(), coverage.trim(), focus.trim())}`,
       rank: Number(q?.rank) || out.length + 1,
     });
   }
-  return out.sort((a, b) => a.rank - b.rank);
+  const clean = await scrubNamedSources(
+    out,
+    allowedNames(meeting.attendees),
+    guidance.trim(),
+  );
+  return clean.sort((a, b) => a.rank - b.rank);
 }

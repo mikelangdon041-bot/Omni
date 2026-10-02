@@ -25,7 +25,12 @@ import {
   useUserId,
 } from "@/lib/meetingprep/hooks";
 import { useBriefGenerator, type GenerateOpts } from "@/lib/meetingprep/useBriefGenerator";
-import { folderMovePatch, meetingTypeLabel, type BriefSection } from "@/lib/meetingprep/types";
+import {
+  folderMovePatch,
+  meetingTypeLabel,
+  plainLetters,
+  type BriefSection,
+} from "@/lib/meetingprep/types";
 import { usePersistedState } from "@/lib/usePersistedState";
 
 // Plain names. "Grill me" was cute and told you nothing about what the tab
@@ -42,7 +47,9 @@ function TopicBar({ topic, onSave }: { topic: string; onSave: (t: string) => voi
 
   function commit() {
     setEditing(false);
-    const next = draft.trim();
+    // Pasted off a flyer, a panel title arrives as styled Unicode that
+    // reads fine and tokenises terribly. Fold it on the way in.
+    const next = plainLetters(draft);
     if (next !== topic) onSave(next);
   }
 

@@ -227,6 +227,10 @@ export function useBriefGenerator({
             previousSections,
             onlyKey: opts.onlyKey || "",
             extend: Boolean(opts.extend),
+            // The standing instruction lives on the question bank, but the
+            // brief has question boxes of its own. Told once, in one tab, is
+            // told.
+            spokenGuidance: source.questions?.guidance || "",
           }),
         });
         const json = await res.json();

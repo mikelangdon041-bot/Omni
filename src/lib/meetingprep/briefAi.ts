@@ -6,6 +6,7 @@
 
 import { anthropic, RESEARCH_MODEL, WRITER_MODEL } from "@/lib/anthropic";
 import { stripHtml } from "@/lib/territory/utils";
+import { plainLetters } from "./types";
 
 export interface MeetingPayload {
   title?: string;
@@ -50,10 +51,14 @@ export function meetingContext(m: MeetingPayload, kolBlock: string): string {
         `- ${a.name}${a.role ? `, ${a.role}` : ""}${a.org ? ` (${a.org})` : ""}${a.notes ? ` — ${a.notes}` : ""}`,
     )
     .join("\n");
+  // Styled Unicode off a flyer is a different string to a model than the
+  // words it looks like, so everything the model reads gets folded first.
+  const title = plainLetters(m.title || "");
+  const topic = plainLetters(m.topic || "");
   return [
-    m.title && `Meeting: ${m.title}`,
-    m.topic &&
-      `THE SUBJECT OF THIS SESSION, in the writer's own words: ${m.topic}\nThis is what the meeting is actually about. Where it and the meeting's name point in different directions, this wins: every question, talking point and piece of research has to serve THIS subject, not the title.`,
+    title && `Meeting: ${title}`,
+    topic &&
+      `THE SUBJECT OF THIS SESSION, in the writer's own words: ${topic}\nThis is what the meeting is actually about. Where it and the meeting's name point in different directions, this wins: every question, talking point and piece of research has to serve THIS subject, not the title.`,
     m.meetingType && `Type: ${m.meetingType}`,
     m.date && `When: ${m.date}`,
     // Only a length the writer actually gave. An unset duration used to go
@@ -143,6 +148,12 @@ export const DOMAIN_RULE = `Bring what you know about the subject. "Never invent
 
 // Only for text the writer READS. In a brief, a source in the line is useful.
 // In something they will say out loud, it is a tic.
+// The brief's attribution rule is right for prose a person reads silently on
+// the way in, and wrong for the lines inside it that get said out loud. A
+// question box in the brief is a question box: the same name-drop the writer
+// has twice asked to be rid of was still coming out of here.
+export const SPOKEN_LINES_RULE = `Anything in this brief that the writer will SAY OUT LOUD — every question in a questions box, every scripted line, every opener — carries no source inside it. Not a consultancy, not a report, not a study, not an author, not "according to". Take the finding, drop the name, and write the line as the writer would actually say it. Where the source is worth knowing, put it in a short parenthetical after the line, in the writer's note rather than in the words they speak, so they can cite it themselves if they decide to. This overrides the attribution rule for spoken lines; it stays in force for the prose around them.`;
+
 export const ATTRIBUTION_RULE = `Attribute what you draw from the research notes inline, briefly, as source plus year. Where you are working from your own knowledge and the fact is checkable and load-bearing, mark it "(worth checking)" so the writer verifies before saying it out loud.`;
 
 const SECTION_ITEM = {
@@ -331,11 +342,19 @@ export async function writeBrief({
   onlyKey = "",
   research = "",
   extend = false,
+  spokenGuidance = "",
 }: {
   meeting: MeetingPayload;
   sections: BriefSectionSpec[];
   kolBlock?: string;
   guidance?: string;
+  /**
+   * The writer's standing instruction about how their questions must be
+   * written, kept on the question bank. The brief has question boxes of its
+   * own, and an instruction given once should not have to be given again in
+   * a different tab.
+   */
+  spokenGuidance?: string;
   previous?: unknown;
   onlyKey?: string;
   /** Keep every word that is there and add to it, instead of rewriting it. */
@@ -378,7 +397,9 @@ ${SEAT_RULE}
 ${DOMAIN_RULE}
 
 ${ATTRIBUTION_RULE}
-${allowExtras ? `\n${EXTRA_SECTIONS_RULE}\n` : ""}
+
+${SPOKEN_LINES_RULE}
+${spokenGuidance.trim() ? `\nTHE WRITER'S OWN INSTRUCTION ON ANYTHING THEY SAY OUT LOUD\nThis comes from the person who will be saying these lines, after reading what you wrote last time. It outranks every rule above, including anything about how to phrase or source a line. Where it contradicts a rule above, the instruction wins and that rule is off.\n${spokenGuidance.trim()}\n` : ""}${allowExtras ? `\n${EXTRA_SECTIONS_RULE}\n` : ""}
 Hard rules:
 - NEVER invent facts, names, data or commitments about this meeting or these people that the context doesn't give. That restriction is about them, not about the subject — see the rule above on bringing what you know.
 - When the context is thin on the people, do NOT fall back to advice about how to have a meeting. Fill the space with substance about the subject instead: the real questions, the live debates, what is actually changing. Process advice with no subject matter in it is the one thing this brief must never be.

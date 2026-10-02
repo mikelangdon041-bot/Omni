@@ -421,6 +421,22 @@ export function meetingTypeLabel(t: MeetingType): string {
 
 // Plain-text meeting context for client-composed AI calls (grill, coach,
 // debrief). The brief action builds its own richer context server-side.
+/**
+ * Plain letters.
+ *
+ * A title or topic pasted off a conference flyer or a LinkedIn post arrives
+ * as mathematical bold Unicode: the writer's own panel subject was stored as
+ * the styled variants of "Value Communication in Medical Affairs", not the
+ * letters themselves. It reads identically to a person and is a completely
+ * different string to a model — separate rare tokens with none of the word's
+ * meaning attached to them, which is a bad start for every question written
+ * about it. NFKC folds each of those variants back to the letter it is
+ * imitating.
+ */
+export function plainLetters(s: string): string {
+  return (s || "").normalize("NFKC").replace(/[ \t]+/g, " ").trim();
+}
+
 export function meetingContextText(m: MpMeeting): string {
   const att = (m.attendees || [])
     .filter((a) => a.name.trim())

@@ -36,6 +36,7 @@ import {
   Wand2,
   X,
 } from "lucide-react";
+import { AskMode } from "@/components/meetingprep/AskMode";
 import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
@@ -90,8 +91,13 @@ export function QuestionsTab({
   const [busy, setBusy] = useState(false);
   const [showAsk, setShowAsk] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
-  const [showMore, setShowMore] = useState(false);
-  const [showGuide, setShowGuide] = useState(false);
+  // One dialog, not two. "Write me 20 more" and "Guide the questions" were
+  // separate boxes that each took an instruction and did different things
+  // with it, and there was no way at all to say "write me new ones about X"
+  // — the standing instruction could only rewrite or wait. Now it is one
+  // dialog, and what to do with the questions you already have is a choice
+  // inside it. `guideScope` is which choice it opens on.
+  const [guideScope, setGuideScope] = useState<GuideScope | null>(null);
   // What the loader should say it is doing. The work is one AI call that
   // reports nothing, but "Rewriting all 30 questions" and "Rewriting that one"
   // are very different waits and the bar should admit which one you're in.
@@ -127,6 +133,14 @@ export function QuestionsTab({
     }
     return [...byCat.entries()];
   }, [suggestions]);
+
+  // Every group name in play, picked ones included, for the editors. Shown
+  // as real chips rather than hung off a one-line box in a browser dropdown,
+  // which cut the longer names in half.
+  const allCategories = useMemo(
+    () => [...new Set(live.map((q) => q.category))].filter(Boolean),
+    [live],
+  );
 
   const setItems = (next: QuestionItem[]) =>
     save({ questions: { ...m.questions, items: next } });
@@ -317,8 +331,7 @@ export function QuestionsTab({
       setBusy(false);
       setBusyLabel("");
       setRewritingId(null);
-      setShowMore(false);
-      setShowGuide(false);
+      setGuideScope(null);
     }
   }
 
@@ -389,14 +402,14 @@ export function QuestionsTab({
         {/* Three buttons that used to read as two. "More questions" and "Add
             your own" sat side by side looking like the same thing done twice;
             one asks the model for twenty more, the other is you typing one. */}
-        <Button size="sm" disabled={busy} onClick={() => setShowMore(true)}>
+        <Button size="sm" disabled={busy} onClick={() => setGuideScope("more")}>
           <Sparkles size={14} /> {busy ? "Working…" : "Write me 20 more"}
         </Button>
         <Button size="sm" variant="secondary" onClick={() => setShowAdd(true)}>
           <Pencil size={14} /> Type one of my own
         </Button>
-        <Button size="sm" variant="secondary" disabled={busy} onClick={() => setShowGuide(true)}>
-          <Wand2 size={14} /> Guide the questions
+        <Button size="sm" variant="secondary" disabled={busy} onClick={() => setGuideScope("rewrite")}>
+          <Wand2 size={14} /> Fix how these are written
         </Button>
         <span className="flex-1" />
         <Button
@@ -487,55 +500,34 @@ export function QuestionsTab({
                 </span>
                 <div className="min-w-0 flex-1">
                   {editingId === q.id ? (
-                    <>
-                      <Textarea
-                        autoFocus
-                        value={q.text}
-                        onChange={(e) => patch(q.id, { text: e.target.value })}
-                        onKeyDown={(e) => {
-                          if (e.key === "Escape") setEditingId(null);
-                        }}
-                        className="min-h-16"
-                      />
-                      {/* There was no way to tell an edit had finished, and
-                          nothing to press. Blur alone is not an answer: you
-                          cannot see a blur. */}
-                      <div className="mt-1 flex items-center gap-2">
-                        <Button size="sm" onClick={() => setEditingId(null)}>
-                          <Check size={13} /> Done
-                        </Button>
-                        <span className="flex items-center gap-1 text-[11px] text-muted">
-                          {saveState === "pending" || saveState === "saving" ? (
-                            <>
-                              <CloudUpload size={11} className="animate-pulse" /> Saving…
-                            </>
-                          ) : (
-                            <>
-                              <Check size={11} className="text-emerald-600" /> Saved as you type
-                            </>
-                          )}
-                        </span>
-                      </div>
-                    </>
+                    <QuestionEditor
+                      q={q}
+                      categories={allCategories}
+                      saveState={saveState}
+                      onPatch={(p) => patch(q.id, p)}
+                      onDone={() => setEditingId(null)}
+                    />
                   ) : (
-                    <p className={`text-sm ${q.backup ? "text-muted" : "text-ink"}`}>
-                      {q.text}
-                    </p>
-                  )}
-                  {/* Your list is one running order, not groups: the order
-                      you ask them in is the whole point of it. But which
-                      group a question came out of is worth knowing at a
-                      glance, so it rides along as a tag. */}
-                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
-                    <span className="rounded-full bg-canvas px-1.5 py-0.5 text-[10px] font-medium">
-                      {q.source === "user" ? "Yours" : q.category}
-                    </span>
-                    {q.forWhom && <span>For: {q.forWhom}</span>}
-                  </div>
-                  {q.followUp && (
-                    <p className="mt-1 text-xs italic text-muted">
-                      Probe: {q.followUp}
-                    </p>
+                    <>
+                      <p className={`text-sm ${q.backup ? "text-muted" : "text-ink"}`}>
+                        {q.text}
+                      </p>
+                      {/* Your list is one running order, not groups: the
+                          order you ask them in is the whole point of it. But
+                          which group a question came out of is worth knowing
+                          at a glance, so it rides along as a tag. */}
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
+                        <span className="rounded-full bg-canvas px-1.5 py-0.5 text-[10px] font-medium">
+                          {q.source === "user" ? "Yours" : q.category}
+                        </span>
+                        {q.forWhom && <span>For: {q.forWhom}</span>}
+                      </div>
+                      {q.followUp && (
+                        <p className="mt-1 text-xs italic text-muted">
+                          Probe: {q.followUp}
+                        </p>
+                      )}
+                    </>
                   )}
                 </div>
                 <div className="flex shrink-0 items-center gap-0.5">
@@ -576,7 +568,11 @@ export function QuestionsTab({
                   >
                     <RefreshCw size={13} className={rewritingId === q.id ? "animate-spin" : ""} />
                   </IconBtn>
-                  <IconBtn label="Edit" onClick={() => setEditingId(q.id)}>
+                  <IconBtn
+                    label="Edit the question, the probe, who it's for, its group"
+                    active={editingId === q.id}
+                    onClick={() => setEditingId(editingId === q.id ? null : q.id)}
+                  >
                     <Pencil size={13} />
                   </IconBtn>
                   <IconBtn label="Take out of my list" onClick={() => unpick(q)}>
@@ -631,13 +627,25 @@ export function QuestionsTab({
                       <Plus size={15} />
                     </button>
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm text-ink">{q.text}</p>
-                      <p className="mt-0.5 text-xs text-muted">
-                        {q.why}
-                        {q.forWhom ? ` · For: ${q.forWhom}` : ""}
-                      </p>
-                      {q.followUp && (
-                        <p className="mt-1 text-xs italic text-muted">Probe: {q.followUp}</p>
+                      {editingId === q.id ? (
+                        <QuestionEditor
+                          q={q}
+                          categories={allCategories}
+                          saveState={saveState}
+                          onPatch={(p) => patch(q.id, p)}
+                          onDone={() => setEditingId(null)}
+                        />
+                      ) : (
+                        <>
+                          <p className="text-sm text-ink">{q.text}</p>
+                          <p className="mt-0.5 text-xs text-muted">
+                            {q.why}
+                            {q.forWhom ? ` · For: ${q.forWhom}` : ""}
+                          </p>
+                          {q.followUp && (
+                            <p className="mt-1 text-xs italic text-muted">Probe: {q.followUp}</p>
+                          )}
+                        </>
                       )}
                     </div>
                     <IconBtn
@@ -662,6 +670,13 @@ export function QuestionsTab({
                         size={13}
                         className={rewritingId === q.id ? "animate-spin" : ""}
                       />
+                    </IconBtn>
+                    <IconBtn
+                      label="Edit the question, the probe, who it's for, its group"
+                      active={editingId === q.id}
+                      onClick={() => setEditingId(editingId === q.id ? null : q.id)}
+                    >
+                      <Pencil size={13} />
                     </IconBtn>
                     <IconBtn
                       label="Bin this question (you can get it back)"
@@ -701,33 +716,37 @@ export function QuestionsTab({
         </details>
       )}
 
-      <AskMode
-        open={showAsk}
-        onClose={() => setShowAsk(false)}
-        topic={m.topic || ""}
-        picked={picked}
-        onToggleAsked={(q) => patch(q.id, { asked: !q.asked })}
-        onResetTicks={() => setItems(items.map((q) => ({ ...q, asked: false })))}
-      />
-
-      <MoreModal
-        open={showMore}
-        busy={busy}
-        onClose={() => setShowMore(false)}
-        onGenerate={(focus) => void generate({ focus, label: "Writing 20 more questions" })}
-      />
+      {/* Mounted only while it is open, so it opens on the first question
+          every time rather than wherever you left off last meeting. */}
+      {showAsk && (
+        <AskMode
+          onClose={() => setShowAsk(false)}
+          topic={m.topic || ""}
+          title={m.title}
+          picked={picked}
+          onToggleAsked={(q) => patch(q.id, { asked: !q.asked })}
+          onResetTicks={() => setItems(items.map((q) => ({ ...q, asked: false })))}
+        />
+      )}
 
       <GuidanceModal
-        key={`${showGuide}|${guidance}|${coverage}`}
-        open={showGuide}
+        key={`${guideScope}|${guidance}|${coverage}`}
+        scope={guideScope}
         busy={busy}
         guidance={guidance}
         coverage={coverage}
         keptCount={keptCount}
         total={live.length}
-        onClose={() => setShowGuide(false)}
+        onClose={() => setGuideScope(null)}
         onSaveOnly={(g, c) =>
           save({ questions: { ...m.questions, guidance: g, coverage: c } })
+        }
+        onMore={(g, c) =>
+          void generate({
+            guidance: g,
+            coverage: c,
+            label: "Writing 20 more questions",
+          })
         }
         onRewrite={(g, c) =>
           void generate({
@@ -742,8 +761,8 @@ export function QuestionsTab({
       <AddOwnModal
         open={showAdd}
         onClose={() => setShowAdd(false)}
-        categories={[...new Set(items.map((q) => q.category))]}
-        onAdd={(text, category, followUp) => {
+        categories={allCategories}
+        onAdd={(text, category, followUp, forWhom) => {
           const maxOrder = picked.length ? Math.max(...picked.map((p) => p.order)) : -1;
           setItems([
             ...items,
@@ -753,7 +772,7 @@ export function QuestionsTab({
               category: category || "Mine",
               why: "",
               followUp,
-              forWhom: "",
+              forWhom,
               rank: 0,
               picked: true,
               backup: false,
@@ -808,142 +827,6 @@ function IconBtn({
   );
 }
 
-// The in-the-room view: big type, your order, tick them off as you ask them.
-// Backups sit at the end, out of the main flow, because that is what holding
-// one in reserve means.
-function AskMode({
-  open,
-  onClose,
-  topic,
-  picked,
-  onToggleAsked,
-  onResetTicks,
-}: {
-  open: boolean;
-  onClose: () => void;
-  /** The subject, on screen while you are standing in front of the room. */
-  topic: string;
-  picked: QuestionItem[];
-  onToggleAsked: (q: QuestionItem) => void;
-  onResetTicks: () => void;
-}) {
-  const main = picked.filter((q) => !q.backup);
-  const backups = picked.filter((q) => q.backup);
-  const done = picked.filter((q) => q.asked).length;
-
-  const Row = ({ q, n }: { q: QuestionItem; n?: number }) => (
-    <li>
-      <button
-        type="button"
-        onClick={() => onToggleAsked(q)}
-        className={`flex w-full items-start gap-3 rounded-xl border p-3 text-left transition ${
-          q.asked ? "border-border bg-canvas/60 opacity-60" : "border-border bg-surface"
-        }`}
-      >
-        <span
-          className={`mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-md text-xs font-semibold ${
-            q.asked
-              ? "bg-emerald-100 text-emerald-700"
-              : "bg-[var(--accent-soft)] text-[var(--accent)]"
-          }`}
-        >
-          {q.asked ? <Check size={14} /> : (n ?? "★")}
-        </span>
-        <span className="min-w-0 flex-1">
-          <span
-            className={`block text-lg leading-snug ${q.asked ? "line-through" : "font-medium"}`}
-          >
-            {q.text}
-          </span>
-          {q.forWhom && (
-            <span className="mt-0.5 block text-sm text-muted">For: {q.forWhom}</span>
-          )}
-          {q.followUp && (
-            <span className="mt-1 block text-sm italic text-muted">Probe: {q.followUp}</span>
-          )}
-        </span>
-      </button>
-    </li>
-  );
-
-  return (
-    <Modal open={open} onClose={onClose} title="Ask mode" size="lg">
-      {topic && (
-        <p className="mb-3 rounded-lg bg-[var(--accent-soft)]/50 px-3 py-2 text-sm font-medium">
-          {topic}
-        </p>
-      )}
-      <div className="mb-3 flex items-center gap-3">
-        <p className="flex-1 text-sm text-muted">
-          Tap a question to tick it off. {done} of {picked.length} asked.
-        </p>
-        {done > 0 && (
-          <Button size="sm" variant="secondary" onClick={onResetTicks}>
-            Reset ticks
-          </Button>
-        )}
-      </div>
-      <ul className="space-y-2">
-        {main.map((q, i) => (
-          <Row key={q.id} q={q} n={i + 1} />
-        ))}
-      </ul>
-      {backups.length > 0 && (
-        <>
-          <p className="mb-2 mt-4 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
-            <Star size={12} className="fill-current text-amber-500" /> In reserve
-          </p>
-          <ul className="space-y-2">
-            {backups.map((q) => (
-              <Row key={q.id} q={q} />
-            ))}
-          </ul>
-        </>
-      )}
-    </Modal>
-  );
-}
-
-function MoreModal({
-  open,
-  busy,
-  onClose,
-  onGenerate,
-}: {
-  open: boolean;
-  busy: boolean;
-  onClose: () => void;
-  onGenerate: (focus: string) => void;
-}) {
-  const [focus, setFocus] = useState("");
-  return (
-    <Modal open={open} onClose={onClose} title="Write me 20 more">
-      <p className="mb-3 text-sm text-muted">
-        I&apos;ll write another twenty and add them to what you already have.
-        None of them will repeat a question that is already in the list. Say
-        what this batch should be about, or leave it blank for more of
-        everything.
-      </p>
-      <Input
-        value={focus}
-        onChange={(e) => setFocus(e.target.value)}
-        placeholder='e.g. "harder ones on budgets" or "questions for the quiet panelist"'
-      />
-      <div className="mt-3 flex justify-end">
-        <Button
-          disabled={busy}
-          onClick={() => {
-            onGenerate(focus.trim());
-            setFocus("");
-          }}
-        >
-          <Sparkles size={14} /> {busy ? "Writing…" : "Write them"}
-        </Button>
-      </div>
-    </Modal>
-  );
-}
-
 function AddOwnModal({
   open,
   onClose,
@@ -953,45 +836,50 @@ function AddOwnModal({
   open: boolean;
   onClose: () => void;
   categories: string[];
-  onAdd: (text: string, category: string, followUp: string) => void;
+  onAdd: (text: string, category: string, followUp: string, forWhom: string) => void;
 }) {
   const [text, setText] = useState("");
   const [category, setCategory] = useState("");
   const [followUp, setFollowUp] = useState("");
+  const [forWhom, setForWhom] = useState("");
   return (
-    <Modal open={open} onClose={onClose} title="Type one of my own">
+    <Modal open={open} onClose={onClose} title="Type one of my own" movable>
       <div className="space-y-3">
         <Textarea
           label="The question, as you'd say it"
+          autoFocus
           value={text}
           onChange={(e) => setText(e.target.value)}
           className="min-h-20"
         />
         <Input
-          label="Follow-up probe (optional)"
+          label="Probe, for when the answer is thin (optional)"
           value={followUp}
           onChange={(e) => setFollowUp(e.target.value)}
+          placeholder="What you ask next if they give you nothing"
         />
         <Input
-          label="Category (optional)"
+          label="Who to put it to (optional)"
+          value={forWhom}
+          onChange={(e) => setForWhom(e.target.value)}
+          placeholder="Everyone"
+        />
+        <CategoryPicker
+          label="Which group it goes in"
           value={category}
-          onChange={(e) => setCategory(e.target.value)}
-          list="mp-question-categories"
+          options={categories}
+          onChange={setCategory}
           placeholder="Mine"
         />
-        <datalist id="mp-question-categories">
-          {categories.map((c) => (
-            <option key={c} value={c} />
-          ))}
-        </datalist>
         <div className="flex justify-end">
           <Button
             disabled={!text.trim()}
             onClick={() => {
-              onAdd(text.trim(), category.trim(), followUp.trim());
+              onAdd(text.trim(), category.trim(), followUp.trim(), forWhom.trim());
               setText("");
               setCategory("");
               setFollowUp("");
+              setForWhom("");
             }}
           >
             <Plus size={14} /> Add to my list
@@ -1002,16 +890,152 @@ function AddOwnModal({
   );
 }
 
+/**
+ * Picking the group a question belongs to.
+ *
+ * This was a one-line text box with a browser dropdown hanging off it, and
+ * the dropdown cut the longer names off halfway: you could pick "How it works
+ * in prac..." without ever seeing which group you had chosen. The names are
+ * short enough to just show, all of them, wrapped, with the current one lit
+ * up. The box underneath is still there for a group that does not exist yet.
+ */
+function CategoryPicker({
+  label,
+  value,
+  options,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-sm font-medium text-ink">{label}</span>
+      {options.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {options.map((c) => (
+            <button
+              key={c}
+              type="button"
+              onClick={() => onChange(value === c ? "" : c)}
+              className={`rounded-full border px-2.5 py-1 text-xs transition ${
+                value === c
+                  ? "border-[var(--accent)] bg-[var(--accent-soft)] font-medium text-[var(--accent)]"
+                  : "border-border text-muted hover:bg-canvas hover:text-ink"
+              }`}
+            >
+              {c}
+            </button>
+          ))}
+        </div>
+      )}
+      <Input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={options.length ? "Or type a new group" : placeholder || "A group name"}
+      />
+    </div>
+  );
+}
+
+/**
+ * Editing a question — all of it.
+ *
+ * Only the text was editable, which meant a probe that was wrong, or a
+ * question filed under the wrong group, or one aimed at the wrong person,
+ * could only be fixed by binning it and typing a new one. There is nothing in
+ * a question now that you cannot change by hand.
+ */
+function QuestionEditor({
+  q,
+  categories,
+  saveState,
+  onPatch,
+  onDone,
+}: {
+  q: QuestionItem;
+  categories: string[];
+  saveState: SaveState;
+  onPatch: (p: Partial<QuestionItem>) => void;
+  onDone: () => void;
+}) {
+  return (
+    <div className="space-y-2.5 rounded-lg border border-[var(--accent)]/40 bg-canvas/50 p-2.5">
+      <Textarea
+        label="The question"
+        autoFocus
+        value={q.text}
+        onChange={(e) => onPatch({ text: e.target.value })}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") onDone();
+        }}
+        className="min-h-16"
+      />
+      <Input
+        label="Probe, for when the answer is thin"
+        value={q.followUp}
+        onChange={(e) => onPatch({ followUp: e.target.value })}
+        placeholder="What you ask next if they give you nothing"
+      />
+      <Input
+        label="Who to put it to"
+        value={q.forWhom}
+        onChange={(e) => onPatch({ forWhom: e.target.value })}
+        placeholder="Everyone"
+      />
+      <Input
+        label="Your note on why it's here"
+        value={q.why}
+        onChange={(e) => onPatch({ why: e.target.value })}
+        placeholder="Only you see this"
+      />
+      <CategoryPicker
+        label="Which group it's in"
+        value={q.category}
+        options={categories}
+        onChange={(c) => onPatch({ category: c })}
+      />
+      {/* There was no way to tell an edit had finished, and nothing to
+          press. Blur alone is not an answer: you cannot see a blur. */}
+      <div className="flex items-center gap-2 pt-0.5">
+        <Button size="sm" onClick={onDone}>
+          <Check size={13} /> Done
+        </Button>
+        <span className="flex items-center gap-1 text-[11px] text-muted">
+          {saveState === "pending" || saveState === "saving" ? (
+            <>
+              <CloudUpload size={11} className="animate-pulse" /> Saving…
+            </>
+          ) : (
+            <>
+              <Check size={11} className="text-emerald-600" /> Saved as you type
+            </>
+          )}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+export type GuideScope = "more" | "rewrite" | "future";
+
 // Two instructions, because they are checked differently: how the questions
 // are written is a rule every single one has to pass, what they cover is a
 // floor the bank as a whole has to clear. Saying "include some on AI" in the
 // same box as "keep them casual" is how you end up with a bank entirely about
 // AI.
 //
-// And a choice about what to do with what you already have, because "these
-// are written wrong" and "all of these are wrong" are different complaints.
+// And then one choice about what to do right now. This used to be two
+// dialogs: one that took an instruction and wrote twenty more without
+// remembering it, and one that remembered an instruction but could only
+// rewrite what was already there. Which left the obvious thing — "write me
+// new questions, about this" — impossible in either.
 function GuidanceModal({
-  open,
+  scope: openOn,
   busy,
   guidance,
   coverage,
@@ -1019,9 +1043,11 @@ function GuidanceModal({
   total,
   onClose,
   onSaveOnly,
+  onMore,
   onRewrite,
 }: {
-  open: boolean;
+  /** Which choice it opens on, or null when the dialog is shut. */
+  scope: GuideScope | null;
   busy: boolean;
   guidance: string;
   coverage: string;
@@ -1030,19 +1056,44 @@ function GuidanceModal({
   total: number;
   onClose: () => void;
   onSaveOnly: (guidance: string, coverage: string) => void;
+  onMore: (guidance: string, coverage: string) => void;
   onRewrite: (guidance: string, coverage: string) => void;
 }) {
   const [style, setStyle] = useState(guidance);
   const [cover, setCover] = useState(coverage);
-  const [scope, setScope] = useState<"rewrite" | "future">("rewrite");
+  const [scope, setScope] = useState<GuideScope>(openOn || "more");
 
   const dirty = style.trim() !== guidance || cover.trim() !== coverage;
   const atRisk = total - keptCount;
 
+  const CHOICES: { k: GuideScope; title: string; blurb: string }[] = [
+    {
+      k: "more",
+      title: "Write me 20 more, following this",
+      blurb:
+        "Everything you have stays exactly as it is. Twenty new ones go underneath, none of them repeating a question already in the list.",
+    },
+    {
+      k: "rewrite",
+      title: "Rewrite the ones I have",
+      blurb:
+        `${atRisk} question${atRisk === 1 ? "" : "s"} I wrote get replaced.` +
+        (keptCount > 0
+          ? ` ${keptCount} stay: the ones you typed, and the ones you've locked.`
+          : " Lock any you want to keep first, with the padlock on the question."),
+    },
+    {
+      k: "future",
+      title: "Nothing now, just remember it",
+      blurb:
+        "Nothing changes today. The next batch, and every one after it, follows the instruction.",
+    },
+  ];
+
   return (
-    <Modal open={open} onClose={onClose} title="Guide the questions">
+    <Modal open={openOn !== null} onClose={onClose} title="Guide the questions" movable>
       <p className="mb-3 text-sm text-muted">
-        Both of these stick. Every batch from now on follows them, until you
+        Both boxes stick. Every batch from now on follows them, until you
         change or clear them.
       </p>
       <div className="space-y-3">
@@ -1056,8 +1107,9 @@ function GuidanceModal({
             className="min-h-20"
           />
           <p className="mt-1 text-[11px] text-muted">
-            A rule every question has to pass. I check each one against it, one
-            at a time, before handing them over.
+            A rule every question has to pass. I check each one against it
+            before handing them over, and anything that still breaks it does
+            not reach you.
           </p>
         </div>
         <div>
@@ -1078,40 +1130,27 @@ function GuidanceModal({
 
       <fieldset className="mt-4">
         <legend className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
-          And the questions you already have?
+          And what should I do now?
         </legend>
-        <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-border p-2.5 text-sm has-[:checked]:border-[var(--accent)] has-[:checked]:bg-[var(--accent-soft)]/30">
-          <input
-            type="radio"
-            checked={scope === "rewrite"}
-            onChange={() => setScope("rewrite")}
-            className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
-          />
-          <span className="min-w-0 flex-1">
-            Rewrite them now
-            <span className="mt-0.5 block text-xs text-muted">
-              {atRisk} question{atRisk === 1 ? "" : "s"} I wrote get replaced.
-              {keptCount > 0
-                ? ` ${keptCount} stay: the ones you typed, and the ones you've locked.`
-                : " Lock any you want to keep first, with the padlock on the question."}
-            </span>
-          </span>
-        </label>
-        <label className="mt-2 flex cursor-pointer items-start gap-2 rounded-lg border border-border p-2.5 text-sm has-[:checked]:border-[var(--accent)] has-[:checked]:bg-[var(--accent-soft)]/30">
-          <input
-            type="radio"
-            checked={scope === "future"}
-            onChange={() => setScope("future")}
-            className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
-          />
-          <span className="min-w-0 flex-1">
-            Leave them, just remember this
-            <span className="mt-0.5 block text-xs text-muted">
-              Nothing changes now. The next batch, and every one after it,
-              follows the instruction.
-            </span>
-          </span>
-        </label>
+        <div className="space-y-2">
+          {CHOICES.map((c) => (
+            <label
+              key={c.k}
+              className="flex cursor-pointer items-start gap-2 rounded-lg border border-border p-2.5 text-sm has-[:checked]:border-[var(--accent)] has-[:checked]:bg-[var(--accent-soft)]/30"
+            >
+              <input
+                type="radio"
+                checked={scope === c.k}
+                onChange={() => setScope(c.k)}
+                className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
+              />
+              <span className="min-w-0 flex-1">
+                {c.title}
+                <span className="mt-0.5 block text-xs text-muted">{c.blurb}</span>
+              </span>
+            </label>
+          ))}
+        </div>
       </fieldset>
 
       <div className="mt-4 flex justify-end gap-2">
@@ -1119,13 +1158,19 @@ function GuidanceModal({
           Cancel
         </Button>
         <Button
-          disabled={busy || (!dirty && scope === "future") || (!style.trim() && !cover.trim())}
+          disabled={
+            busy ||
+            (scope === "future" && !dirty) ||
+            (scope !== "more" && !style.trim() && !cover.trim())
+          }
           onClick={() => {
             const g = style.trim();
             const c = cover.trim();
             if (scope === "future") {
               onSaveOnly(g, c);
               onClose();
+            } else if (scope === "more") {
+              onMore(g, c);
             } else {
               onRewrite(g, c);
             }
@@ -1135,10 +1180,15 @@ function GuidanceModal({
             <>
               <Wand2 size={14} /> Remember it
             </>
+          ) : scope === "more" ? (
+            <>
+              <Sparkles size={14} className={busy ? "animate-pulse" : ""} />
+              {busy ? "Writing…" : "Write them"}
+            </>
           ) : (
             <>
               <RefreshCw size={14} className={busy ? "animate-spin" : ""} />
-              {busy ? "Rewriting…" : "Rewrite them all"}
+              {busy ? "Rewriting…" : "Rewrite them"}
             </>
           )}
         </Button>
