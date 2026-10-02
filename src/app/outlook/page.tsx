@@ -29,6 +29,7 @@ import {
   generatedDetector,
   joinSamples,
   readsLikeAI,
+  sampleStats,
   splitSamples,
 } from "@/lib/writer/voice";
 import {
@@ -300,6 +301,15 @@ function samePerson(from: string, name: string, mail: string): boolean {
 
 /** Below this there is no style to read, only "sounds good". */
 const SAMPLE_FLOOR = 80;
+
+/**
+ * How much of somebody's writing to hold on to. Generous, because this is the
+ * pool and not the prompt: four samples is where one email stops learning
+ * anything more, but they are picked out of everything kept — the ones nearest
+ * in length to what is being written — and the authorship check gets steadily
+ * better the more of it there is. See lib/writer/voice.ts.
+ */
+const SAMPLE_POOL = 120000;
 
 export default function OutlookPage() {
   const { userId, loading: userLoading } = useUserId();
@@ -877,6 +887,7 @@ export default function OutlookPage() {
   const voice = styles.find((s) => s.kind === "voice") || null;
   const learnedSamples = useMemo(() => splitSamples(voice?.samples || ""), [voice?.samples]);
   const voiceCount = learnedSamples.length;
+  const stats = useMemo(() => sampleStats(voice?.samples || ""), [voice?.samples]);
 
   // Everything Omni has written for this person. Not a nicety: without it the
   // pane offers to learn from its own output — see lib/writer/voice.ts.
@@ -999,7 +1010,7 @@ export default function OutlookPage() {
    */
   async function learnVoice(all: string[], note: string) {
     if (learning) return;
-    const merged = joinSamples(all).slice(-24000);
+    const merged = joinSamples(all).slice(-SAMPLE_POOL);
     setLearning(true);
     setError("");
     try {
@@ -1120,7 +1131,7 @@ export default function OutlookPage() {
           Math.floor(all.length / 3) > Math.floor(learnedSamples.length / 3);
         if (restate) await learnVoice(all, `Picked up ${take.length} more of your writing.`);
         else if (voice)
-          await updateStyle(voice.id, { samples: joinSamples(all).slice(-24000) });
+          await updateStyle(voice.id, { samples: joinSamples(all).slice(-SAMPLE_POOL) });
       })();
     }, 0);
     return () => clearTimeout(id);
@@ -1336,6 +1347,20 @@ export default function OutlookPage() {
                 ✓ Learned from {voiceCount} {voiceCount === 1 ? "piece" : "pieces"} of your
                 writing, and used on every reply.
               </p>
+              {/* What it has, by length, and what it hasn't. Four samples go
+                  into any one email — but they are picked out of this, nearest
+                  in length to whatever is being written, so a pool that is all
+                  two-liners has nothing to show for a long one. */}
+              <p className="mt-0.5 text-[10px] leading-snug text-muted">
+                {[
+                  `${stats.short} short`,
+                  `${stats.medium} medium`,
+                  `${stats.long} long`,
+                ].join(" · ")}
+                {stats.missing.length
+                  ? ` — nothing ${stats.missing.join(" or ")} yet. Add some: it picks the ones nearest in length to whatever it's writing.`
+                  : " — a good spread. More is still better."}
+              </p>
               {/* What it is going on, in full. A voice you cannot inspect is a
                   voice you cannot correct. */}
               <details className="mt-1">
@@ -1481,7 +1506,10 @@ export default function OutlookPage() {
               {learning ? "Reading how you write…" : "Add these to my voice"}
             </button>
             <p className="mt-0.5 text-[10px] leading-snug text-muted">
-              Four or five is plenty — past that it stops making much difference.
+              Give it as many as you like, and a range: a two-line yes, an ordinary
+              reply, one where you had to explain something properly. Only four go
+              into any one email, but it picks the four nearest in length to
+              whatever it is writing.
             </p>
           </details>
 

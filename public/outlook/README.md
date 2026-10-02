@@ -43,6 +43,18 @@ that" is a thought you have while reading it, not while filling a form in.
   — a description of how somebody writes is a weaker guide than their actual
   sentences, so the model gets both — and everything it has learned is listed,
   with an ✕ on each.
+
+  **Keep many, send four.** Those are two different numbers and running them
+  together is the mistake. Four or five examples is where one prompt stops
+  learning anything more about how you write; past that it is just longer. But
+  the pool those four come out of should be as big and as varied as you can
+  make it, because a two-line "yes, Thursday works" and fifteen lines
+  explaining why something stalled are the same person in two registers, and
+  being shown the wrong one is worse than being shown fewer. So everything is
+  kept, and each email gets the samples nearest in length to what it is about
+  to write, plus one that is deliberately unlike them so the range still
+  shows. The pane says what it has, so many short, so many medium, so many
+  long, and names the size it has none of.
 - **Words you'd never use.** "Never _lovely_, say _great_." Stored as a swap
   and never as a bare ban: a list of forbidden words puts those words in front
   of the model and makes it _more_ likely to reach for them, where a
@@ -92,6 +104,26 @@ Nothing is ever deleted or hidden on the strength of these. A flagged piece is
 still on the list, unticked, with the reason in words — "longer, more even
 sentences than you write" — and a tick you can put back. Only you know whether
 you wrote it; the checks only decide where the tick starts.
+
+### Writing from a brief, not a summary of one
+
+Handed a long note, five things that went wrong in order, the first version
+came back having quietly merged two of them, with the figure that was the whole
+point of the message missing and nothing asked for at the end.
+
+Three reasons, all of them in the prompt rather than the model.
+Write-from-notes mode was the only mode that never said "keep everything they
+told you": the others promise to preserve the user's facts, and that one only
+forbade adding to them, so compressing two complaints into one broke no rule.
+The hard rule against inventing numbers was being read as a rule against
+adding up the numbers you were given, so an order that came to $21 against an
+intended $9 was described without either total, which is what makes a complaint
+easy to brush off. And the paragraph explaining that part of what somebody
+types is them talking TO the writer existed only for the Options box, so "write
+me one I can delay send" came back as an email about being sent ahead of time.
+
+All three are fixed and measured: the figure and the ask went from absent in
+five of five runs to present in eleven of eleven.
 
 ## What lands in Outlook
 

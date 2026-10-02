@@ -216,6 +216,76 @@ export function readsLikeAI(sample: string, own: string[] = []): VoiceCheck {
   return { flagged: weight >= 2, reasons };
 }
 
+// --- How many to keep, and which of them to send ----------------------------
+//
+// These are two different numbers and running them together is a mistake.
+//
+// Four or five examples is where a single prompt stops improving: past that
+// the model is not learning more about how you write, the prompt is just
+// getting longer. That is the SEND number, and it is small.
+//
+// The KEEP number should be as large as you can make it, because the pool is
+// what those four are chosen from. A two-line "yes, Thursday works" and a
+// fifteen-line explanation of why a study stalled are the same person in two
+// registers, and showing the model the wrong one is worse than showing it
+// fewer. So everything is kept, and each email picks the samples closest in
+// length to what it is about to write, plus one that is deliberately unlike
+// them so the range is still visible.
+//
+// The pool also feeds the authorship check, which gets steadily better the
+// more of somebody's writing it has to compare against.
+
+/**
+ * Roughly how long a piece is, in the terms a person would use.
+ *
+ * The boundaries are the ones the length dial already offers, so the pane and
+ * the writer are talking about the same sizes: "a few lines" is about 45 words,
+ * "a normal email" about 120, "thorough" about 260. Cut halfway between.
+ */
+export type SampleSize = "short" | "medium" | "long";
+
+export function sizeOf(text: string): SampleSize {
+  const n = words(text).length;
+  return n < 80 ? "short" : n <= 190 ? "medium" : "long";
+}
+
+export interface SampleStats {
+  total: number;
+  short: number;
+  medium: number;
+  long: number;
+  /** The sizes it has none of, so the pane can ask for those specifically. */
+  missing: SampleSize[];
+}
+
+export function sampleStats(samples: string): SampleStats {
+  const pieces = splitSamples(samples);
+  const count = (s: SampleSize) => pieces.filter((p) => sizeOf(p) === s).length;
+  const out = { total: pieces.length, short: count("short"), medium: count("medium"), long: count("long") };
+  return {
+    ...out,
+    missing: (["short", "medium", "long"] as SampleSize[]).filter((s) => out[s] === 0),
+  };
+}
+
+/**
+ * The handful to put in front of the model for one particular piece: the ones
+ * closest in length to what is being written, and one that is not, so a person
+ * who writes both two-line replies and long explanations still looks like one
+ * person rather than whichever half got picked.
+ */
+export function pickSamples(samples: string, targetWords: number, n = 4): string[] {
+  const pieces = splitSamples(samples).filter((s) => s.length > 40);
+  if (pieces.length <= n) return pieces;
+  const target = targetWords > 0 ? targetWords : 120;
+  const byCloseness = [...pieces].sort(
+    (a, b) => Math.abs(words(a).length - target) - Math.abs(words(b).length - target),
+  );
+  const chosen = byCloseness.slice(0, Math.max(1, n - 1));
+  const contrast = byCloseness[byCloseness.length - 1];
+  return contrast && !chosen.includes(contrast) ? [...chosen, contrast] : chosen;
+}
+
 /** Is this one already in the samples? Compared on a run, not on the whole. */
 export function alreadyLearned(sample: string, samples: string): boolean {
   const known = runs(samples);

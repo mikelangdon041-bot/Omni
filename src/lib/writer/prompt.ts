@@ -4,6 +4,7 @@
 // in chatPrompt.ts for the same reason.
 
 import { RELATIVE_TO_ABSOLUTE } from "./types";
+import { pickSamples } from "./voice";
 
 export interface GenerateArgs {
   docType: string;
@@ -61,6 +62,8 @@ export const FIDELITY_RULES: Record<string, string> = {
   draft: `MODE: WRITE IT FROM MY NOTES.
 - What they gave you is shorthand: fragments, bullets, half-sentences, a bit of context. It is a brief, not a draft. Nothing in it needs preserving word for word, and their telegraphic phrasing should NOT survive into the result.
 - Write the real piece. Full sentences, a proper opening and close, the points in an order that makes sense. This is expected to be longer than what they typed.
+- EVERY POINT THEY MADE SURVIVES. A brief is not a summary to be compressed, and nothing in it is a repeat of something else just because it is about the same subject. If they described two things that went wrong, both are in the piece, told as two things, in the order they happened. Folding one into the other, or keeping only the one that is easiest to write, loses the part they care most about. This is the commonest way this mode fails. If the length you have been given will not hold everything they said, make each point in fewer words. Never drop one to fit.
+- SAY WHAT THEY WANT TO HAPPEN. If the brief makes the outcome plain, end on it as a clear, specific request rather than trailing off into "let me know". Never ask for something their own account shows is no longer possible: if what they wanted has become impossible, ask for the remedy that is still open to them.
 - Every fact, name, number, date and commitment must come from what they gave you. Do not invent a detail to round out a sentence, and do not promise anything on their behalf that they didn't say. If a hard fact is genuinely missing and the piece needs it, leave [square brackets] for that one thing.
 - Their shorthand often mixes the message with notes to you about it ("keep it short", "she's annoyed"). Use the second kind to make choices; only the first kind belongs in the text.`,
 };
@@ -221,10 +224,19 @@ export function buildGeneratePrompt(a: GenerateArgs): { system: string; user: st
   // of the same voice. Where a style kept the writing it was learned from, a
   // few of those pieces go in as well, capped: past four or five examples the
   // gain flattens out and the prompt just gets longer.
+  // Roughly how long this piece will come out, so the samples shown are the
+  // person writing at about that length. A draft on the table measures itself;
+  // with nothing to measure, the length dial says what size was asked for.
+  const draftWords = wordCount((a.previous || a.input || "").trim());
+  const targetWords =
+    draftWords >= 25
+      ? Math.round(draftWords * (LENGTH_FACTORS[String(ctx.length || "")] || 1))
+      : ABSOLUTE_WORDS[String(ctx.length || "")] || 120;
+
   const styleBlock = a.styles.length
     ? `Writing styles to follow (treat these as binding rules):\n${a.styles
         .map((s) => {
-          const samples = sampleBlock(s.samples);
+          const samples = sampleBlock(s.samples, targetWords);
           return `--- Style "${s.name}" ---\n${s.text}${
             samples
               ? `\n\nActual writing by this person. Match this — the rhythm, the sentence length, the word choices, the way they open and close. Never copy their content, only how it sounds:\n${samples}`
@@ -278,6 +290,7 @@ ${notes}`;
     ctx.keyPoints && `Key points that MUST be included:\n${ctx.keyPoints}`,
     ctx.background &&
       `BACKGROUND — context for the piece, not a draft of it and not text to quote back. When this is a message the user was sent, it is the thing they are answering: take the sender's name, the topic, the dates and any commitments straight from it, answer the points it actually raises, and never restate or rewrite it.
+WHERE THE USER HAS GIVEN THEIR OWN ACCOUNT of what happened, that account is the substance of the piece and all of it is written out. This background is what the piece has to make sense against, not a competing claim on the space: answering it never justifies condensing them.
 WHEN IT IS LAID OUT AS NUMBERED MESSAGES they are one thread, newest first, and exactly one is marked as the one being answered. Reply to THAT message and greet ITS sender. The rest is history: read it for context, do not answer it, do not greet the people in it, and never attribute what one person wrote to another — getting this wrong puts somebody else's name on the greeting and somebody else's words in their mouth.
 EVERYONE SHOWN AS A RECIPIENT IS READING THIS REPLY. Speak to them directly rather than about them, and never offer to pass something on, forward it, or relay a message to somebody who is already on the email — they will read it themselves, in this reply.
 ${ctx.background}`,
@@ -328,7 +341,12 @@ ${a.previous}
 What they want changed this round: ${a.guidance || "(none — light general polish)"}${standingBlock}${versionsBlock}`
     : nothingTyped
       ? `The user typed nothing beyond the intake above, which is a complete request rather than a missing one: write the piece from what is there. If the intake holds a message they were sent, write their reply to it and answer the points it actually raises. Do not ask them what they want to say, and do not leave blanks for them to fill in.`
-      : `Here is everything the user put in the box. Work out what it is and deliver what they want.\n\nWhat the user wrote:\n${a.input || notes}`;
+      : `Here is everything the user put in the box. Work out what it is and deliver what they want.
+
+Part of it is them talking TO you about the piece rather than words for it: how long it should be, how they are feeling, how they mean to send it, what they want you to do with it. Use that to make choices and keep it out of the writing. Everything else is the substance, and all of it belongs in the piece.
+
+What the user wrote:
+${a.input || notes}`;
 
   // The picker if it was touched, otherwise whatever the note asks for in plain
   // words. LEGACY_LENGTH_ACTIONS are read here too: length used to be sayable
@@ -409,6 +427,7 @@ ${fidelityBlock}
 HARD RULES
 - Never use an em dash (—), an en dash (–), or a double hyphen (--). Not once. Use a comma, a period, a colon, or parentheses instead. This is absolute and overrides any style guidance.
 - If key points are listed, include every one.
+- Working out what the user's own numbers come to is not inventing. Given the parts, state the total, the difference, the overcharge or the shortfall in the piece: that figure is usually the point, and leaving the reader to do the sum is what makes a complaint easy to brush off. Go no further than their numbers actually support, and never invent a figure that is not derivable from what they gave you.
 - Names: address the recipient by name whenever it can be inferred from anything provided (the pasted email's sender, the recipient field, the background). NEVER output a placeholder like [Name] or [Recipient].${a.noGreeting ? "" : ' If no name is inferable, open naturally without one (e.g. "Hi," / "Hi there,") or skip the greeting if the format doesn\'t need it.'}
 - Only use [square brackets] for a genuinely missing hard fact (a date, a number) the user must fill in — never for names or things you can infer.
 - Do not invent a relationship. Thanks, praise, warmth, "it's a genuine pleasure partnering with you" and the like are only yours to write towards people the user actually told you to say them to. Never add a paragraph addressed to somebody who merely appears in the thread, and never characterise a working relationship the user has not described.
@@ -420,16 +439,28 @@ ${styleBlock ? `\n${styleBlock}` : ""}${swapBlock ? `\n\n${swapBlock}` : ""}${si
   return { system, user: `${intake ? `Intake:\n${intake}\n\n` : ""}${task}` };
 }
 
-/** Up to four pieces of somebody's real writing, trimmed to keep the prompt sane. */
-function sampleBlock(samples?: string): string {
-  const pieces = (samples || "")
-    .split(/\n\s*(?:---+|===+)\s*\n|\n{3,}/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 40)
-    .slice(0, 4)
-    .map((s) => s.slice(0, 1200));
+/**
+ * A few pieces of somebody's real writing, chosen for THIS piece.
+ *
+ * Not the first four in the pile. A two-line "yes, Thursday works" and a long
+ * explanation of why a study stalled are the same person writing differently,
+ * so the samples closest in length to what is about to be written are the ones
+ * worth showing — plus one that is not, so the range stays visible. Four is
+ * where a prompt stops learning anything more about how somebody writes; the
+ * pool they are chosen from should be as big as that person can make it. See
+ * lib/writer/voice.ts.
+ */
+function sampleBlock(samples: string | undefined, targetWords: number): string {
+  const pieces = pickSamples(samples || "", targetWords).map((s) => s.slice(0, 2000));
   return pieces.map((s, i) => `<sample ${i + 1}>\n${s}\n</sample ${i + 1}>`).join("\n\n");
 }
+
+/** Roughly how long the piece being written will be, for choosing samples. */
+const ABSOLUTE_WORDS: Record<string, number> = {
+  brief: 45,
+  standard: 120,
+  detailed: 260,
+};
 
 /**
  * What to do about the sign-off, which depends entirely on which kind it is.
