@@ -18,7 +18,7 @@ import {
   type MeetingPayload,
 } from "@/lib/meetingprep/briefAi";
 import { MEETING_TYPES } from "@/lib/meetingprep/types";
-import { writeQuestions } from "@/lib/meetingprep/questionsAi";
+import { writeQuestions, writeVariants } from "@/lib/meetingprep/questionsAi";
 import { reviewPrep } from "@/lib/meetingprep/reviewAi";
 
 export const runtime = "nodejs";
@@ -37,6 +37,8 @@ export const maxDuration = 300;
 //              prompt?,origin?}] } (origin "ai" = a box the model added)
 //   review   { meeting, kolId?, briefText?, questionsText?, sectionKeys:[],
 //              research? }                      → { notes:[...] } (what's wrong)
+//   variants { meeting, question, guidance?, standing?, research?, kolId? }
+//                                              → { variants:[{angle,text,followUp}] }
 //   retitle  { meeting }                       → { title } (a name for the new subject)
 //   autofill { meeting }                       → { title, topic, location, durationMin,
 //              date, meetingType, attendees:[], objectives, concerns }
@@ -294,6 +296,27 @@ export async function POST(req: Request) {
         research: String(body?.research || "").slice(0, 12000),
       });
       return NextResponse.json({ notes });
+    }
+
+    // Three other ways to ask one question the writer likes but not enough.
+    if (action === "variants") {
+      const meeting: MeetingPayload = body?.meeting || {};
+      const kolBlock = await kolBlockFor(supabase, String(body?.kolId || ""));
+      const q = body?.question || {};
+      const variants = await writeVariants({
+        meeting,
+        kolBlock,
+        research: String(body?.research || "").slice(0, 12000),
+        question: {
+          text: String(q?.text || "").slice(0, 2000),
+          why: String(q?.why || "").slice(0, 500),
+          followUp: String(q?.followUp || "").slice(0, 1000),
+          category: String(q?.category || "").slice(0, 120),
+        },
+        guidance: String(body?.guidance || "").slice(0, 2000),
+        standing: String(body?.standing || "").slice(0, 2000),
+      });
+      return NextResponse.json({ variants });
     }
 
     // The subject changed and the meeting is still called what it was called

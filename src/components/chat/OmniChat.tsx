@@ -92,6 +92,80 @@ export function OmniChat() {
   const [error, setError] = useState("");
   const [pending, setPending] = useState<Pending[]>([]);
   const [reading, setReading] = useState(false);
+  // Where the bubble sits, as an offset from its corner. It is fixed to the
+  // bottom right of every page in the app, which means on any page with
+  // something in that corner — the question bin, a table's last row — it sits
+  // on top of it and that thing cannot be clicked. Rather than move it and
+  // break a different page, it can be dragged, and it remembers where it was
+  // put. Per browser, which is right for a preference about one screen.
+  //
+  // The position is written straight to the element rather than held in
+  // state: nothing else renders from it, and a transform that only exists on
+  // the client would not match what the server sent.
+  const boxRef = useRef<HTMLElement | null>(null);
+  const nudge = useRef({ x: 0, y: 0 });
+  const drag = useRef<{ mx: number; my: number; x: number; y: number; moved: boolean } | null>(
+    null,
+  );
+
+  const place = () => {
+    if (boxRef.current)
+      boxRef.current.style.transform = `translate(${nudge.current.x}px, ${nudge.current.y}px)`;
+  };
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("omni:chat:nudge");
+      const v = raw ? JSON.parse(raw) : null;
+      if (typeof v?.x === "number" && typeof v?.y === "number") nudge.current = v;
+    } catch {
+      // A blocked or empty store just means it opens in its corner.
+    }
+    place();
+    // Re-applied when it opens or closes, because that swaps the element.
+  }, [open]);
+
+  function onBubbleDown(e: React.PointerEvent) {
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    drag.current = {
+      mx: e.clientX,
+      my: e.clientY,
+      x: nudge.current.x,
+      y: nudge.current.y,
+      moved: false,
+    };
+  }
+
+  function onBubbleMove(e: React.PointerEvent) {
+    const d = drag.current;
+    if (!d) return;
+    const dx = e.clientX - d.mx;
+    const dy = e.clientY - d.my;
+    // A few pixels of travel is a click with a shaky hand, not a drag.
+    if (!d.moved && Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
+    d.moved = true;
+    // Keep it on the screen whatever happens.
+    nudge.current = {
+      x: Math.max(-(window.innerWidth - 120), Math.min(20, d.x + dx)),
+      y: Math.max(-(window.innerHeight - 90), Math.min(20, d.y + dy)),
+    };
+    place();
+  }
+
+  function onBubbleUp() {
+    const d = drag.current;
+    drag.current = null;
+    if (!d) return;
+    if (d.moved) {
+      try {
+        localStorage.setItem("omni:chat:nudge", JSON.stringify(nudge.current));
+      } catch {
+        // Not worth failing a drag over.
+      }
+    } else {
+      setOpen(true);
+    }
+  }
   const endRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -310,9 +384,16 @@ export function OmniChat() {
     return (
       <button
         type="button"
-        onClick={() => setOpen(true)}
-        title="Ask about this"
-        className="fixed bottom-5 right-5 z-40 flex items-center gap-2 rounded-full bg-gradient-to-r from-[var(--grad-from)] to-[var(--grad-to)] py-3 pl-4 pr-5 text-white shadow-lg transition hover:opacity-90 hover:shadow-xl"
+        onPointerDown={onBubbleDown}
+        onPointerMove={onBubbleMove}
+        onPointerUp={onBubbleUp}
+        onPointerCancel={() => (drag.current = null)}
+        ref={(el) => {
+          boxRef.current = el;
+          place();
+        }}
+        title="Ask about this. Drag it if it's in your way."
+        className="fixed bottom-5 right-5 z-40 flex touch-none items-center gap-2 rounded-full bg-gradient-to-r from-[var(--grad-from)] to-[var(--grad-to)] py-3 pl-4 pr-5 text-white shadow-lg transition hover:opacity-90 hover:shadow-xl active:cursor-grabbing"
       >
         <MessageCircle size={18} />
         <span className="text-sm font-semibold">Ask</span>
@@ -325,7 +406,13 @@ export function OmniChat() {
     );
 
   return (
-    <section className="fixed bottom-5 right-5 z-40 flex max-h-[min(70vh,620px)] w-[min(24rem,calc(100vw-2.5rem))] flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl">
+    <section
+      ref={(el) => {
+        boxRef.current = el;
+        place();
+      }}
+      className="fixed bottom-5 right-5 z-40 flex max-h-[min(70vh,620px)] w-[min(24rem,calc(100vw-2.5rem))] flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl"
+    >
       <div className="flex items-center gap-2.5 border-b border-border bg-canvas/60 px-3.5 py-2.5">
         <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[var(--accent-soft)] text-[var(--accent)]">
           <MessageCircle size={15} />

@@ -203,6 +203,113 @@ function firstText(res: { content: { type: string; text?: string }[] }): string 
   return (block?.text || "").trim();
 }
 
+const VARIANTS_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    variants: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: {
+          angle: { type: "string" as const },
+          text: { type: "string" as const },
+          followUp: { type: "string" as const },
+        },
+        required: ["angle", "text", "followUp"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["variants"],
+  additionalProperties: false,
+};
+
+export interface QuestionVariant {
+  /** Three or four words on what this version does differently. */
+  angle: string;
+  text: string;
+  followUp: string;
+}
+
+/**
+ * Three other ways to ask one question.
+ *
+ * The gap this fills: a question can be nearly right, and the only thing the
+ * app could do about it was throw it away and write a different one, or hand
+ * the writer a blank box and let them do it themselves. Neither is what you
+ * want when you like the question and not the wording. These are versions of
+ * the SAME question, so the writer picks rather than describes.
+ */
+export async function writeVariants({
+  meeting,
+  kolBlock = "",
+  research = "",
+  question,
+  guidance = "",
+  standing = "",
+}: {
+  meeting: MeetingPayload;
+  kolBlock?: string;
+  research?: string;
+  question: { text: string; why?: string; followUp?: string; category?: string };
+  /** What the writer wants different about this one, in their words. */
+  guidance?: string;
+  /** Their standing instruction about how every question must be written. */
+  standing?: string;
+}): Promise<QuestionVariant[]> {
+  const res = await anthropic().messages.create({
+    model: WRITER_MODEL,
+    max_tokens: 2000,
+    output_config: { format: { type: "json_schema", schema: VARIANTS_SCHEMA } },
+    system: `You are rewriting one question for someone who is going to ask it out loud. They like it. They do not like how it lands.
+
+Give exactly three versions of THIS question. Not three new questions: three ways of asking the same thing, far enough apart that choosing between them is a real choice. One might be blunter, one might come at it sideways, one might put a number or a scenario in front of it. Never three rewordings of the same sentence.
+
+${SEAT_RULE}
+
+${SPOKEN_SOURCING_RULE}
+
+Every version:
+- is written word for word, exactly as it would be said, short enough to say in one breath.
+- keeps the job the original was doing in the conversation. If the writer's instruction below changes that job, the instruction wins.
+- opens something up rather than closing it down.
+${guidance ? `\nWHAT THE WRITER WANTS DIFFERENT ABOUT THIS ONE. This outranks every rule above:\n${guidance}\n` : ""}${standing ? `\nTheir standing instruction about how all their questions must be written, which still applies:\n${standing}\n` : ""}
+Fields:
+- angle: three or four words on what this version does differently, so they can choose at a glance. "Blunter", "Puts a number on it", "Through a scenario". Not a description of the question.
+- text: the question.
+- followUp: the probe for when the answer is thin, written word for word.
+
+Plain prose. No markdown, no quotation marks around the question. Never an em dash or en dash.`,
+    messages: [
+      {
+        role: "user",
+        content: `${meetingContext(meeting, kolBlock)}${
+          research ? `\n\nThe research this meeting was prepared from:\n${research.slice(0, 8000)}` : ""
+        }\n\nThe question to rework${question.category ? `, filed under "${question.category}"` : ""}:\n${question.text}${
+          question.why ? `\nWhy it was picked: ${question.why}` : ""
+        }${question.followUp ? `\nIts current probe: ${question.followUp}` : ""}`,
+      },
+    ],
+  });
+  if (res.stop_reason === "refusal") return [];
+
+  const parsed = JSON.parse(firstText(res) || "{}");
+  const allow = allowedNames(meeting.attendees);
+  const out: QuestionVariant[] = [];
+  for (const v of Array.isArray(parsed.variants) ? parsed.variants : []) {
+    const text = String(v?.text || "").trim();
+    // The same guard every question goes through. An alternative that names a
+    // source is not an alternative.
+    if (!text || namedSource(text, allow)) continue;
+    out.push({
+      angle: String(v?.angle || "").trim() || "Another way",
+      text,
+      followUp: String(v?.followUp || "").trim(),
+    });
+  }
+  return out;
+}
+
 export async function writeQuestions({
   meeting,
   kolBlock = "",

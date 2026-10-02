@@ -15,8 +15,6 @@
 import { useMemo, useState } from "react";
 import {
   AlertTriangle,
-  ArrowDown,
-  ArrowUp,
   Check,
   ChevronDown,
   CircleHelp,
@@ -31,6 +29,7 @@ import {
   RefreshCw,
   Sparkles,
   Star,
+  StickyNote,
   Trash2,
   Undo2,
   Wand2,
@@ -44,6 +43,7 @@ import { ProgressBar, useProgress } from "@/components/ui/Progress";
 import { useToast } from "@/components/ui/Feedback";
 import { htmlToPlain } from "@/lib/writer/types";
 import type { SaveState } from "@/lib/meetingprep/hooks";
+import type { QuestionVariant } from "@/lib/meetingprep/questionsAi";
 import {
   QUESTIONS_ENGINE,
   engineBehind,
@@ -102,7 +102,11 @@ export function QuestionsTab({
   // reports nothing, but "Rewriting all 30 questions" and "Rewriting that one"
   // are very different waits and the bar should admit which one you're in.
   const [busyLabel, setBusyLabel] = useState("");
-  const [rewritingId, setRewritingId] = useState<string | null>(null);
+  // The question the writer wants said a different way.
+  const [reworkId, setReworkId] = useState<string | null>(null);
+  // Which question has its note open. One at a time, because the note is a
+  // scratch line and not a second body of text.
+  const [openNote, setOpenNote] = useState<string | null>(null);
   const pct = useProgress(busy, 45000);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [openCats, setOpenCats] = useState<Set<string>>(new Set());
@@ -120,19 +124,28 @@ export function QuestionsTab({
     () => live.filter((q) => q.picked).sort((a, b) => a.order - b.order),
     [live],
   );
-  const suggestions = useMemo(() => live.filter((q) => !q.picked), [live]);
+
 
   // Categories in the order the model's strongest question in each appears,
   // so the most useful group is the one at the top.
+  //
+  // Built from every live question, not just the unpicked ones. Grouping only
+  // the suggestions meant a category vanished off the page the moment its
+  // last question was picked or binned, which reads exactly like the app
+  // having deleted the whole group — and the writer has no way to tell the
+  // difference. A group now stays put and says where its questions went.
   const categories = useMemo(() => {
     const byCat = new Map<string, QuestionItem[]>();
-    for (const q of [...suggestions].sort((a, b) => a.rank - b.rank)) {
+    for (const q of [...live].sort((a, b) => a.rank - b.rank)) {
       const list = byCat.get(q.category) || [];
       list.push(q);
       byCat.set(q.category, list);
     }
-    return [...byCat.entries()];
-  }, [suggestions]);
+    return [...byCat.entries()].map(
+      ([cat, all]) =>
+        [cat, all.filter((q) => !q.picked), all.filter((q) => q.picked)] as const,
+    );
+  }, [live]);
 
   // Every group name in play, picked ones included, for the editors. Shown
   // as real chips rather than hung off a one-line box in a browser dropdown,
@@ -155,10 +168,12 @@ export function QuestionsTab({
   // on AI" being read as "make it all about AI".
   const coverage = m.questions?.coverage || "";
 
-  // A question the writer typed, or one they locked, is theirs. A rewrite
-  // never touches either — that is the difference between "these are wrong"
-  // and "all of these are wrong".
-  const isKept = (q: QuestionItem) => q.source === "user" || Boolean(q.locked);
+  // A question the writer typed, locked, or PUT IN THEIR LIST is theirs. A
+  // rewrite never touches any of them. Picking a question is already the
+  // writer saying they want it; making them also press a padlock to keep it
+  // was asking them to say so twice.
+  const isKept = (q: QuestionItem) =>
+    q.source === "user" || Boolean(q.locked) || q.picked;
   const keptCount = live.filter(isKept).length;
 
   // Behind for one of two reasons: the setup moved (most often the topic,
@@ -195,7 +210,7 @@ export function QuestionsTab({
     patch(q.id, { picked: false, backup: false, asked: false });
   }
 
-  /** Move a picked question by one place, or onto another's position. */
+  /** Move a picked question onto another's position. */
   function reorder(id: string, toIndex: number) {
     const list = [...picked];
     const from = list.findIndex((q) => q.id === id);
@@ -228,12 +243,13 @@ export function QuestionsTab({
       onlyId?: string;
       /** How many the writer asked for. A floor, not a quota. */
       count?: number;
+      /** Top up one group only, and file everything new into it. */
+      onlyCategory?: string;
       label?: string;
     } = {},
   ) {
     setBusy(true);
     setBusyLabel(opts.label || "Writing your questions");
-    if (opts.onlyId) setRewritingId(opts.onlyId);
     try {
       await flush();
       // A brief written about the old subject drags the questions back to it
@@ -311,7 +327,11 @@ export function QuestionsTab({
           research,
           briefText,
           existing: kept.map((q) => q.text),
-          categories: opts.replace ? [] : [...new Set(live.map((q) => q.category))],
+          categories: opts.onlyCategory
+            ? [opts.onlyCategory]
+            : opts.replace
+              ? []
+              : [...new Set(live.map((q) => q.category))],
           count: opts.onlyId ? 1 : Math.max(1, Math.min(60, opts.count || 20)),
           focus: target
             ? `Replace one question that was not working. It was filed under "${target.category}" and read: ${target.text}. Write one question that does the same job in the conversation, better. ${opts.focus || ""}`.trim()
@@ -339,7 +359,9 @@ export function QuestionsTab({
           rank: target ? target.rank : rankOffset + (Number(q.rank) || i + 1),
           // A replacement takes over the old question's place: its category,
           // whether it was in your list, and where in that list it sat.
-          category: target ? target.category : String(q.category || "Questions"),
+          category: target
+            ? target.category
+            : opts.onlyCategory || String(q.category || "Questions"),
           picked: target ? target.picked : false,
           backup: target ? target.backup : false,
           asked: false,
@@ -369,7 +391,10 @@ export function QuestionsTab({
       });
       // A fresh batch is easiest to read with every group open. A single
       // swap should not rearrange what you had open.
-      if (!opts.onlyId) setOpenCats(new Set([...new Set(fresh.map((q) => q.category))]));
+      if (!opts.onlyId && !opts.onlyCategory)
+        setOpenCats(new Set([...new Set(fresh.map((q) => q.category))]));
+      if (opts.onlyCategory)
+        setOpenCats((prev) => new Set([...prev, opts.onlyCategory!]));
       toast(
         "success",
         opts.onlyId
@@ -385,7 +410,6 @@ export function QuestionsTab({
     } finally {
       setBusy(false);
       setBusyLabel("");
-      setRewritingId(null);
       setGuideScope(null);
     }
   }
@@ -427,7 +451,9 @@ export function QuestionsTab({
   }
 
   return (
-    <div className="space-y-5">
+    // The bottom padding is for the floating Ask button, which used to sit
+    // on top of the bin and make it unclickable.
+    <div className="space-y-4 pb-24">
       {/* Behind, and the only two reasons it can be. Worth a banner rather
           than a quiet button: a bank written about the wrong subject looks
           exactly as confident as one written about the right subject. */}
@@ -453,10 +479,10 @@ export function QuestionsTab({
         </div>
       )}
 
-      <div className="flex flex-wrap items-center gap-2">
-        {/* Three buttons that used to read as two. "More questions" and "Add
-            your own" sat side by side looking like the same thing done twice;
-            one asks the model for twenty more, the other is you typing one. */}
+      {/* One bar, in one place, rather than four buttons floating on the
+          page. The things you do to the bank on the left, the thing you do
+          in the room on the right. */}
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-surface p-2">
         <Button size="sm" disabled={busy} onClick={() => setGuideScope("more")}>
           <Sparkles size={14} /> {busy ? "Working…" : "Write me more"}
         </Button>
@@ -515,41 +541,72 @@ export function QuestionsTab({
       )}
 
       {/* Your list — the questions you carry in, in your order. */}
-      <section className="rounded-xl border border-[var(--accent)]/30 bg-[var(--accent-soft)]/20 p-3">
-        <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold">
-          <ListChecks size={15} className="text-[var(--accent)]" />
-          Your list
-          <span className="font-normal text-muted">
-            {picked.length ? `${picked.length} picked` : "nothing picked yet"}
+      <section className="overflow-hidden rounded-xl border border-[var(--accent)]/30 bg-surface">
+        <div className="flex items-center gap-2 border-b border-[var(--accent)]/20 bg-gradient-to-r from-[var(--accent-soft)]/70 to-transparent px-4 py-3">
+          <ListChecks size={16} className="shrink-0 text-[var(--accent)]" />
+          <h3 className="text-sm font-semibold tracking-tight">Your list</h3>
+          <span className="rounded-full bg-[var(--accent)] px-2 py-0.5 text-[11px] font-semibold tabular-nums text-[var(--accent-fg)]">
+            {picked.length}
           </span>
-        </h3>
+          <span className="flex-1" />
+          <span className="hidden text-xs text-muted sm:block">
+            {picked.length ? "The order you'll ask them in" : "Nothing picked yet"}
+          </span>
+        </div>
+        <div className="p-3">
         {picked.length === 0 ? (
-          <p className="px-1 pb-1 text-sm text-muted">
-            Click the + on any question below to put it here. Drag to reorder,
-            star the ones you&apos;re holding in reserve.
+          <p className="px-1 py-2 text-sm text-muted">
+            Press the + on any question below to put it here. Drag by the
+            handle to reorder, and star the ones you&apos;re holding in
+            reserve.
           </p>
         ) : (
           <ol className="space-y-2">
             {picked.map((q, i) => (
               <li
                 key={q.id}
-                draggable
-                onDragStart={() => setDragId(q.id)}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => {
+                data-qrow={q.id}
+                onPointerMove={(e) => {
+                  if (!dragId || dragId === q.id) return;
                   e.preventDefault();
-                  if (dragId && dragId !== q.id) reorder(dragId, i);
-                  setDragId(null);
+                  reorder(dragId, i);
                 }}
-                className={`flex items-start gap-2 rounded-lg border border-border bg-surface p-2.5 ${
-                  dragId === q.id ? "opacity-50" : ""
+                className={`group/row flex items-start gap-2 rounded-xl border bg-surface p-2.5 transition ${
+                  dragId === q.id
+                    ? "border-[var(--accent)] opacity-60 shadow-sm"
+                    : "border-border hover:border-[var(--accent)]/40"
                 }`}
               >
-                <GripVertical
-                  size={15}
-                  className="mt-0.5 shrink-0 cursor-grab text-muted"
-                  aria-hidden
-                />
+                {/* Pointer events rather than HTML5 drag, so this works
+                    with a finger. The up and down buttons are gone: two
+                    controls for one job, and you can already drop a
+                    question anywhere. */}
+                <button
+                  type="button"
+                  aria-label="Drag to reorder"
+                  title="Drag to reorder"
+                  onPointerDown={(e) => {
+                    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+                    setDragId(q.id);
+                  }}
+                  onPointerUp={() => setDragId(null)}
+                  onPointerCancel={() => setDragId(null)}
+                  onPointerMove={(e) => {
+                    if (dragId !== q.id) return;
+                    // With the pointer captured, every move lands here, so
+                    // the row under the finger has to be found by hand.
+                    const el = document
+                      .elementFromPoint(e.clientX, e.clientY)
+                      ?.closest("[data-qrow]");
+                    const overId = el?.getAttribute("data-qrow");
+                    if (!overId || overId === q.id) return;
+                    const to = picked.findIndex((p) => p.id === overId);
+                    if (to >= 0) reorder(q.id, to);
+                  }}
+                  className="mt-0.5 shrink-0 cursor-grab touch-none rounded-md p-0.5 text-muted/60 transition hover:text-ink active:cursor-grabbing"
+                >
+                  <GripVertical size={15} />
+                </button>
                 <span className="mt-0.5 w-5 shrink-0 text-right text-xs font-semibold tabular-nums text-muted">
                   {i + 1}.
                 </span>
@@ -582,20 +639,13 @@ export function QuestionsTab({
                           Probe: {q.followUp}
                         </p>
                       )}
+                      <NoteLine q={q} openNote={openNote} setOpenNote={setOpenNote} onPatch={(p) => patch(q.id, p)} />
                     </>
                   )}
                 </div>
-                <div className="flex shrink-0 items-center gap-0.5">
-                  <IconBtn label="Move up" onClick={() => reorder(q.id, i - 1)} disabled={i === 0}>
-                    <ArrowUp size={14} />
-                  </IconBtn>
-                  <IconBtn
-                    label="Move down"
-                    onClick={() => reorder(q.id, i + 1)}
-                    disabled={i === picked.length - 1}
-                  >
-                    <ArrowDown size={14} />
-                  </IconBtn>
+                {/* Quiet until you are on the row. Six icons on every line
+                    is what made this page look like a control panel. */}
+                <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition focus-within:opacity-100 group-hover/row:opacity-100 max-sm:opacity-100">
                   <IconBtn
                     label={q.backup ? "Not a backup" : "Hold as a backup"}
                     active={q.backup}
@@ -604,24 +654,18 @@ export function QuestionsTab({
                     <Star size={14} className={q.backup ? "fill-current" : ""} />
                   </IconBtn>
                   <IconBtn
-                    label={
-                      q.locked
-                        ? "Unlock — rewrites may change this one"
-                        : "Lock — keep this one through every rewrite"
-                    }
-                    active={q.locked}
-                    onClick={() => patch(q.id, { locked: !q.locked })}
+                    label={q.note ? "Your note on this one" : "Add a note of your own"}
+                    active={Boolean(q.note)}
+                    onClick={() => setOpenNote(openNote === q.id ? null : q.id)}
                   >
-                    {q.locked ? <Lock size={13} /> : <LockOpen size={13} />}
+                    <StickyNote size={13} />
                   </IconBtn>
                   <IconBtn
-                    label="Rewrite just this question"
+                    label="Not quite right? Give me a few other ways to ask it"
                     disabled={busy}
-                    onClick={() =>
-                      void generate({ onlyId: q.id, label: "Rewriting that question" })
-                    }
+                    onClick={() => setReworkId(q.id)}
                   >
-                    <RefreshCw size={13} className={rewritingId === q.id ? "animate-spin" : ""} />
+                    <Wand2 size={13} />
                   </IconBtn>
                   <IconBtn
                     label="Edit the question, the probe, who it's for, its group"
@@ -638,40 +682,76 @@ export function QuestionsTab({
             ))}
           </ol>
         )}
+        </div>
       </section>
 
       {/* Suggestions, grouped. Collapsed by default past the first group so
           the page is skimmable rather than a wall of twenty questions. */}
-      {categories.map(([cat, list], catIndex) => {
+      {categories.map(([cat, list, inList], catIndex) => {
         const open = openCats.has(cat) || (catIndex === 0 && openCats.size === 0);
         return (
-          <section key={cat} className="rounded-xl border border-border bg-surface">
-            <button
-              type="button"
-              onClick={() =>
-                setOpenCats((prev) => {
-                  const next = new Set(prev.size ? prev : [categories[0][0]]);
-                  if (next.has(cat)) next.delete(cat);
-                  else next.add(cat);
-                  return next;
-                })
-              }
-              className="flex w-full items-center justify-between gap-2 rounded-t-xl border-b border-border bg-canvas/50 px-4 py-2.5 text-left"
-            >
-              <h3 className="flex items-center gap-2 text-sm font-semibold">
-                <CircleHelp size={15} className="text-[var(--accent)]" />
-                {cat}
-                <span className="font-normal text-muted">{list.length}</span>
-              </h3>
-              <ChevronDown
-                size={16}
-                className={`shrink-0 text-muted transition-transform ${open ? "" : "-rotate-90"}`}
-              />
-            </button>
+          <section
+            key={cat}
+            className={`overflow-hidden rounded-xl border bg-surface transition ${
+              open ? "border-[var(--accent)]/30" : "border-border"
+            }`}
+          >
+            <div className="flex items-center gap-1 border-b border-border bg-canvas/60 pr-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setOpenCats((prev) => {
+                    const next = new Set(prev.size ? prev : [categories[0][0]]);
+                    if (next.has(cat)) next.delete(cat);
+                    else next.add(cat);
+                    return next;
+                  })
+                }
+                className="flex min-w-0 flex-1 items-center gap-2 px-4 py-3 text-left"
+              >
+                <ChevronDown
+                  size={15}
+                  className={`shrink-0 text-muted transition-transform ${open ? "" : "-rotate-90"}`}
+                />
+                <h3 className="min-w-0 truncate text-sm font-semibold tracking-tight">{cat}</h3>
+                {list.length > 0 && (
+                  <span className="shrink-0 rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[11px] font-semibold tabular-nums text-[var(--accent)]">
+                    {list.length}
+                  </span>
+                )}
+                <span className="shrink-0 text-xs text-muted">
+                  {list.length ? "to look at" : "all in your list"}
+                  {inList.length ? ` · ${inList.length} picked` : ""}
+                </span>
+              </button>
+              {/* Top up one group rather than the whole bank. "More for the
+                  closing" is a normal thing to want and there was no way to
+                  ask for it. */}
+              <IconBtn
+                label={`Write me more for "${cat}"`}
+                disabled={busy}
+                onClick={() =>
+                  void generate({
+                    count: 5,
+                    onlyCategory: cat,
+                    focus: `Write more questions for the group called "${cat}" and nothing else. Every question goes in that group, does the job that group does in this conversation, and sits alongside the ones already in it without repeating them.`,
+                    label: `Writing more for ${cat}`,
+                  })
+                }
+              >
+                <Plus size={15} />
+              </IconBtn>
+            </div>
             {open && (
               <ul className="divide-y divide-border">
+                {!list.length && (
+                  <li className="px-4 py-3 text-sm text-muted">
+                    Every question in this group is in your list already.
+                    {inList.length > 0 && " Nothing has been deleted."}
+                  </li>
+                )}
                 {list.map((q) => (
-                  <li key={q.id} className="flex items-start gap-3 p-3">
+                  <li key={q.id} className="group/row flex items-start gap-3 p-3">
                     <button
                       type="button"
                       aria-label="Add to my list"
@@ -700,45 +780,53 @@ export function QuestionsTab({
                           {q.followUp && (
                             <p className="mt-1 text-xs italic text-muted">Probe: {q.followUp}</p>
                           )}
+                          <NoteLine q={q} openNote={openNote} setOpenNote={setOpenNote} onPatch={(p) => patch(q.id, p)} />
                         </>
                       )}
                     </div>
-                    <IconBtn
-                      label={
-                        q.locked
-                          ? "Unlock — rewrites may change this one"
-                          : "Lock — keep this one through every rewrite"
-                      }
-                      active={q.locked}
-                      onClick={() => patch(q.id, { locked: !q.locked })}
-                    >
-                      {q.locked ? <Lock size={13} /> : <LockOpen size={13} />}
-                    </IconBtn>
-                    <IconBtn
-                      label="Rewrite just this question"
-                      disabled={busy}
-                      onClick={() =>
-                        void generate({ onlyId: q.id, label: "Rewriting that question" })
-                      }
-                    >
-                      <RefreshCw
-                        size={13}
-                        className={rewritingId === q.id ? "animate-spin" : ""}
-                      />
-                    </IconBtn>
-                    <IconBtn
-                      label="Edit the question, the probe, who it's for, its group"
-                      active={editingId === q.id}
-                      onClick={() => setEditingId(editingId === q.id ? null : q.id)}
-                    >
-                      <Pencil size={13} />
-                    </IconBtn>
-                    <IconBtn
-                      label="Bin this question (you can get it back)"
-                      onClick={() => patch(q.id, { deleted: true, picked: false })}
-                    >
-                      <Trash2 size={13} />
-                    </IconBtn>
+                    <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition focus-within:opacity-100 group-hover/row:opacity-100 max-sm:opacity-100">
+                      <IconBtn
+                        label={
+                          q.locked
+                            ? "Unlock — rewrites may change this one"
+                            : "Lock — keep this one through every rewrite"
+                        }
+                        active={q.locked}
+                        onClick={() => patch(q.id, { locked: !q.locked })}
+                      >
+                        {q.locked ? <Lock size={13} /> : <LockOpen size={13} />}
+                      </IconBtn>
+                      <IconBtn
+                        label={q.note ? "Your note on this one" : "Add a note of your own"}
+                        active={Boolean(q.note)}
+                        onClick={() => setOpenNote(openNote === q.id ? null : q.id)}
+                      >
+                        <StickyNote size={13} />
+                      </IconBtn>
+                      <IconBtn
+                        label="Not quite right? Give me a few other ways to ask it"
+                        disabled={busy}
+                        onClick={() => setReworkId(q.id)}
+                      >
+                        <Wand2 size={13} />
+                      </IconBtn>
+                      <IconBtn
+                        label="Edit the question, the probe, who it's for, its group"
+                        active={editingId === q.id}
+                        onClick={() => setEditingId(editingId === q.id ? null : q.id)}
+                      >
+                        <Pencil size={13} />
+                      </IconBtn>
+                      <IconBtn
+                        label="Bin this question (it goes to the bin at the foot of the page)"
+                        onClick={() => {
+                          patch(q.id, { deleted: true, picked: false });
+                          toast("info", "Binned — it's in the bin at the foot of the page");
+                        }}
+                      >
+                        <Trash2 size={13} />
+                      </IconBtn>
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -748,9 +836,14 @@ export function QuestionsTab({
       })}
 
       {binned.length > 0 && (
-        <details className="rounded-xl border border-border bg-surface px-3 py-2">
-          <summary className="cursor-pointer text-sm text-muted">
-            Binned ({binned.length}) — get one back
+        <details className="rounded-xl border border-border bg-surface px-4 py-3">
+          <summary className="flex cursor-pointer items-center gap-2 text-sm">
+            <Trash2 size={14} className="text-muted" />
+            <span className="font-medium text-ink">Bin</span>
+            <span className="rounded-full bg-canvas px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted">
+              {binned.length}
+            </span>
+            <span className="text-xs text-muted">nothing here is gone — open to get one back</span>
           </summary>
           <ul className="mt-2 space-y-1.5">
             {binned.map((q) => (
@@ -814,6 +907,42 @@ export function QuestionsTab({
         }
       />
 
+      <ReworkModal
+        key={reworkId || "none"}
+        q={live.find((x) => x.id === reworkId) || null}
+        standing={guidance}
+        onClose={() => setReworkId(null)}
+        onApply={(text, followUp) => {
+          if (reworkId) patch(reworkId, { text, followUp });
+          setReworkId(null);
+          toast("success", "Swapped in");
+        }}
+        fetchVariants={async (q, instruction) => {
+          const res = await fetch("/api/meeting/ai", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({
+              action: "variants",
+              meeting: payloadOf(m),
+              kolId: m.kol_id || "",
+              research: m.brief?.research?.notes || "",
+              question: {
+                text: q.text,
+                why: q.why,
+                followUp: q.followUp,
+                category: q.category,
+              },
+              guidance: instruction,
+              standing: guidance,
+            }),
+          });
+          const json = await res.json();
+          if (!res.ok) throw new Error(json.error || "Could not rework that one");
+          return json.variants || [];
+        }}
+      />
+
       <AddOwnModal
         open={showAdd}
         onClose={() => setShowAdd(false)}
@@ -852,6 +981,202 @@ interface WrittenShape {
   followUp: string;
   forWhom: string;
   rank: number;
+}
+
+/**
+ * The writer's own note under a question, which is not there until they want
+ * one.
+ *
+ * Asked for without more buttons and without another large box sitting open
+ * on every row: with no note there is a small line of text that only shows
+ * when you are on the question, and with a note there is the note.
+ */
+function NoteLine({
+  q,
+  openNote,
+  setOpenNote,
+  onPatch,
+}: {
+  q: QuestionItem;
+  openNote: string | null;
+  setOpenNote: (id: string | null) => void;
+  onPatch: (p: Partial<QuestionItem>) => void;
+}) {
+  const open = openNote === q.id;
+  const setOpen = (v: boolean) => setOpenNote(v ? q.id : null);
+
+  // Nothing at all when there is no note and nobody has asked for one. The
+  // trigger lives in the row's hover rail instead: an empty placeholder line
+  // under all twenty two questions is exactly the clutter this was meant to
+  // avoid.
+  if (!open && !q.note) return null;
+
+  if (!open)
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="mt-1.5 flex w-full items-start gap-1.5 rounded-md bg-amber-50 px-2 py-1 text-left text-xs text-amber-900 transition hover:bg-amber-100"
+      >
+        <StickyNote size={12} className="mt-0.5 shrink-0 text-amber-500" />
+        <span className="min-w-0 flex-1 whitespace-pre-wrap">{q.note}</span>
+      </button>
+    );
+
+  return (
+    <div className="mt-1.5 rounded-md border border-amber-200 bg-amber-50/60 p-1.5">
+      <textarea
+        autoFocus
+        value={q.note || ""}
+        onChange={(e) => onPatch({ note: e.target.value })}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") setOpen(false);
+        }}
+        placeholder="Only you see this. Saves as you type."
+        className="min-h-12 w-full resize-y rounded border border-amber-200 bg-surface px-2 py-1 text-xs outline-none focus:border-amber-400"
+      />
+      <div className="mt-1 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          className="rounded bg-amber-500 px-2 py-0.5 text-[11px] font-medium text-white transition hover:bg-amber-600"
+        >
+          Done
+        </button>
+        {q.note && (
+          <button
+            type="button"
+            onClick={() => {
+              onPatch({ note: "" });
+              setOpen(false);
+            }}
+            className="text-[11px] text-muted underline-offset-2 hover:underline"
+          >
+            Remove the note
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * "This one is good but not quite right."
+ *
+ * The app could rewrite a question, which threw away what was good about it,
+ * or hand over a blank box. Neither helps when you like the question and not
+ * the wording. This gives three versions of the same question, far enough
+ * apart to be a real choice, and lets the writer ask again with a different
+ * instruction if none of them land.
+ */
+function ReworkModal({
+  q,
+  standing,
+  onClose,
+  onApply,
+  fetchVariants,
+}: {
+  q: QuestionItem | null;
+  /** Their standing instruction, shown so they know it is still on. */
+  standing: string;
+  onClose: () => void;
+  onApply: (text: string, followUp: string) => void;
+  fetchVariants: (q: QuestionItem, instruction: string) => Promise<QuestionVariant[]>;
+}) {
+  const [instruction, setInstruction] = useState("");
+  const [options, setOptions] = useState<QuestionVariant[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const pct = useProgress(busy, 20000);
+
+  async function run() {
+    if (!q) return;
+    setBusy(true);
+    setError("");
+    try {
+      const got = await fetchVariants(q, instruction.trim());
+      if (!got.length) throw new Error("Nothing usable came back — try saying it differently.");
+      setOptions(got);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal open={Boolean(q)} onClose={onClose} title="Say this one another way" movable>
+      {q && (
+        <>
+          <p className="rounded-lg border border-border bg-canvas/60 px-3 py-2 text-sm text-ink">
+            {q.text}
+          </p>
+
+          <div className="mt-3">
+            <Textarea
+              label="What's not right about it? (optional)"
+              autoFocus
+              value={instruction}
+              onChange={(e) => setInstruction(e.target.value)}
+              placeholder={`e.g. "too long to say out loud" or "make it land harder" or "ask it without the jargon"`}
+              className="min-h-16"
+            />
+            {standing && (
+              <p className="mt-1 text-[11px] text-muted">
+                Your standing instruction still applies: {standing}
+              </p>
+            )}
+          </div>
+
+          {busy && <ProgressBar pct={pct} label="Finding other ways to ask it…" className="mt-3" />}
+          {error && <p className="mt-2 text-sm text-status-error">{error}</p>}
+
+          {options.length > 0 && !busy && (
+            <ul className="mt-4 space-y-2">
+              {options.map((v, i) => (
+                <li key={i}>
+                  <button
+                    type="button"
+                    onClick={() => onApply(v.text, v.followUp || q.followUp)}
+                    className="w-full rounded-xl border border-border bg-surface p-3 text-left transition hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]/20"
+                  >
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--accent)]">
+                      {v.angle}
+                    </span>
+                    <span className="mt-1 block text-sm font-medium text-ink">{v.text}</span>
+                    {v.followUp && (
+                      <span className="mt-1 block text-xs italic text-muted">
+                        Probe: {v.followUp}
+                      </span>
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="mt-4 flex items-center justify-end gap-2">
+            <Button variant="ghost" onClick={onClose}>
+              Keep it as it is
+            </Button>
+            <Button disabled={busy} onClick={() => void run()}>
+              <Wand2 size={14} />
+              {busy
+                ? "Thinking…"
+                : options.length
+                  ? "Try again with that"
+                  : "Show me a few ways"}
+            </Button>
+          </div>
+          {options.length > 0 && (
+            <p className="mt-2 text-right text-[11px] text-muted">
+              Click one to swap it in. Nothing changes until you do.
+            </p>
+          )}
+        </>
+      )}
+    </Modal>
+  );
 }
 
 function IconBtn({
@@ -1138,8 +1463,8 @@ function GuidanceModal({
       blurb:
         `${atRisk} question${atRisk === 1 ? "" : "s"} I wrote get replaced.` +
         (keptCount > 0
-          ? ` ${keptCount} stay: the ones you typed, and the ones you've locked.`
-          : " Lock any you want to keep first, with the padlock on the question."),
+          ? ` ${keptCount} stay: everything in your list, everything you typed, and anything you've locked.`
+          : " Put the ones you want to keep in your list first, or lock them with the padlock."),
     },
     {
       k: "future",

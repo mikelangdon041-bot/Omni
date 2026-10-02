@@ -141,6 +141,12 @@ export interface QuestionItem {
   // twenty minutes later. It stays here, out of every list, until it is
   // either restored or deleted for good.
   deleted?: boolean;
+  /**
+   * The writer's own note, under the question. Theirs, never written or
+   * touched by a rewrite: the reminder that this one is for the quiet
+   * panelist, or that it has to come after the budget question.
+   */
+  note?: string;
   /** Position within the picked list; the writer arranges this. */
   order: number;
   source: "ai" | "user";
