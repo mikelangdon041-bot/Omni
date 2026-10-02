@@ -49,11 +49,17 @@ export interface BriefSection {
 // Raise BRIEF_ENGINE when the brief's prompt improves, QUESTIONS_ENGINE when
 // the question bank's does. Anything stored below the current number offers
 // itself for a rewrite.
-export const BRIEF_ENGINE = 2;
+// 3: the lines in a brief that get said out loud, questions boxes above all,
+// no longer carry a source inside them, and a standing instruction given on
+// the Questions tab now reaches them too.
+export const BRIEF_ENGINE = 3;
 // 3: the question prompt no longer inherits the brief's "cite the source in
 // the line" rule, which was quietly overriding the writer when they asked it
 // to stop opening every question with a consultancy's name.
-export const QUESTIONS_ENGINE = 3;
+// 4: asking was not enough. Every batch is now checked for a named source in
+// the question itself, the failures are sent back to be rewritten, and
+// anything that still names one is dropped before the writer sees it.
+export const QUESTIONS_ENGINE = 4;
 
 export interface Brief {
   sections?: BriefSection[];
