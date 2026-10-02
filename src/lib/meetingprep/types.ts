@@ -50,7 +50,10 @@ export interface BriefSection {
 // the question bank's does. Anything stored below the current number offers
 // itself for a rewrite.
 export const BRIEF_ENGINE = 2;
-export const QUESTIONS_ENGINE = 2;
+// 3: the question prompt no longer inherits the brief's "cite the source in
+// the line" rule, which was quietly overriding the writer when they asked it
+// to stop opening every question with a consultancy's name.
+export const QUESTIONS_ENGINE = 3;
 
 export interface Brief {
   sections?: BriefSection[];
@@ -68,6 +71,9 @@ export interface Brief {
   // what the brief was built from and so a single-box redo is written from the
   // same material instead of searching again.
   research?: { notes: string; at: string };
+  // The last read-through of the whole pack, and what it found. Lives on the
+  // brief because that is where it is acted on.
+  review?: Review;
 }
 
 // A supporting document uploaded to the meeting, with the user's note on what
@@ -108,6 +114,16 @@ export interface QuestionItem {
   backup: boolean;
   /** Ticked off during the meeting. */
   asked: boolean;
+  // Hands off. A rewrite re-writes everything the model wrote, which is right
+  // when the batch is wrong and wrong when one question in it was perfect.
+  // Locking a question takes it out of every future rewrite; questions the
+  // writer typed themselves are always treated as locked.
+  locked?: boolean;
+  // Binned, not gone. Deleting used to drop the question out of the array,
+  // and a question you bin while skimming is exactly the one you want back
+  // twenty minutes later. It stays here, out of every list, until it is
+  // either restored or deleted for good.
+  deleted?: boolean;
   /** Position within the picked list; the writer arranges this. */
   order: number;
   source: "ai" | "user";
@@ -124,6 +140,39 @@ export interface QuestionBank {
   // question with a consultancy's name"). Kept so every later batch obeys it
   // too, rather than the correction lasting exactly one regenerate.
   guidance?: string;
+  // What they want the bank to cover ("something on AI, and on how anyone
+  // measures this"). Separate from `guidance` because it is checked
+  // differently: guidance is a rule every question must pass, coverage is a
+  // floor the bank as a whole has to clear, with no quota attached.
+  coverage?: string;
+}
+
+// One piece of advice from a read-through of the whole prep pack. The point
+// is to catch what is wrong when nothing has changed — a brief can be fully
+// up to date and still have the agenda in the wrong order, or three questions
+// that ask the same thing.
+export interface ReviewNote {
+  id: string;
+  /** The advice itself, one line, written as something to do. */
+  title: string;
+  /** Why it matters and what good looks like. */
+  detail: string;
+  /** "section:<key>" | "questions" | "setup" | "" — what it is about. */
+  target: string;
+  /** How to say that target to a person ("Agenda", "Your questions"). */
+  targetLabel: string;
+  /** Written as an instruction, so "Fix it" can hand it straight to the writer. */
+  fix: string;
+  severity: "high" | "medium" | "low";
+  /** Dealt with, by the AI or by hand. Crossed off, kept for the record. */
+  done: boolean;
+  /** Not worth doing. Gone from the list entirely. */
+  dismissed: boolean;
+}
+
+export interface Review {
+  notes?: ReviewNote[];
+  at?: string;
 }
 
 export interface GrillItem {

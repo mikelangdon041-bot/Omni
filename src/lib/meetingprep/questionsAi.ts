@@ -2,10 +2,10 @@
 // a meeting, which the writer picks from and arranges into the list they
 // actually carry in.
 //
-// Separate from the brief's "Smart questions to ask them", which is the four
-// or five that belong in a document read on the way in. This is the pool —
-// twenty or more, grouped, with a follow-up probe under each, written to be
-// read off a card while standing up.
+// Separate from the brief's "Questions to ask", which is the four or five
+// that belong in a document read on the way in. This is the pool — twenty or
+// more, grouped, with a follow-up probe under each, written to be read off a
+// card while standing up.
 
 import { anthropic, WRITER_MODEL } from "@/lib/anthropic";
 import { DOMAIN_RULE, SEAT_RULE, meetingContext, type MeetingPayload } from "./briefAi";
@@ -43,6 +43,45 @@ const QUESTIONS_SCHEMA = {
   additionalProperties: false,
 };
 
+// A question is SAID, in front of people. The brief's attribution rule — put
+// the source in the line, as source plus year — is right for something read
+// silently and wrong here: it turned every opener into "McKinsey says ...",
+// and when the writer asked for that to stop, it could not, because that rule
+// was in the system prompt and their correction was not.
+const SPOKEN_SOURCING_RULE = `Where the material came from belongs in "why", never in the question itself. The writer is going to say this out loud, and "McKinsey says whoever masters the evidence wins, are you there?" is a line off a conference slide, not a question a person asks. Take the finding, drop the name, ask the thing underneath it. Put the source in "why" (e.g. "from the McKinsey 2025 line on evidence mastery") so the writer knows where it came from and can cite it themselves if they choose to. Never name a consultancy, report, survey, study or author in "text" unless the writer has explicitly asked for citations in the question.`;
+
+/**
+ * The block carrying the writer's own instructions. It goes in the SYSTEM
+ * prompt, last, and says plainly that it outranks what came before it.
+ *
+ * It used to live at the end of the user message, where it lost a straight
+ * fight with a system rule that said the opposite — which is how a bank came
+ * back still opening every question with a consultancy's name after being
+ * told twice not to.
+ *
+ * `guidance` is how the questions should be written; `coverage` is what they
+ * should be about. Both are applied on a second pass rather than planned for
+ * on the first: asked up front for "some on X", the model writes questions on
+ * X and a worse bank around them.
+ */
+function instructionBlock(guidance: string, coverage: string, focus: string): string {
+  if (!guidance && !coverage && !focus) return "";
+  return `
+THE WRITER'S OWN INSTRUCTIONS
+These come from the person who is going to ask these questions out loud, after reading what you wrote last time. They outrank every rule above, including anything about how to phrase, source or structure a question. Where one of them contradicts a rule above, the instruction wins and that rule is simply off.
+${guidance ? `\nHow these questions must be written:\n${guidance}\n` : ""}${coverage ? `\nWhat the writer wants covered:\n${coverage}\n` : ""}${focus ? `\nWhat this particular batch is for: ${focus}\n` : ""}
+Work in two passes, and do the second one properly.
+
+1. Write the bank you would have written anyway: the best questions on this subject, in the proportions the subject deserves, already obeying the instruction about how they are written.
+
+2. Then read your own draft back as though someone else wrote it, and fix it against the instructions above.
+   - Take each instruction about HOW they are written and check every single question against it, one at a time, not a sample. One question that breaks it is a failure, and it will be the one that gets read out loud. Rewrite that question; if the fix isn't obvious, cut it and write a different one.
+   - Take each thing the writer wants COVERED and ask whether the draft genuinely covers it — a real question that someone who cares about that thing would be glad was asked. If it is already covered, change nothing, and do not pad it with near-duplicates to look thorough. If it is thin or missing, replace your weakest questions with ones that cover it.
+   - There is no quota. "Include some on X and Y" never means a fixed number of each, and it never means the bank becomes about X and Y. The rest of the subject keeps the room it deserves.
+
+Return only the finished second-pass list. Never mention the passes, the instructions, or that you revised anything.`;
+}
+
 function firstText(res: { content: { type: string; text?: string }[] }): string {
   const block = res.content.find((b) => b.type === "text");
   return (block?.text || "").trim();
@@ -58,6 +97,7 @@ export async function writeQuestions({
   count = 20,
   focus = "",
   guidance = "",
+  coverage = "",
 }: {
   meeting: MeetingPayload;
   kolBlock?: string;
@@ -69,10 +109,12 @@ export async function writeQuestions({
   /** Categories the bank already uses, so a second batch files into them. */
   categories?: string[];
   count?: number;
-  /** "more on AI", "shorter", "harder" — what this batch should be about. */
+  /** "more on AI", "shorter", "harder" — what THIS batch is for. */
   focus?: string;
-  /** A standing correction from the writer that every batch must obey. */
+  /** Standing instruction on how every question must be written. */
   guidance?: string;
+  /** Standing instruction on what the bank should cover. */
+  coverage?: string;
 }): Promise<WrittenQuestion[]> {
   const context = [
     meetingContext(meeting, kolBlock),
@@ -94,6 +136,8 @@ ${SEAT_RULE}
 
 ${DOMAIN_RULE}
 
+${SPOKEN_SOURCING_RULE}
+
 Every question:
 - is written word for word, exactly as it would be said out loud, short enough to say in one breath and to read off a card at a glance. No preamble, no stage directions, no "you might ask".
 - serves the session's stated subject. Not the industry around it, not the meeting's title, that subject.
@@ -102,13 +146,14 @@ Every question:
 
 Fields:
 - text: the question itself.
-- category: which part of the conversation it belongs to. When categories are given below, use those exact names; only invent a new one for a question that genuinely belongs nowhere in them, and never a near-synonym of one that exists. Otherwise invent 4 to 6 categories that fit THIS meeting and its arc (an opener category, two or three on the substance, one on the harder or riskier ground, a closing one). Use the same wording for every question in a category. Keep category names short, 2 to 5 words.
-- why: at most 12 words on what it gets you — the reason to pick this one. Not a restatement of the question.
+- category: which part of the conversation it belongs to. Name it the way you would say it to a colleague: plain, literal, two to four words, describing what the questions in it are about or when they get asked. "Opening questions", "How it works in practice", "The uncomfortable ones", "Measuring it", "To close on". Never a colon, never a label with a clever subtitle after it, never a word nobody would say out loud. When categories are given below, use those exact names; only invent a new one for a question that genuinely belongs nowhere in them, and never a near-synonym of one that exists. Otherwise invent 4 to 6 that fit this meeting's arc (one to open with, two or three on the substance, one on the harder ground, one to close with). Use identical wording for every question in a category.
+- why: at most 15 words on what it gets you — the reason to pick this one, plus where the material came from when it came from the research. Not a restatement of the question.
 - followUp: the probe to use when the first answer is thin or too comfortable, also written word for word. Never empty.
 - forWhom: who to put it to, when that matters — a name from the context, or a role ("the most operational panelist", "the CFO"). Empty string when it is for everyone or for the only other person in the room.
 - rank: 1 is the strongest question in the whole list, then 2, and so on, every number used once. Rank on what would most move this meeting, not on category order.
 
-Plain prose. No markdown, no bold, no emoji, no quotation marks around the question. Never an em dash or en dash; use a comma or a full stop.`,
+Plain prose. No markdown, no bold, no emoji, no quotation marks around the question. Never an em dash or en dash; use a comma or a full stop.
+${instructionBlock(guidance.trim(), coverage.trim(), focus.trim())}`,
     messages: [
       {
         role: "user",
@@ -124,10 +169,6 @@ Plain prose. No markdown, no bold, no emoji, no quotation marks around the quest
             ? `\n\nCategories already in the bank. File these questions into these exact names unless one genuinely belongs nowhere in them:\n${categories
                 .map((c) => `- ${c}`)
                 .join("\n")}`
-            : ""
-        }${focus ? `\n\nWhat this batch should focus on: ${focus}` : ""}${
-          guidance
-            ? `\n\nA standing instruction from the writer about how these questions must be written. It overrides your own habits and it applies to every single question, not just some of them:\n${guidance}`
             : ""
         }`,
       },

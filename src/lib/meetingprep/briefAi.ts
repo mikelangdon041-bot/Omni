@@ -139,7 +139,11 @@ export const DOMAIN_RULE = `Bring what you know about the subject. "Never invent
 - On the field, the science, the market, the policy or the technology in play: be specific and current. Name the actual shifts, the real debates, the regulations, the metrics, the technologies and the numbers, in the terms practitioners use. Where research notes are provided, they are the freshest material you have: lead with them.
 - Every question, talking point and objection must be one only someone who knows this field could have written. A question that restates the meeting's title back as a question ("what does the future of X look like?", "what does strategic leadership really mean?") is filler: replace it with one that names the specific tension, change, number or trade-off underneath it.
 - Prefer the concrete disagreement to the abstraction: who is under pressure, what is being cut or funded, what changed in the last year or two, what people in this field argue about privately.
-- Attribute what you draw from the research notes inline, briefly, as source plus year. Where you are working from your own knowledge and the fact is checkable and load-bearing, mark it "(worth checking)" so the writer verifies before saying it out loud. Never dress up a guess as a cited fact.`;
+- Never dress up a guess as a cited fact.`;
+
+// Only for text the writer READS. In a brief, a source in the line is useful.
+// In something they will say out loud, it is a tic.
+export const ATTRIBUTION_RULE = `Attribute what you draw from the research notes inline, briefly, as source plus year. Where you are working from your own knowledge and the fact is checkable and load-bearing, mark it "(worth checking)" so the writer verifies before saying it out loud.`;
 
 const SECTION_ITEM = {
   type: "object" as const,
@@ -372,6 +376,8 @@ ${SCRIPT_RULE}
 ${SEAT_RULE}
 
 ${DOMAIN_RULE}
+
+${ATTRIBUTION_RULE}
 ${allowExtras ? `\n${EXTRA_SECTIONS_RULE}\n` : ""}
 Hard rules:
 - NEVER invent facts, names, data or commitments about this meeting or these people that the context doesn't give. That restriction is about them, not about the subject — see the rule above on bringing what you know.

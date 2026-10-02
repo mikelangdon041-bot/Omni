@@ -324,6 +324,7 @@ export default function MeetingPage() {
         <BriefTab
           m={meeting}
           save={save}
+          saveState={saveState}
           userId={userId}
           busy={generator.busy}
           briefStale={generator.briefStale}
@@ -338,7 +339,9 @@ export default function MeetingPage() {
           sectionOrder={settings?.section_order}
         />
       )}
-      {tab === "Questions" && <QuestionsTab m={meeting} save={save} flush={flush} />}
+      {tab === "Questions" && (
+        <QuestionsTab m={meeting} save={save} flush={flush} saveState={saveState} />
+      )}
       {tab === "Practice" && <GrillTab m={meeting} save={save} flush={flush} />}
       {tab === "Debrief" && <DebriefTab m={meeting} save={save} userId={userId} />}
 

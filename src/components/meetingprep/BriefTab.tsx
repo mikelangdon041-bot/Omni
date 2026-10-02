@@ -17,7 +17,9 @@ import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   CalendarPlus,
+  Check,
   CheckSquare,
+  CloudUpload,
   ChevronDown,
   ChevronsDownUp,
   ChevronsUpDown,
@@ -35,7 +37,9 @@ import {
   Send,
   ShieldAlert,
   Sparkles,
+  Stethoscope,
   Target,
+  Undo2,
   Users,
   Wand2,
   X,
@@ -44,17 +48,21 @@ import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
+import { ProgressBar, useProgress } from "@/components/ui/Progress";
 import { RichText } from "@/components/ui/RichText";
 import { useToast } from "@/components/ui/Feedback";
 import { htmlToPlain } from "@/lib/writer/types";
+import type { SaveState } from "@/lib/meetingprep/hooks";
 import type { GenerateOpts } from "@/lib/meetingprep/useBriefGenerator";
 import {
   meetingContextText,
+  meetingTypeLabel,
   orderSections,
   sectionTitle,
   type CustomSection,
   type IdeaSuggestion,
   type MpMeeting,
+  type ReviewNote,
 } from "@/lib/meetingprep/types";
 import { exportBriefDocx, downloadMeetingInvite } from "@/lib/meetingprep/exports";
 
@@ -125,6 +133,7 @@ function ProgressRing({ percent }: { percent: number }) {
 export function BriefTab({
   m,
   save,
+  saveState = "idle",
   userId,
   busy,
   briefStale,
@@ -140,6 +149,8 @@ export function BriefTab({
 }: {
   m: MpMeeting;
   save: (p: Partial<MpMeeting>) => void;
+  /** So each box can say, where you are editing it, that it has saved. */
+  saveState?: SaveState;
   userId: string | null;
   busy: string | null;
   briefStale: boolean;
@@ -164,6 +175,11 @@ export function BriefTab({
   const [showIdeas, setShowIdeas] = useState(false);
   const [showRefine, setShowRefine] = useState(false);
   const [pushedTasks, setPushedTasks] = useState(false);
+  // One box being rewritten is its own, much shorter wait than the whole
+  // brief, and it gets its own bar rather than a dimmed panel and a guess.
+  const sectionPct = useProgress(Boolean(busy) && busy !== "all", 40000);
+  const [reviewing, setReviewing] = useState(false);
+  const reviewPct = useProgress(reviewing, 40000);
 
   // Stored order vs. displayed order. Edits and appends work on the stored
   // array so nothing is silently rewritten; only what's rendered follows the
@@ -207,6 +223,81 @@ export function BriefTab({
     }
     setPushedTasks(true);
     toast("success", `${items.length} item${items.length === 1 ? "" : "s"} added to your to-do list`);
+  }
+
+  const review = m.brief?.review;
+  const notes = (review?.notes || []).filter((n) => !n.dismissed);
+  const openNotes = notes.filter((n) => !n.done);
+
+  const setNotes = (next: ReviewNote[]) =>
+    save({ brief: { ...m.brief, review: { ...review, notes: next } } });
+
+  const patchNote = (id: string, p: Partial<ReviewNote>) =>
+    setNotes((review?.notes || []).map((n) => (n.id === id ? { ...n, ...p } : n)));
+
+  /** Read the whole pack back and say what's wrong with it. */
+  async function runReview() {
+    setReviewing(true);
+    try {
+      const briefText = sections
+        .map((s) => `[${s.key}] ${sectionTitle(s.key, s.title)}:\n${htmlToPlain(s.content)}`)
+        .join("\n\n");
+      const questionsText = (m.questions?.items || [])
+        .filter((q) => !q.deleted)
+        .map((q) => `(${q.category}) ${q.text}`)
+        .join("\n");
+      const res = await fetch("/api/meeting/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          action: "review",
+          meeting: {
+            title: m.title,
+            topic: m.topic,
+            meetingType: meetingTypeLabel(m.meeting_type),
+            date: m.date,
+            durationMin: m.duration_min,
+            format: m.format,
+            location: m.location,
+            attendees: m.attendees,
+            explain: m.explain,
+            objectives: m.objectives,
+            background: m.background,
+            concerns: m.concerns,
+          },
+          kolId: m.kol_id || "",
+          briefText,
+          questionsText,
+          sectionKeys: sections.map((s) => s.key),
+          research: m.brief?.research?.notes || "",
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Could not review it");
+      const fresh: ReviewNote[] = (json.notes || []).map(
+        (n: Omit<ReviewNote, "id" | "done" | "dismissed">, i: number) => ({
+          ...n,
+          id: `r${Date.now()}_${i}`,
+          done: false,
+          dismissed: false,
+        }),
+      );
+      if (!fresh.length) {
+        toast("success", "Read it through, nothing worth changing.");
+      } else {
+        toast("success", `${fresh.length} thing${fresh.length === 1 ? "" : "s"} worth a look`);
+      }
+      // A fresh read-through replaces the last one: advice about a brief
+      // that has since been rewritten is worse than no advice.
+      save({
+        brief: { ...m.brief, review: { notes: fresh, at: new Date().toISOString() } },
+      });
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setReviewing(false);
+    }
   }
 
   // Only boxes the model added on its own can be dropped from here — the
@@ -310,8 +401,48 @@ export function BriefTab({
         </div>
       )}
 
+      {busy === "all" && (
+        <ProgressBar pct={progress} label={`${stage || "Working"}…`} className="px-0.5" />
+      )}
+      {reviewing && (
+        <ProgressBar pct={reviewPct} label="Reading your whole pack back…" className="px-0.5" />
+      )}
+
+      <ReviewPanel
+        notes={notes}
+        at={review?.at}
+        busy={!!busy}
+        onFix={(n) => {
+          patchNote(n.id, { done: true });
+          const key = n.target.startsWith("section:") ? n.target.slice(8) : "";
+          void (key
+            ? generateWithPreview({ onlyKey: key, guidance: n.fix })
+            : generateWithPreview({ refine: true, guidance: n.fix }));
+        }}
+        onFixAll={() => {
+          const fixable = openNotes.filter((n) => n.target !== "questions" && n.target !== "setup");
+          if (!fixable.length) return;
+          setNotes(
+            (review?.notes || []).map((n) =>
+              fixable.some((f) => f.id === n.id) ? { ...n, done: true } : n,
+            ),
+          );
+          void generateWithPreview({
+            refine: true,
+            guidance: fixable.map((n, i) => `${i + 1}. ${n.fix}`).join("\n"),
+          });
+        }}
+        onToggleDone={(n) => patchNote(n.id, { done: !n.done })}
+        onDismiss={(n) => patchNote(n.id, { dismissed: true })}
+        onClear={() => save({ brief: { ...m.brief, review: undefined } })}
+      />
+
       {/* One row. Everything occasional lives behind the menu or a modal. */}
       <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" disabled={reviewing || !!busy} onClick={() => void runReview()}>
+          <Stethoscope size={14} />
+          {reviewing ? "Reading it…" : notes.length ? "Check it again" : "Check it over"}
+        </Button>
         <Button size="sm" variant="secondary" onClick={() => setShowRefine(true)}>
           <Wand2 size={14} /> Change the whole brief
         </Button>
@@ -397,12 +528,36 @@ export function BriefTab({
                 )}
               </div>
               {!isCollapsed && (
-                <div className={`px-3 py-2 ${sectionBusy ? "opacity-50" : ""}`}>
-                  <RichText
-                    value={s.content}
-                    onChange={(html) => setSection(s.key, html)}
-                    minHeight="min-h-16"
-                  />
+                <div className="px-3 py-2">
+                  {sectionBusy && (
+                    <ProgressBar
+                      pct={sectionPct}
+                      label="Rewriting this box…"
+                      className="mb-2"
+                    />
+                  )}
+                  <div className={sectionBusy ? "opacity-50" : ""}>
+                    <RichText
+                      value={s.content}
+                      onChange={(html) => setSection(s.key, html)}
+                      minHeight="min-h-16"
+                    />
+                  </div>
+                  {/* There is no save button and people look for one. Say so
+                      in the box they are typing in, not only in the page
+                      header where it is easy to miss. */}
+                  <p className="mt-1 flex items-center justify-end gap-1 text-[11px] text-muted">
+                    {saveState === "pending" || saveState === "saving" ? (
+                      <>
+                        <CloudUpload size={11} className="animate-pulse" /> Saving your edit…
+                      </>
+                    ) : (
+                      <>
+                        <Check size={11} className="text-emerald-600" /> Type straight in, it saves
+                        itself
+                      </>
+                    )}
+                  </p>
                 </div>
               )}
             </section>
@@ -460,6 +615,162 @@ export function BriefTab({
         }}
       />
     </div>
+  );
+}
+
+// What the read-through found, and the three things you can do with each
+// note: have it done for you, do it yourself and cross it off, or decide it
+// is wrong and bin it.
+//
+// It gets quieter as it empties. Open notes are a panel; once everything is
+// crossed off it collapses to a single line, because advice you have already
+// acted on should not keep taking up the top of the page.
+function ReviewPanel({
+  notes,
+  at,
+  busy,
+  onFix,
+  onFixAll,
+  onToggleDone,
+  onDismiss,
+  onClear,
+}: {
+  notes: ReviewNote[];
+  at?: string;
+  busy: boolean;
+  onFix: (n: ReviewNote) => void;
+  onFixAll: () => void;
+  onToggleDone: (n: ReviewNote) => void;
+  onDismiss: (n: ReviewNote) => void;
+  onClear: () => void;
+}) {
+  const [showDone, setShowDone] = useState(false);
+  if (!notes.length) return null;
+
+  const open = notes.filter((n) => !n.done);
+  const done = notes.filter((n) => n.done);
+  const fixable = open.filter((n) => n.target !== "questions" && n.target !== "setup");
+
+  // Everything dealt with: one line, not a panel.
+  if (!open.length)
+    return (
+      <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-sm text-emerald-900">
+        <CheckSquare size={15} className="shrink-0" />
+        <span className="min-w-0 flex-1">
+          All {done.length} thing{done.length === 1 ? "" : "s"} from the read-through dealt with.
+        </span>
+        <button
+          className="shrink-0 text-xs underline-offset-2 hover:underline"
+          onClick={() => setShowDone((v) => !v)}
+        >
+          {showDone ? "hide" : "see them"}
+        </button>
+        <button className="shrink-0 text-xs underline-offset-2 hover:underline" onClick={onClear}>
+          clear
+        </button>
+        {showDone && (
+          <ul className="basis-full space-y-1 pt-2 text-xs text-emerald-900/70">
+            {done.map((n) => (
+              <li key={n.id} className="line-through">
+                {n.title}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+
+  return (
+    <section className="rounded-xl border border-[var(--accent)]/30 bg-[var(--accent-soft)]/25">
+      <div className="flex flex-wrap items-center gap-2 border-b border-[var(--accent)]/20 px-3 py-2">
+        <Stethoscope size={15} className="shrink-0 text-[var(--accent)]" />
+        <h3 className="text-sm font-semibold">
+          {open.length} thing{open.length === 1 ? "" : "s"} worth changing
+        </h3>
+        {at && (
+          <span className="text-xs text-muted">
+            read through {new Date(at).toLocaleDateString()}
+          </span>
+        )}
+        <span className="flex-1" />
+        {fixable.length > 1 && (
+          <Button size="sm" disabled={busy} onClick={onFixAll}>
+            <Wand2 size={13} /> Fix all {fixable.length} for me
+          </Button>
+        )}
+        <button
+          className="rounded p-1 text-muted hover:text-ink"
+          title="Clear the read-through"
+          aria-label="Clear the read-through"
+          onClick={onClear}
+        >
+          <X size={14} />
+        </button>
+      </div>
+      <ul className="divide-y divide-[var(--accent)]/15">
+        {open.map((n) => (
+          <li key={n.id} className="flex items-start gap-2.5 p-3">
+            <span
+              title={`${n.severity} priority`}
+              className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
+                n.severity === "high"
+                  ? "bg-red-500"
+                  : n.severity === "medium"
+                    ? "bg-amber-500"
+                    : "bg-slate-300"
+              }`}
+            />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium">{n.title}</p>
+              {n.detail && <p className="mt-0.5 text-sm text-muted">{n.detail}</p>}
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                <span className="rounded-full bg-surface px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  {n.targetLabel}
+                </span>
+                {n.target !== "questions" && n.target !== "setup" && (
+                  <Button size="sm" variant="secondary" disabled={busy} onClick={() => onFix(n)}>
+                    <Wand2 size={12} /> Do it for me
+                  </Button>
+                )}
+                <Button size="sm" variant="ghost" onClick={() => onToggleDone(n)}>
+                  <CheckSquare size={12} /> I&apos;ve done it
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => onDismiss(n)}>
+                  Not needed
+                </Button>
+              </div>
+            </div>
+          </li>
+        ))}
+      </ul>
+      {done.length > 0 && (
+        <div className="border-t border-[var(--accent)]/20 px-3 py-2">
+          <button
+            className="text-xs text-muted underline-offset-2 hover:underline"
+            onClick={() => setShowDone((v) => !v)}
+          >
+            {done.length} already dealt with {showDone ? "(hide)" : "(show)"}
+          </button>
+          {showDone && (
+            <ul className="mt-1.5 space-y-1">
+              {done.map((n) => (
+                <li key={n.id} className="flex items-center gap-2 text-xs text-muted">
+                  <span className="min-w-0 flex-1 truncate line-through">{n.title}</span>
+                  <button
+                    className="shrink-0 rounded p-0.5 hover:text-ink"
+                    title="Put it back on the list"
+                    aria-label="Put it back on the list"
+                    onClick={() => onToggleDone(n)}
+                  >
+                    <Undo2 size={12} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 

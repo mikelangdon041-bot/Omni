@@ -25,18 +25,24 @@ import {
   Pencil,
   Play,
   Plus,
+  CloudUpload,
+  Lock,
+  LockOpen,
   RefreshCw,
   Sparkles,
   Star,
   Trash2,
+  Undo2,
   Wand2,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
+import { ProgressBar, useProgress } from "@/components/ui/Progress";
 import { useToast } from "@/components/ui/Feedback";
 import { htmlToPlain } from "@/lib/writer/types";
+import type { SaveState } from "@/lib/meetingprep/hooks";
 import {
   QUESTIONS_ENGINE,
   engineBehind,
@@ -72,10 +78,13 @@ export function QuestionsTab({
   m,
   save,
   flush,
+  saveState = "idle",
 }: {
   m: MpMeeting;
   save: (p: Partial<MpMeeting>) => void;
   flush: () => Promise<void>;
+  /** So an edited question can say it has saved, where you edited it. */
+  saveState?: SaveState;
 }) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
@@ -83,16 +92,29 @@ export function QuestionsTab({
   const [showAdd, setShowAdd] = useState(false);
   const [showMore, setShowMore] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
+  // What the loader should say it is doing. The work is one AI call that
+  // reports nothing, but "Rewriting all 30 questions" and "Rewriting that one"
+  // are very different waits and the bar should admit which one you're in.
+  const [busyLabel, setBusyLabel] = useState("");
+  const [rewritingId, setRewritingId] = useState<string | null>(null);
+  const pct = useProgress(busy, 45000);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [openCats, setOpenCats] = useState<Set<string>>(new Set());
   const [dragId, setDragId] = useState<string | null>(null);
 
+  // `items` is everything ever written for this meeting, including what has
+  // been binned. `live` is what any list should show. Deleting puts a
+  // question in the bin rather than dropping it from the array, because the
+  // question you bin while skimming is the one you want back twenty minutes
+  // later.
   const items: QuestionItem[] = useMemo(() => m.questions?.items || [], [m.questions]);
+  const live = useMemo(() => items.filter((q) => !q.deleted), [items]);
+  const binned = useMemo(() => items.filter((q) => q.deleted), [items]);
   const picked = useMemo(
-    () => items.filter((q) => q.picked).sort((a, b) => a.order - b.order),
-    [items],
+    () => live.filter((q) => q.picked).sort((a, b) => a.order - b.order),
+    [live],
   );
-  const suggestions = useMemo(() => items.filter((q) => !q.picked), [items]);
+  const suggestions = useMemo(() => live.filter((q) => !q.picked), [live]);
 
   // Categories in the order the model's strongest question in each appears,
   // so the most useful group is the one at the top.
@@ -113,6 +135,17 @@ export function QuestionsTab({
   // bank so it survives: telling the model once to stop opening every
   // question the same way should not wear off at the next batch.
   const guidance = m.questions?.guidance || "";
+  // Two different kinds of instruction, checked two different ways: guidance
+  // is a rule every question has to pass, coverage is a floor the bank as a
+  // whole has to clear. Keeping them apart is what stops "include something
+  // on AI" being read as "make it all about AI".
+  const coverage = m.questions?.coverage || "";
+
+  // A question the writer typed, or one they locked, is theirs. A rewrite
+  // never touches either — that is the difference between "these are wrong"
+  // and "all of these are wrong".
+  const isKept = (q: QuestionItem) => q.source === "user" || Boolean(q.locked);
+  const keptCount = live.filter(isKept).length;
 
   // Behind for one of two reasons: the setup moved (most often the topic,
   // which is the whole point of the bank) or the question writer itself got
@@ -160,9 +193,20 @@ export function QuestionsTab({
    * never touched by it — those are theirs.
    */
   async function generate(
-    opts: { focus?: string; guidance?: string; replace?: boolean } = {},
+    opts: {
+      focus?: string;
+      guidance?: string;
+      coverage?: string;
+      /** Replace everything the model wrote (keeping locked + user ones). */
+      replace?: boolean;
+      /** Replace exactly this question, leaving the rest of the bank alone. */
+      onlyId?: string;
+      label?: string;
+    } = {},
   ) {
     setBusy(true);
+    setBusyLabel(opts.label || "Writing your questions");
+    if (opts.onlyId) setRewritingId(opts.onlyId);
     try {
       await flush();
       const briefText = (m.brief?.sections || [])
@@ -171,8 +215,20 @@ export function QuestionsTab({
       // A rewrite starts from a blank sheet, so it must not be told to avoid
       // the questions it is replacing, nor to file into the categories that
       // the correction may well be about.
-      const kept = opts.replace ? items.filter((q) => q.source === "user") : items;
+      // Three scopes, one code path. Topping up keeps everything; a rewrite
+      // keeps what the writer owns; a single-question rewrite keeps all but
+      // the one being replaced.
+      // Binned questions are kept in the array but must never come back as
+      // "already in the bank", or the model will dodge every subject the
+      // writer binned a question about.
+      const kept = opts.onlyId
+        ? live.filter((q) => q.id !== opts.onlyId)
+        : opts.replace
+          ? live.filter(isKept)
+          : live;
+      const target = opts.onlyId ? items.find((q) => q.id === opts.onlyId) : undefined;
       const nextGuidance = opts.guidance ?? guidance;
+      const nextCoverage = opts.coverage ?? coverage;
       const res = await fetch("/api/meeting/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -186,10 +242,13 @@ export function QuestionsTab({
           research: m.brief?.research?.notes || "",
           briefText,
           existing: kept.map((q) => q.text),
-          categories: opts.replace ? [] : [...new Set(items.map((q) => q.category))],
-          count: 20,
-          focus: opts.focus || "",
+          categories: opts.replace ? [] : [...new Set(live.map((q) => q.category))],
+          count: opts.onlyId ? 1 : 20,
+          focus: target
+            ? `Replace one question that was not working. It was filed under "${target.category}" and read: ${target.text}. Write one question that does the same job in the conversation, better. ${opts.focus || ""}`.trim()
+            : opts.focus || "",
           guidance: nextGuidance,
+          coverage: nextCoverage,
         }),
       });
       const json = await res.json();
@@ -197,22 +256,25 @@ export function QuestionsTab({
       // Ranks are per batch, so a second batch's "1" would sort above the
       // first batch's best question inside the same category. Offsetting
       // keeps a merged category in a sensible order.
-      const rankOffset = opts.replace
-        ? 0
-        : items.reduce((n, q) => Math.max(n, q.rank), 0);
+      const rankOffset =
+        opts.replace || opts.onlyId
+          ? 0
+          : live.reduce((n, q) => Math.max(n, q.rank), 0);
       const fresh: QuestionItem[] = (json.questions || []).map(
         (q: Omit<WrittenShape, "id">, i: number) => ({
           id: newId(),
           text: String(q.text || ""),
-          category: String(q.category || "Questions"),
           why: String(q.why || ""),
           followUp: String(q.followUp || ""),
           forWhom: String(q.forWhom || ""),
-          rank: rankOffset + (Number(q.rank) || i + 1),
-          picked: false,
-          backup: false,
+          rank: target ? target.rank : rankOffset + (Number(q.rank) || i + 1),
+          // A replacement takes over the old question's place: its category,
+          // whether it was in your list, and where in that list it sat.
+          category: target ? target.category : String(q.category || "Questions"),
+          picked: target ? target.picked : false,
+          backup: target ? target.backup : false,
           asked: false,
-          order: 0,
+          order: target ? target.order : 0,
           source: "ai" as const,
         }),
       );
@@ -220,44 +282,58 @@ export function QuestionsTab({
       save({
         questions: {
           ...m.questions,
-          items: [...kept, ...fresh],
+          // A single-question rewrite slots back in where the old one was,
+          // so the list does not reshuffle under the writer.
+          items: opts.onlyId
+            ? items.map((q) => (q.id === opts.onlyId ? fresh[0] : q))
+            : [...kept, ...binned, ...fresh],
           guidance: nextGuidance,
+          coverage: nextCoverage,
           generatedAt: new Date().toISOString(),
           // Only a batch written against the whole setup can claim to be
-          // current; topping up an old bank leaves the old ones in it.
-          ...(opts.replace || !items.length
+          // current; topping up an old bank, or swapping one question, leaves
+          // the old ones in it.
+          ...(opts.replace || !live.length
             ? { engine: QUESTIONS_ENGINE, sourceFingerprint: fingerprint }
             : {}),
         },
       });
-      // A fresh batch is easiest to read with every group open.
-      setOpenCats(new Set([...new Set(fresh.map((q) => q.category))]));
+      // A fresh batch is easiest to read with every group open. A single
+      // swap should not rearrange what you had open.
+      if (!opts.onlyId) setOpenCats(new Set([...new Set(fresh.map((q) => q.category))]));
       toast(
         "success",
-        opts.replace
-          ? `Rewritten — ${fresh.length} new question${fresh.length === 1 ? "" : "s"}`
-          : `${fresh.length} question${fresh.length === 1 ? "" : "s"} added`,
+        opts.onlyId
+          ? "Rewritten"
+          : opts.replace
+            ? `Rewritten — ${fresh.length} new question${fresh.length === 1 ? "" : "s"}${
+                keptCount ? `, ${keptCount} of yours kept` : ""
+              }`
+            : `${fresh.length} question${fresh.length === 1 ? "" : "s"} added`,
       );
     } catch (e) {
       toast("error", (e as Error).message);
     } finally {
       setBusy(false);
+      setBusyLabel("");
+      setRewritingId(null);
       setShowMore(false);
       setShowGuide(false);
     }
   }
 
-  if (!items.length) {
+  if (!live.length && !binned.length) {
     return (
       <div className="grid place-items-center rounded-xl border border-dashed border-border bg-surface px-6 py-16 text-center">
         {busy ? (
           <>
             <Sparkles size={22} className="mb-2 animate-pulse text-[var(--accent)]" />
-            <p className="text-sm font-medium text-ink">Writing your questions…</p>
+            <p className="text-sm font-medium text-ink">{busyLabel || "Writing your questions"}…</p>
             <p className="mt-1 max-w-md text-sm text-muted">
               Twenty or so, grouped and ranked, built from your setup and
               whatever the brief turned up about the subject.
             </p>
+            <ProgressBar pct={pct} className="mt-4 w-full max-w-sm" />
           </>
         ) : (
           <>
@@ -270,7 +346,9 @@ export function QuestionsTab({
               meeting.
             </p>
             <div className="mt-4">
-              <Button onClick={() => void generate({ replace: true })}>
+              <Button
+                onClick={() => void generate({ replace: true, label: "Writing your questions" })}
+              >
                 <Sparkles size={16} /> Write my questions
               </Button>
             </div>
@@ -297,7 +375,9 @@ export function QuestionsTab({
             size="sm"
             className="shrink-0 !bg-amber-600 hover:!bg-amber-700"
             disabled={busy}
-            onClick={() => void generate({ replace: true })}
+            onClick={() =>
+              void generate({ replace: true, label: "Rewriting your questions" })
+            }
           >
             <RefreshCw size={14} className={busy ? "animate-spin" : ""} />
             {busy ? "Rewriting…" : "Rewrite them"}
@@ -310,13 +390,13 @@ export function QuestionsTab({
             your own" sat side by side looking like the same thing done twice;
             one asks the model for twenty more, the other is you typing one. */}
         <Button size="sm" disabled={busy} onClick={() => setShowMore(true)}>
-          <Sparkles size={14} /> {busy ? "Writing…" : "Write me 20 more"}
+          <Sparkles size={14} /> {busy ? "Working…" : "Write me 20 more"}
         </Button>
         <Button size="sm" variant="secondary" onClick={() => setShowAdd(true)}>
           <Pencil size={14} /> Type one of my own
         </Button>
         <Button size="sm" variant="secondary" disabled={busy} onClick={() => setShowGuide(true)}>
-          <Wand2 size={14} /> Change how they&apos;re written
+          <Wand2 size={14} /> Guide the questions
         </Button>
         <span className="flex-1" />
         <Button
@@ -330,19 +410,40 @@ export function QuestionsTab({
         </Button>
       </div>
 
-      {guidance && (
-        <p className="flex items-start gap-1.5 rounded-lg border border-border bg-canvas/50 px-3 py-2 text-xs text-muted">
-          <Wand2 size={13} className="mt-0.5 shrink-0 text-[var(--accent)]" />
-          <span className="min-w-0 flex-1">
-            Every batch follows your instruction: <b className="font-medium text-ink">{guidance}</b>
-          </span>
-          <button
-            className="shrink-0 underline-offset-2 hover:underline"
-            onClick={() => save({ questions: { ...m.questions, guidance: "" } })}
-          >
-            clear
-          </button>
-        </p>
+      {busy && <ProgressBar pct={pct} label={`${busyLabel}…`} className="px-0.5" />}
+
+      {(guidance || coverage) && (
+        <div className="space-y-1.5 rounded-lg border border-border bg-canvas/50 px-3 py-2 text-xs text-muted">
+          {guidance && (
+            <p className="flex items-start gap-1.5">
+              <Wand2 size={13} className="mt-0.5 shrink-0 text-[var(--accent)]" />
+              <span className="min-w-0 flex-1">
+                How they&apos;re written:{" "}
+                <b className="font-medium text-ink">{guidance}</b>
+              </span>
+              <button
+                className="shrink-0 underline-offset-2 hover:underline"
+                onClick={() => save({ questions: { ...m.questions, guidance: "" } })}
+              >
+                clear
+              </button>
+            </p>
+          )}
+          {coverage && (
+            <p className="flex items-start gap-1.5">
+              <ListChecks size={13} className="mt-0.5 shrink-0 text-[var(--accent)]" />
+              <span className="min-w-0 flex-1">
+                Make sure to cover: <b className="font-medium text-ink">{coverage}</b>
+              </span>
+              <button
+                className="shrink-0 underline-offset-2 hover:underline"
+                onClick={() => save({ questions: { ...m.questions, coverage: "" } })}
+              >
+                clear
+              </button>
+            </p>
+          )}
+        </div>
       )}
 
       {/* Your list — the questions you carry in, in your order. */}
@@ -386,21 +487,51 @@ export function QuestionsTab({
                 </span>
                 <div className="min-w-0 flex-1">
                   {editingId === q.id ? (
-                    <Textarea
-                      autoFocus
-                      value={q.text}
-                      onChange={(e) => patch(q.id, { text: e.target.value })}
-                      onBlur={() => setEditingId(null)}
-                      className="min-h-16"
-                    />
+                    <>
+                      <Textarea
+                        autoFocus
+                        value={q.text}
+                        onChange={(e) => patch(q.id, { text: e.target.value })}
+                        onKeyDown={(e) => {
+                          if (e.key === "Escape") setEditingId(null);
+                        }}
+                        className="min-h-16"
+                      />
+                      {/* There was no way to tell an edit had finished, and
+                          nothing to press. Blur alone is not an answer: you
+                          cannot see a blur. */}
+                      <div className="mt-1 flex items-center gap-2">
+                        <Button size="sm" onClick={() => setEditingId(null)}>
+                          <Check size={13} /> Done
+                        </Button>
+                        <span className="flex items-center gap-1 text-[11px] text-muted">
+                          {saveState === "pending" || saveState === "saving" ? (
+                            <>
+                              <CloudUpload size={11} className="animate-pulse" /> Saving…
+                            </>
+                          ) : (
+                            <>
+                              <Check size={11} className="text-emerald-600" /> Saved as you type
+                            </>
+                          )}
+                        </span>
+                      </div>
+                    </>
                   ) : (
                     <p className={`text-sm ${q.backup ? "text-muted" : "text-ink"}`}>
                       {q.text}
                     </p>
                   )}
-                  {q.forWhom && (
-                    <p className="mt-0.5 text-xs text-muted">For: {q.forWhom}</p>
-                  )}
+                  {/* Your list is one running order, not groups: the order
+                      you ask them in is the whole point of it. But which
+                      group a question came out of is worth knowing at a
+                      glance, so it rides along as a tag. */}
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
+                    <span className="rounded-full bg-canvas px-1.5 py-0.5 text-[10px] font-medium">
+                      {q.source === "user" ? "Yours" : q.category}
+                    </span>
+                    {q.forWhom && <span>For: {q.forWhom}</span>}
+                  </div>
                   {q.followUp && (
                     <p className="mt-1 text-xs italic text-muted">
                       Probe: {q.followUp}
@@ -424,6 +555,26 @@ export function QuestionsTab({
                     onClick={() => patch(q.id, { backup: !q.backup })}
                   >
                     <Star size={14} className={q.backup ? "fill-current" : ""} />
+                  </IconBtn>
+                  <IconBtn
+                    label={
+                      q.locked
+                        ? "Unlock — rewrites may change this one"
+                        : "Lock — keep this one through every rewrite"
+                    }
+                    active={q.locked}
+                    onClick={() => patch(q.id, { locked: !q.locked })}
+                  >
+                    {q.locked ? <Lock size={13} /> : <LockOpen size={13} />}
+                  </IconBtn>
+                  <IconBtn
+                    label="Rewrite just this question"
+                    disabled={busy}
+                    onClick={() =>
+                      void generate({ onlyId: q.id, label: "Rewriting that question" })
+                    }
+                  >
+                    <RefreshCw size={13} className={rewritingId === q.id ? "animate-spin" : ""} />
                   </IconBtn>
                   <IconBtn label="Edit" onClick={() => setEditingId(q.id)}>
                     <Pencil size={13} />
@@ -490,8 +641,31 @@ export function QuestionsTab({
                       )}
                     </div>
                     <IconBtn
-                      label="Delete this question"
-                      onClick={() => setItems(items.filter((x) => x.id !== q.id))}
+                      label={
+                        q.locked
+                          ? "Unlock — rewrites may change this one"
+                          : "Lock — keep this one through every rewrite"
+                      }
+                      active={q.locked}
+                      onClick={() => patch(q.id, { locked: !q.locked })}
+                    >
+                      {q.locked ? <Lock size={13} /> : <LockOpen size={13} />}
+                    </IconBtn>
+                    <IconBtn
+                      label="Rewrite just this question"
+                      disabled={busy}
+                      onClick={() =>
+                        void generate({ onlyId: q.id, label: "Rewriting that question" })
+                      }
+                    >
+                      <RefreshCw
+                        size={13}
+                        className={rewritingId === q.id ? "animate-spin" : ""}
+                      />
+                    </IconBtn>
+                    <IconBtn
+                      label="Bin this question (you can get it back)"
+                      onClick={() => patch(q.id, { deleted: true, picked: false })}
                     >
                       <Trash2 size={13} />
                     </IconBtn>
@@ -502,6 +676,30 @@ export function QuestionsTab({
           </section>
         );
       })}
+
+      {binned.length > 0 && (
+        <details className="rounded-xl border border-border bg-surface px-3 py-2">
+          <summary className="cursor-pointer text-sm text-muted">
+            Binned ({binned.length}) — get one back
+          </summary>
+          <ul className="mt-2 space-y-1.5">
+            {binned.map((q) => (
+              <li key={q.id} className="flex items-start gap-2 text-sm">
+                <span className="min-w-0 flex-1 text-muted">{q.text}</span>
+                <IconBtn label="Put it back" onClick={() => patch(q.id, { deleted: false })}>
+                  <Undo2 size={13} />
+                </IconBtn>
+                <IconBtn
+                  label="Delete for good"
+                  onClick={() => setItems(items.filter((x) => x.id !== q.id))}
+                >
+                  <Trash2 size={13} />
+                </IconBtn>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
 
       <AskMode
         open={showAsk}
@@ -516,15 +714,29 @@ export function QuestionsTab({
         open={showMore}
         busy={busy}
         onClose={() => setShowMore(false)}
-        onGenerate={(focus) => void generate({ focus })}
+        onGenerate={(focus) => void generate({ focus, label: "Writing 20 more questions" })}
       />
 
       <GuidanceModal
+        key={`${showGuide}|${guidance}|${coverage}`}
         open={showGuide}
         busy={busy}
-        current={guidance}
+        guidance={guidance}
+        coverage={coverage}
+        keptCount={keptCount}
+        total={live.length}
         onClose={() => setShowGuide(false)}
-        onApply={(g) => void generate({ guidance: g, replace: true })}
+        onSaveOnly={(g, c) =>
+          save({ questions: { ...m.questions, guidance: g, coverage: c } })
+        }
+        onRewrite={(g, c) =>
+          void generate({
+            guidance: g,
+            coverage: c,
+            replace: true,
+            label: "Rewriting your questions",
+          })
+        }
       />
 
       <AddOwnModal
@@ -790,52 +1002,145 @@ function AddOwnModal({
   );
 }
 
-// "Don't open every question with a consultancy's name." The correction
-// arrives after you have read the batch, not before, so it has to be able to
-// land on questions that already exist — which means rewriting them, not
-// adding twenty more in the same style.
+// Two instructions, because they are checked differently: how the questions
+// are written is a rule every single one has to pass, what they cover is a
+// floor the bank as a whole has to clear. Saying "include some on AI" in the
+// same box as "keep them casual" is how you end up with a bank entirely about
+// AI.
+//
+// And a choice about what to do with what you already have, because "these
+// are written wrong" and "all of these are wrong" are different complaints.
 function GuidanceModal({
   open,
   busy,
-  current,
+  guidance,
+  coverage,
+  keptCount,
+  total,
   onClose,
-  onApply,
+  onSaveOnly,
+  onRewrite,
 }: {
   open: boolean;
   busy: boolean;
-  current: string;
+  guidance: string;
+  coverage: string;
+  /** Questions a rewrite will not touch: yours, plus anything locked. */
+  keptCount: number;
+  total: number;
   onClose: () => void;
-  onApply: (guidance: string) => void;
+  onSaveOnly: (guidance: string, coverage: string) => void;
+  onRewrite: (guidance: string, coverage: string) => void;
 }) {
-  const [text, setText] = useState(current);
+  const [style, setStyle] = useState(guidance);
+  const [cover, setCover] = useState(coverage);
+  const [scope, setScope] = useState<"rewrite" | "future">("rewrite");
+
+  const dirty = style.trim() !== guidance || cover.trim() !== coverage;
+  const atRisk = total - keptCount;
+
   return (
-    <Modal open={open} onClose={onClose} title="Change how they're written">
+    <Modal open={open} onClose={onClose} title="Guide the questions">
       <p className="mb-3 text-sm text-muted">
-        Tell me what&apos;s wrong with these questions and I&apos;ll write the
-        whole set again to that instruction. It sticks: every batch after this
-        one follows it too, until you clear it.
+        Both of these stick. Every batch from now on follows them, until you
+        change or clear them.
       </p>
-      <Textarea
-        autoFocus
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder={`e.g. "Stop opening questions with 'McKinsey says'. Don't cite consultancies at all, ask the question directly." Or: "Shorter. Nothing over fifteen words."`}
-        className="min-h-24"
-      />
-      <p className="mt-2 text-xs text-muted">
-        Questions you typed yourself are kept exactly as they are. Everything I
-        wrote is replaced, so anything you had picked goes back in the pool.
-      </p>
-      <div className="mt-3 flex justify-end gap-2">
+      <div className="space-y-3">
+        <div>
+          <Textarea
+            label="How they should be written"
+            autoFocus
+            value={style}
+            onChange={(e) => setStyle(e.target.value)}
+            placeholder={`e.g. "Stop saying X person says blah blah. It sounds corporate and boring, I want it more casual."`}
+            className="min-h-20"
+          />
+          <p className="mt-1 text-[11px] text-muted">
+            A rule every question has to pass. I check each one against it, one
+            at a time, before handing them over.
+          </p>
+        </div>
+        <div>
+          <Textarea
+            label="What they should cover"
+            value={cover}
+            onChange={(e) => setCover(e.target.value)}
+            placeholder={`e.g. "Include some on AI, and on how anyone actually measures this."`}
+            className="min-h-20"
+          />
+          <p className="mt-1 text-[11px] text-muted">
+            Not a quota. I write the best bank on your subject first, then read
+            it back and only top up what you asked for if it isn&apos;t already
+            properly covered. The rest of the subject keeps its room.
+          </p>
+        </div>
+      </div>
+
+      <fieldset className="mt-4">
+        <legend className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
+          And the questions you already have?
+        </legend>
+        <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-border p-2.5 text-sm has-[:checked]:border-[var(--accent)] has-[:checked]:bg-[var(--accent-soft)]/30">
+          <input
+            type="radio"
+            checked={scope === "rewrite"}
+            onChange={() => setScope("rewrite")}
+            className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
+          />
+          <span className="min-w-0 flex-1">
+            Rewrite them now
+            <span className="mt-0.5 block text-xs text-muted">
+              {atRisk} question{atRisk === 1 ? "" : "s"} I wrote get replaced.
+              {keptCount > 0
+                ? ` ${keptCount} stay: the ones you typed, and the ones you've locked.`
+                : " Lock any you want to keep first, with the padlock on the question."}
+            </span>
+          </span>
+        </label>
+        <label className="mt-2 flex cursor-pointer items-start gap-2 rounded-lg border border-border p-2.5 text-sm has-[:checked]:border-[var(--accent)] has-[:checked]:bg-[var(--accent-soft)]/30">
+          <input
+            type="radio"
+            checked={scope === "future"}
+            onChange={() => setScope("future")}
+            className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
+          />
+          <span className="min-w-0 flex-1">
+            Leave them, just remember this
+            <span className="mt-0.5 block text-xs text-muted">
+              Nothing changes now. The next batch, and every one after it,
+              follows the instruction.
+            </span>
+          </span>
+        </label>
+      </fieldset>
+
+      <div className="mt-4 flex justify-end gap-2">
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
         <Button
-          disabled={busy || !text.trim()}
-          onClick={() => onApply(text.trim())}
+          disabled={busy || (!dirty && scope === "future") || (!style.trim() && !cover.trim())}
+          onClick={() => {
+            const g = style.trim();
+            const c = cover.trim();
+            if (scope === "future") {
+              onSaveOnly(g, c);
+              onClose();
+            } else {
+              onRewrite(g, c);
+            }
+          }}
         >
-          <RefreshCw size={14} className={busy ? "animate-spin" : ""} />
-          {busy ? "Rewriting…" : "Rewrite them all"}
+          {scope === "future" ? (
+            <>
+              <Wand2 size={14} /> Remember it
+            </>
+          ) : (
+            <>
+              <RefreshCw size={14} className={busy ? "animate-spin" : ""} />
+              {busy ? "Rewriting…" : "Rewrite them all"}
+            </>
+          )}
         </Button>
       </div>
     </Modal>

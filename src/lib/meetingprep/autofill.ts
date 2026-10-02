@@ -1,7 +1,7 @@
 "use client";
 
 // Turning what you typed in Explain into the structured fields — attendees,
-// objectives, concerns, title, date.
+// objectives, concerns, title, topic, date.
 //
 // This used to be a button on the Setup tab ("Fill in the details"). It isn't
 // any more: it runs on its own as the first step of building a brief, because
@@ -46,6 +46,7 @@ export async function runAutofill(m: MpMeeting): Promise<AutofillResult> {
       action: "autofill",
       meeting: {
         title: m.title,
+        topic: m.topic,
         meetingType: meetingTypeLabel(m.meeting_type),
         date: m.date,
         durationMin: m.duration_min,
@@ -69,6 +70,13 @@ export async function runAutofill(m: MpMeeting): Promise<AutofillResult> {
 
   if (json.title && !m.title.trim()) {
     patch.title = json.title;
+    changes++;
+  }
+  // The subject of the session, when the writer named one in their prose.
+  // Only into a blank, like everything else here: a topic they typed on
+  // Setup, or edited in the bar above the tabs, is never overwritten.
+  if (json.topic && !m.topic.trim()) {
+    patch.topic = json.topic;
     changes++;
   }
   if (json.location && !m.location.trim()) {

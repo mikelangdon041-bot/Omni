@@ -19,6 +19,7 @@ import {
 } from "@/lib/meetingprep/briefAi";
 import { MEETING_TYPES } from "@/lib/meetingprep/types";
 import { writeQuestions } from "@/lib/meetingprep/questionsAi";
+import { reviewPrep } from "@/lib/meetingprep/reviewAi";
 
 export const runtime = "nodejs";
 // A whole brief now writes out the words for every step, plus any boxes the
@@ -28,12 +29,14 @@ export const maxDuration = 300;
 // Meeting Prep AI — powered by Claude (same model as Writing Studio). Actions:
 //   research { meeting, kolId? }               → { notes } (live web search)
 //   questions{ meeting, kolId?, research?, briefText?, existing:[],
-//              categories:[], count?, focus?, guidance? }
+//              categories:[], count?, focus?, guidance?, coverage? }
 //                                              → { questions:[...] } (the bank)
 //   brief    { meeting, sections:[{key,title,prompt}], kolId?, guidance?,
 //              previousSections? }             → { sections:[{key,title,content,
 //              prompt?,origin?}] } (origin "ai" = a box the model added)
-//   autofill { meeting }                       → { title, location, durationMin,
+//   review   { meeting, kolId?, briefText?, questionsText?, sectionKeys:[],
+//              research? }                      → { notes:[...] } (what's wrong)
+//   autofill { meeting }                       → { title, topic, location, durationMin,
 //              date, meetingType, attendees:[], objectives, concerns }
 //              (only what's stated)
 //   ideas    { context, focus?, count? }       → { ideas:[{title,detail}] }
@@ -93,6 +96,7 @@ const AUTOFILL_SCHEMA = {
   type: "object" as const,
   properties: {
     title: { type: "string" as const },
+    topic: { type: "string" as const },
     location: { type: "string" as const },
     durationMin: { type: "number" as const },
     date: { type: "string" as const },
@@ -119,6 +123,7 @@ const AUTOFILL_SCHEMA = {
   },
   required: [
     "title",
+    "topic",
     "location",
     "durationMin",
     "date",
@@ -257,8 +262,28 @@ export async function POST(req: Request) {
         count: Math.min(30, Math.max(6, Number(body?.count) || 20)),
         focus: String(body?.focus || "").slice(0, 500),
         guidance: String(body?.guidance || "").slice(0, 2000),
+        coverage: String(body?.coverage || "").slice(0, 2000),
       });
       return NextResponse.json({ questions });
+    }
+
+    // Reading the pack back rather than writing more of it. Its own action
+    // because nothing else in here is allowed to say "this is in the wrong
+    // order" or "these three questions are the same question".
+    if (action === "review") {
+      const meeting: MeetingPayload = body?.meeting || {};
+      const kolBlock = await kolBlockFor(supabase, String(body?.kolId || ""));
+      const notes = await reviewPrep({
+        meeting,
+        kolBlock,
+        briefText: String(body?.briefText || "").slice(0, 24000),
+        questionsText: String(body?.questionsText || "").slice(0, 12000),
+        sectionKeys: Array.isArray(body?.sectionKeys)
+          ? body.sectionKeys.map(String).slice(0, 40)
+          : [],
+        research: String(body?.research || "").slice(0, 12000),
+      });
+      return NextResponse.json({ notes });
     }
 
     if (action === "autofill") {
@@ -274,6 +299,7 @@ Rules:
 - Extract ONLY what is explicitly stated or unambiguously implied in the provided context. Never invent or guess.
 - attendees: every person stated or implied to be AT this meeting (e.g. "Melissa, the head of the company, will be there" → {"name":"Melissa","role":"Head of the company"}). Do not include the writer themself. Put anything else known about a person in "notes".
 - title: a short natural meeting title, only if the purpose is clear.
+- topic: the subject of the session itself, when the writer names one that is not just the meeting's name — a panel or session title (often in quotes, in title case, or introduced by "the topic is" / "the session is called" / "I'm moderating a panel on"), an agenda line, the question on the table. Copy it as they wrote it, word for word, including subtitles after a colon. "" when they only describe who they are meeting rather than naming a subject. Do not invent one and do not summarise the meeting into one.
 - date: ISO 8601 datetime, only if a specific date (and ideally time) is stated. Otherwise "".
 - durationMin: only if a length is stated in minutes or hours ("a 45-minute slot", "an hour"). A start time alone is not a duration. Otherwise 0.
 - meetingType: which of these fits what is described, or "" if none clearly does: ${MEETING_TYPES.map((t) => `${t.key} (${t.label})`).join(", ")}. Judge by the writer's role: someone moderating or chairing a panel is "panel", not a 1-on-1.
@@ -285,6 +311,7 @@ Rules:
       const parsed = JSON.parse(firstText(res) || "{}");
       return NextResponse.json({
         title: String(parsed.title || ""),
+        topic: String(parsed.topic || ""),
         location: String(parsed.location || ""),
         durationMin: Number(parsed.durationMin) || 0,
         date: String(parsed.date || ""),
