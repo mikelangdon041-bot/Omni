@@ -76,7 +76,18 @@ export interface Brief {
   // What the web search turned up about the subject, kept so the user can see
   // what the brief was built from and so a single-box redo is written from the
   // same material instead of searching again.
-  research?: { notes: string; at: string };
+  /**
+   * What the web search turned up, kept so a later redo of one box is written
+   * from the same material.
+   *
+   * `fingerprint` is the setup it was gathered for. Without it, changing the
+   * subject of the meeting left every question still being written from
+   * research about the old one: the writer moved their panel to value
+   * communication and kept getting questions about AI, because AI was what
+   * the search had found back when the meeting was called "the future of
+   * medical affairs".
+   */
+  research?: { notes: string; at: string; fingerprint?: string };
   // The last read-through of the whole pack, and what it found. Lives on the
   // brief because that is where it is acted on.
   review?: Review;

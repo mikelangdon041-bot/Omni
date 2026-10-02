@@ -280,7 +280,13 @@ export function useBriefGenerator({
           ...latest.brief,
           sections: next,
           ...(research
-            ? { research: { notes: research, at: new Date().toISOString() } }
+            ? {
+                research: {
+                  notes: research,
+                  at: new Date().toISOString(),
+                  fingerprint: setupFingerprint(latest),
+                },
+              }
             : {}),
           generatedAt: new Date().toISOString(),
           // Only a whole-brief write can claim the current engine — redoing

@@ -171,6 +171,17 @@ export function QuestionsTab({
   const questionsOutdated = Boolean(
     items.length && engineBehind(m.questions?.engine, QUESTIONS_ENGINE),
   );
+  // The research is the single biggest influence on what the questions are
+  // about, and it was gathered once, for whatever the meeting was about
+  // then. Change the subject and it is material about something else — which
+  // is how a panel on value communication ended up with a group of questions
+  // about AI. Anything that does not match the setup in front of us is not
+  // used, and a fresh search runs instead.
+  const researchStale =
+    !m.brief?.research?.fingerprint || m.brief.research.fingerprint !== fingerprint;
+  const briefStale = Boolean(
+    m.brief?.sourceFingerprint && m.brief.sourceFingerprint !== fingerprint,
+  );
 
   const patch = (id: string, p: Partial<QuestionItem>) =>
     setItems(items.map((q) => (q.id === id ? { ...q, ...p } : q)));
@@ -215,6 +226,8 @@ export function QuestionsTab({
       replace?: boolean;
       /** Replace exactly this question, leaving the rest of the bank alone. */
       onlyId?: string;
+      /** How many the writer asked for. A floor, not a quota. */
+      count?: number;
       label?: string;
     } = {},
   ) {
@@ -223,9 +236,53 @@ export function QuestionsTab({
     if (opts.onlyId) setRewritingId(opts.onlyId);
     try {
       await flush();
-      const briefText = (m.brief?.sections || [])
-        .map((s) => `${s.title}:\n${htmlToPlain(s.content)}`)
-        .join("\n\n");
+      // A brief written about the old subject drags the questions back to it
+      // just as hard as old research does.
+      const briefText = briefStale
+        ? ""
+        : (m.brief?.sections || [])
+            .map((s) => `${s.title}:\n${htmlToPlain(s.content)}`)
+            .join("\n\n");
+
+      let research = m.brief?.research?.notes || "";
+      if (researchStale) {
+        setBusyLabel("Reading up on the subject");
+        try {
+          const r = await fetch("/api/meeting/ai", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({
+              action: "research",
+              meeting: payloadOf(m),
+              kolId: m.kol_id || "",
+            }),
+          });
+          const rj = await r.json();
+          if (r.ok && String(rj.notes || "").trim()) {
+            research = String(rj.notes).trim();
+            // Kept, so the next batch and the next brief start from the same
+            // material rather than searching again.
+            save({
+              brief: {
+                ...m.brief,
+                research: {
+                  notes: research,
+                  at: new Date().toISOString(),
+                  fingerprint,
+                },
+              },
+            });
+          } else {
+            // Better to write from the setup alone than from notes about a
+            // subject this meeting is no longer about.
+            research = "";
+          }
+        } catch {
+          research = "";
+        }
+        setBusyLabel(opts.label || "Writing your questions");
+      }
       // A rewrite starts from a blank sheet, so it must not be told to avoid
       // the questions it is replacing, nor to file into the categories that
       // the correction may well be about.
@@ -251,13 +308,11 @@ export function QuestionsTab({
           action: "questions",
           meeting: payloadOf(m),
           kolId: m.kol_id || "",
-          // The brief's research is reused rather than searched again: it is
-          // the same subject and it was gathered for this meeting.
-          research: m.brief?.research?.notes || "",
+          research,
           briefText,
           existing: kept.map((q) => q.text),
           categories: opts.replace ? [] : [...new Set(live.map((q) => q.category))],
-          count: opts.onlyId ? 1 : 20,
+          count: opts.onlyId ? 1 : Math.max(1, Math.min(60, opts.count || 20)),
           focus: target
             ? `Replace one question that was not working. It was filed under "${target.category}" and read: ${target.text}. Write one question that does the same job in the conversation, better. ${opts.focus || ""}`.trim()
             : opts.focus || "",
@@ -403,7 +458,7 @@ export function QuestionsTab({
             your own" sat side by side looking like the same thing done twice;
             one asks the model for twenty more, the other is you typing one. */}
         <Button size="sm" disabled={busy} onClick={() => setGuideScope("more")}>
-          <Sparkles size={14} /> {busy ? "Working…" : "Write me 20 more"}
+          <Sparkles size={14} /> {busy ? "Working…" : "Write me more"}
         </Button>
         <Button size="sm" variant="secondary" onClick={() => setShowAdd(true)}>
           <Pencil size={14} /> Type one of my own
@@ -741,11 +796,12 @@ export function QuestionsTab({
         onSaveOnly={(g, c) =>
           save({ questions: { ...m.questions, guidance: g, coverage: c } })
         }
-        onMore={(g, c) =>
+        onMore={(g, c, count) =>
           void generate({
             guidance: g,
             coverage: c,
-            label: "Writing 20 more questions",
+            count,
+            label: `Writing ${count} more question${count === 1 ? "" : "s"}`,
           })
         }
         onRewrite={(g, c) =>
@@ -1056,12 +1112,15 @@ function GuidanceModal({
   total: number;
   onClose: () => void;
   onSaveOnly: (guidance: string, coverage: string) => void;
-  onMore: (guidance: string, coverage: string) => void;
+  onMore: (guidance: string, coverage: string, count: number) => void;
   onRewrite: (guidance: string, coverage: string) => void;
 }) {
   const [style, setStyle] = useState(guidance);
   const [cover, setCover] = useState(coverage);
   const [scope, setScope] = useState<GuideScope>(openOn || "more");
+  // A floor the writer sets, not a number the app picked. Twenty was
+  // hardcoded and nobody had asked for twenty.
+  const [howMany, setHowMany] = useState(20);
 
   const dirty = style.trim() !== guidance || cover.trim() !== coverage;
   const atRisk = total - keptCount;
@@ -1069,9 +1128,9 @@ function GuidanceModal({
   const CHOICES: { k: GuideScope; title: string; blurb: string }[] = [
     {
       k: "more",
-      title: "Write me 20 more, following this",
+      title: "Write me more, following this",
       blurb:
-        "Everything you have stays exactly as it is. Twenty new ones go underneath, none of them repeating a question already in the list.",
+        "Nothing you have is touched or deleted. The new ones go underneath, and none of them repeats a question already in the list.",
     },
     {
       k: "rewrite",
@@ -1121,9 +1180,11 @@ function GuidanceModal({
             className="min-h-20"
           />
           <p className="mt-1 text-[11px] text-muted">
-            Not a quota. I write the best bank on your subject first, then read
-            it back and only top up what you asked for if it isn&apos;t already
-            properly covered. The rest of the subject keeps its room.
+            Say &ldquo;include questions about X&rdquo; here. Not a quota: I
+            write the best bank on your subject first, then read it back and
+            only top up what you asked for if it isn&apos;t already properly
+            covered. Writing this never deletes anything on its own — what
+            happens to the questions you already have is the choice below.
           </p>
         </div>
       </div>
@@ -1132,6 +1193,24 @@ function GuidanceModal({
         <legend className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
           And what should I do now?
         </legend>
+        {scope !== "future" && (
+          <label className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-canvas/50 px-2.5 py-2 text-sm">
+            <span className="text-ink">Write me at least</span>
+            <input
+              type="number"
+              min={1}
+              max={60}
+              value={howMany}
+              onChange={(e) => setHowMany(Math.max(1, Math.min(60, Number(e.target.value) || 1)))}
+              className="w-16 rounded-md border border-border bg-surface px-2 py-1 text-sm outline-none focus:border-[var(--accent)]"
+            />
+            <span className="text-ink">questions</span>
+            <span className="w-full text-[11px] text-muted">
+              A floor, not a quota. It writes more than this when the subject
+              carries them, and never pads to reach it.
+            </span>
+          </label>
+        )}
         <div className="space-y-2">
           {CHOICES.map((c) => (
             <label
@@ -1170,25 +1249,29 @@ function GuidanceModal({
               onSaveOnly(g, c);
               onClose();
             } else if (scope === "more") {
-              onMore(g, c);
+              onMore(g, c, howMany);
             } else {
               onRewrite(g, c);
             }
           }}
         >
+          {/* The label is the whole answer to "will this delete what I
+              have?", so it says the number either way. */}
           {scope === "future" ? (
             <>
-              <Wand2 size={14} /> Remember it
+              <Wand2 size={14} /> Remember it, change nothing
             </>
           ) : scope === "more" ? (
             <>
               <Sparkles size={14} className={busy ? "animate-pulse" : ""} />
-              {busy ? "Writing…" : "Write them"}
+              {busy
+                ? "Writing…"
+                : `Write ${howMany} more, keep all ${total}`}
             </>
           ) : (
             <>
               <RefreshCw size={14} className={busy ? "animate-spin" : ""} />
-              {busy ? "Rewriting…" : "Rewrite them"}
+              {busy ? "Rewriting…" : `Replace ${atRisk} of ${total}`}
             </>
           )}
         </Button>

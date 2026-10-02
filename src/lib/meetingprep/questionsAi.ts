@@ -244,7 +244,7 @@ export async function writeQuestions({
     model: WRITER_MODEL,
     max_tokens: 12000,
     output_config: { format: { type: "json_schema", schema: QUESTIONS_SCHEMA } },
-    system: `You write the question bank someone carries into a meeting. Exactly ${count} questions.
+    system: `You write the question bank someone carries into a meeting. At least ${count} questions, and more than that where the subject genuinely carries them. ${count} is a floor the writer chose, not a target: never pad towards it with near-duplicates or questions you do not believe in, and never stop at it if there is more worth asking.
 
 Before you write a single question, find the subject of this session in the context and hold it in front of you. If a line marked THE SUBJECT OF THIS SESSION is there, that is the subject, and the meeting's name is not: a question that would still make sense if the subject were swapped for a different one does not belong in this bank. Every question must be about that subject, in the specific terms that subject is argued about. Read the subject closely enough to name its parts: if it says one thing is turned into another, ask about the turning, about what is lost on the way, and about how anyone would know it worked.
 

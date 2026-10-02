@@ -25,12 +25,14 @@ const GUIDANCE =
   "Stop saying X person defines or says blah blah. It sounds too corporate and boring. I want this to sound more casual";
 
 async function main() {
-  const [inPath] = process.argv.slice(2);
+  const [inPath, countArg] = process.argv.slice(2);
   const raw = readFileSync(inPath, "utf8").replace(/^﻿/, "");
   const parsed = JSON.parse(raw.slice(raw.indexOf("{")).trim());
   const m = (parsed.row_to_json ?? parsed) as MpMeeting;
 
-  const want = 20;
+  // The count is a floor the writer picks, so the check has to prove two
+  // things: the floor is honoured, and it is a floor rather than a cap.
+  const want = Number(countArg) || 20;
   const t0 = Date.now();
   const out = await writeQuestions({
     meeting: {
@@ -65,9 +67,9 @@ async function main() {
   if (leaks.length) problems.push(`${leaks.length} name-drop(s) still got through`);
   // And the guard must not be eating the batch. Losing a couple to the drop
   // is the guard working; losing a quarter of them means the repair is not.
-  if (out.length < want - 3)
+  if (out.length < want)
     problems.push(
-      `the batch came back ${want - out.length} short — the repair pass is not fixing, only the drop is`,
+      `asked for at least ${want} and got ${out.length} — the floor is not being honoured`,
     );
 
   console.log(problems.length ? `PROBLEMS:\n- ${problems.join("\n- ")}` : "checks passed");

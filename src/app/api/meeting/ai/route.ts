@@ -37,6 +37,7 @@ export const maxDuration = 300;
 //              prompt?,origin?}] } (origin "ai" = a box the model added)
 //   review   { meeting, kolId?, briefText?, questionsText?, sectionKeys:[],
 //              research? }                      → { notes:[...] } (what's wrong)
+//   retitle  { meeting }                       → { title } (a name for the new subject)
 //   autofill { meeting }                       → { title, topic, location, durationMin,
 //              date, meetingType, attendees:[], objectives, concerns }
 //              (only what's stated)
@@ -92,6 +93,13 @@ async function kolBlockFor(
     .filter(Boolean)
     .join("\n");
 }
+
+const RETITLE_SCHEMA = {
+  type: "object" as const,
+  properties: { title: { type: "string" as const } },
+  required: ["title"],
+  additionalProperties: false,
+};
 
 const AUTOFILL_SCHEMA = {
   type: "object" as const,
@@ -286,6 +294,37 @@ export async function POST(req: Request) {
         research: String(body?.research || "").slice(0, 12000),
       });
       return NextResponse.json({ notes });
+    }
+
+    // The subject changed and the meeting is still called what it was called
+    // before. Propose a name, do not apply one: naming the thing is the
+    // writer's call, and they may have a convention we cannot see.
+    if (action === "retitle") {
+      const meeting: MeetingPayload = body?.meeting || {};
+      const res = await anthropic().messages.create({
+        model: QUICK_MODEL,
+        max_tokens: 300,
+        output_config: { format: { type: "json_schema", schema: RETITLE_SCHEMA } },
+        system: `You rename a meeting so its name matches what the meeting is now about.
+
+The writer has a subject for this session and a name for the meeting that no longer fits it. Propose a better name.
+
+- Short. Under sixty characters, and shorter is better. It is a row in a list, not a headline.
+- It has to say what the meeting IS, not just repeat the subject verbatim. A session subtitle after a colon almost never belongs in the name.
+- Keep whatever convention the current name shows. If it starts "Panel Prep:", "1:1 with", "Advisory board —", keep that and change what follows.
+- Keep the writer's seat visible when the current name shows it: someone moderating stays a moderator.
+- Plain words. No markdown, no quotation marks, never an em dash or en dash.
+
+Return just the name.`,
+        messages: [
+          {
+            role: "user",
+            content: `Current name: ${meeting.title || "(none)"}\nThe subject of the session: ${meeting.topic || "(none)"}\nType: ${meeting.meetingType || "(not given)"}\nWhat the writer said about it: ${(meeting.explain || "").slice(0, 1500) || "(nothing)"}`,
+          },
+        ],
+      });
+      const parsed = JSON.parse(firstText(res) || "{}");
+      return NextResponse.json({ title: String(parsed.title || "").trim().slice(0, 120) });
     }
 
     if (action === "autofill") {

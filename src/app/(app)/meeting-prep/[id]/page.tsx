@@ -30,7 +30,9 @@ import {
   meetingTypeLabel,
   plainLetters,
   type BriefSection,
+  type MpMeeting,
 } from "@/lib/meetingprep/types";
+import { Button } from "@/components/ui/Button";
 import { usePersistedState } from "@/lib/usePersistedState";
 
 // Plain names. "Grill me" was cute and told you nothing about what the tab
@@ -104,6 +106,90 @@ function TopicBar({ topic, onSave }: { topic: string; onSave: (t: string) => voi
   );
 }
 
+/**
+ * "The meeting is still called the old thing."
+ *
+ * Changing the subject of a session almost always means the meeting's name is
+ * now wrong too, and the name is what the writer sees in their list. It is
+ * not renamed automatically: naming the thing is theirs, and they may have a
+ * convention nothing here can see. So it looks, decides, and offers.
+ */
+function RenameOffer({
+  meeting,
+  onRename,
+  onDismiss,
+}: {
+  meeting: MpMeeting;
+  onRename: (title: string) => void;
+  onDismiss: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [suggested, setSuggested] = useState("");
+
+  async function suggest() {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/meeting/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          action: "retitle",
+          meeting: {
+            title: meeting.title,
+            topic: meeting.topic,
+            meetingType: meetingTypeLabel(meeting.meeting_type),
+            explain: meeting.explain,
+          },
+        }),
+      });
+      const json = await res.json();
+      setSuggested(String(json.title || "").trim());
+    } catch {
+      setSuggested("");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="-mt-2 mb-4 rounded-xl border border-border bg-surface px-3 py-2.5 text-sm">
+      <p className="text-muted">
+        This meeting is still called{" "}
+        <b className="font-medium text-ink">{meeting.title}</b>. Rename it to
+        match the subject?
+      </p>
+      {suggested ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <input
+            value={suggested}
+            onChange={(e) => setSuggested(e.target.value)}
+            className="min-w-0 flex-1 rounded-md border border-border bg-canvas px-2 py-1.5 text-sm outline-none focus:border-[var(--accent)]"
+          />
+          <Button size="sm" onClick={() => onRename(suggested.trim())} disabled={!suggested.trim()}>
+            Use this name
+          </Button>
+          <Button size="sm" variant="ghost" onClick={onDismiss}>
+            Keep the old one
+          </Button>
+        </div>
+      ) : (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Button size="sm" disabled={busy} onClick={() => void suggest()}>
+            {busy ? "Thinking…" : "Suggest a name"}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => onRename(meeting.topic || "")}>
+            Just use the subject
+          </Button>
+          <Button size="sm" variant="ghost" onClick={onDismiss}>
+            Leave it
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function MeetingPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -111,6 +197,9 @@ export default function MeetingPage() {
   const { userId } = useUserId();
   const { meeting, loading, save, flush, saveState, remove } = useMpMeeting(id, userId);
   const { settings, save: saveSettings } = useMpSettings(userId);
+  // Set when the writer changes the subject, so the offer to rename the
+  // meeting appears once, in response to what they did.
+  const [offerRename, setOfferRename] = useState(false);
   // A deep link can say which tab to open — the Windows recorder sends you
   // straight to Debrief, the same place the in-app record flow lands. Read off
   // window rather than useSearchParams so the page needs no Suspense boundary,
@@ -302,7 +391,26 @@ export default function MeetingPage() {
           week before, and the fix for that cannot be "ask someone to go and
           change it in the database". Changing it marks the brief and the
           questions stale, so both offer to be rewritten around the new one. */}
-      <TopicBar topic={meeting.topic || ""} onSave={(topic) => save({ topic })} />
+      <TopicBar
+        topic={meeting.topic || ""}
+        onSave={(topic) => {
+          save({ topic });
+          // Only after a change they just made, so it never nags on a
+          // meeting they opened and left alone.
+          setOfferRename(Boolean(topic.trim()));
+        }}
+      />
+
+      {offerRename && (
+        <RenameOffer
+          meeting={meeting}
+          onRename={(title) => {
+            if (title) save({ title });
+            setOfferRename(false);
+          }}
+          onDismiss={() => setOfferRename(false)}
+        />
+      )}
 
       <Tabs tabs={TABS} active={tab} onChange={setTab} />
 
