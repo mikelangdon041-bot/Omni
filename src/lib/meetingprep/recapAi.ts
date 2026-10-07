@@ -41,6 +41,8 @@ export interface RecapInput {
   previous?: string;
   /** From voiceFor(); empty when the sender has not taught one. */
   voice?: string;
+  /** Set on the one retry that cuts an over-long short draft, so it stops there. */
+  cutting?: boolean;
 }
 
 export interface RecapOutput {
@@ -112,11 +114,11 @@ HOW IT READS
 - Like a person wrote it, quickly and well. Short sentences, contractions, plain words: the way someone writes to people they work with and get on with.
 - Greeting: "Hi" and the first name for one person, "Hi all," or "Hi both," for several. The sender is never in the greeting.
 - Open with one short line that is about this meeting in particular. Not a stock thank-you for their time.
-- Then what matters to them: what you landed on and what happens next. Usually two to five points. Leave out detail they already know or do not need.
+- Then what matters to them: what you landed on and what happens next. Usually two to five points, and under 150 words in all. They were in the meeting and the notes are filed, so pick what matters and leave out the detail.
 - Bullets only when there are three or more separate items, each starting "• ", one level, no sub-bullets. Fewer than three, write a sentence or two instead.
-- Next steps say who is doing them where the notes say so. The sender's own are "I'll…".
+- Next steps say who is doing them only where the notes say so. "I'll" is only for something the notes or follow-ups say the sender is doing. A follow-up with no owner named is written without one, never claimed for the sender. When a follow-up names the sender in it ("with Zach checking in"), the sender does that part and the rest belongs to the people they met.
 - Close the way people really end an email to colleagues, briefly and warmly, and vary it. Do not ask them to correct you, and do not add "let me know if I missed anything". Only ask for a reply when there is a real open question for them.
-- Sign off with the sender's first name on its own line.
+- Sign off with the sender's first name on its own line. When no name is given, end on the closing line and leave the name for them to add.
 
 WHAT GIVES WRITING AWAY AS MACHINE-MADE, AND IS NEVER IN THIS EMAIL
 - Semicolons. Em dashes, en dashes and double hyphens. Colons in the middle of a sentence. Where two thoughts meet, write two sentences, or join them with and, but or so.
@@ -135,14 +137,17 @@ FORMAT
 - body is plain text with blank lines between paragraphs.
 - subject: short and natural, what a person would type. No "Re:", no quotes, no date unless it helps.`;
 
-const GUIDANCE_RULE = `THE SENDER'S INSTRUCTIONS FOR THIS EMAIL outrank everything above about what to include, how long it is and how it is shaped. If they say talk only about something, the email is only about that, and everything else is left out even if it was the biggest topic in the meeting. If they say keep it short, it is three or four lines. Never mention the instructions in the email.`;
+const GUIDANCE_RULE = `THE SENDER'S INSTRUCTIONS FOR THIS EMAIL outrank everything above about what to include, how long it is and how it is shaped. If they say talk only about something, the email is only about that, and everything else is left out even if it was the biggest topic in the meeting. If they ask for it short, the whole body is the greeting, three or four sentences, and the sign-off: no bullets, nothing that is merely nice to know, under 70 words. Never mention the instructions in the email.`;
 
 export async function writeRecap(input: RecapInput): Promise<RecapOutput> {
   const notes = String(input.notes || "").slice(0, 40000);
   const acts = (input.actions || []).map(String).slice(0, 40);
   const title = String(input.title || "").slice(0, 200);
   const when = String(input.when || "").slice(0, 60);
-  const sender = String(input.sender || "").slice(0, 80);
+  const given = String(input.sender || "").slice(0, 80).trim();
+  // A display name is often the account handle ("zbalmuth"), and an email
+  // signed with a handle is worse than one left for the sender to sign.
+  const sender = /\s/.test(given) || given !== given.toLowerCase() ? given : "";
   const recipients = (input.recipients || []).map(String).slice(0, 20);
   const guidance = String(input.guidance || "").slice(0, 2000).trim();
   const previous = String(input.previous || "").slice(0, 8000).trim();
@@ -162,7 +167,13 @@ export async function writeRecap(input: RecapInput): Promise<RecapOutput> {
           sender && `Sender (write as this person): ${sender}`,
           recipients.length && `Recipients: ${recipients.join(", ")}`,
           `Notes:\n${notes}`,
-          acts.length && `Follow-ups:\n${acts.map((a) => `- ${a}`).join("\n")}`,
+          // Said outright because the pull is the other way: written as the
+          // sender, every unowned to-do turned into "I'll" and promised the
+          // sender's time for work the notes give to someone else.
+          acts.length &&
+            `Follow-ups. An owner is only known where the line names one. None of these is the sender's unless it says so, so do not write "I'll" for them:\n${acts
+              .map((a) => `- ${a}`)
+              .join("\n")}`,
           previous && `The current draft, which the sender wants changed:\n${previous}`,
           guidance && `The sender's instructions: ${guidance}`,
         ]
@@ -173,7 +184,7 @@ export async function writeRecap(input: RecapInput): Promise<RecapOutput> {
   });
 
   const parsed = JSON.parse(firstText(res) || "{}");
-  return {
+  const out = {
     subject: plainPunctuation(String(parsed.subject || "")),
     // Backstop for the bullet character: models default to "- " however
     // firmly the prompt says otherwise.
@@ -181,4 +192,26 @@ export async function writeRecap(input: RecapInput): Promise<RecapOutput> {
       indent.length >= 2 ? `${indent}◦ ` : "• ",
     ),
   };
+
+  // "Keep it short" came back at 95 words three times running with the limit
+  // in the prompt, so the length is measured rather than trusted, and an
+  // over-long draft goes round once more with its own word count attached.
+  const n = wordCount(out.body);
+  if (!input.cutting && SHORT.test(guidance) && n > SHORT_WORDS + 15) {
+    return writeRecap({
+      ...input,
+      previous: out.body,
+      guidance: `${guidance}. This draft is ${n} words. Cut it to under ${SHORT_WORDS} by deleting whole sentences, keeping what they asked for.`,
+      cutting: true,
+    });
+  }
+  return out;
+}
+
+/** Guidance that asks for a short email. */
+const SHORT = /\b(short|shorter|brief|quick|concise|few lines|two lines|three lines|keep it tight)\b/i;
+const SHORT_WORDS = 70;
+
+function wordCount(text: string): number {
+  return text.split(/\s+/).filter(Boolean).length;
 }
