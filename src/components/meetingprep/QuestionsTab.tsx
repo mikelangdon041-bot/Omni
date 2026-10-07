@@ -29,6 +29,7 @@ import {
   RefreshCw,
   Sparkles,
   Star,
+  Stethoscope,
   StickyNote,
   Trash2,
   Undo2,
@@ -36,6 +37,8 @@ import {
   X,
 } from "lucide-react";
 import { AskMode } from "@/components/meetingprep/AskMode";
+import { ReviewPanel } from "@/components/meetingprep/ReviewPanel";
+import { useReview } from "@/lib/meetingprep/useReview";
 import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
@@ -113,6 +116,10 @@ export function QuestionsTab({
   const [dragId, setDragId] = useState<string | null>(null);
   // The one question having its probe written, so that row can say so.
   const [fillingId, setFillingId] = useState<string | null>(null);
+  // The read-through is one pass over the whole pack, run from any tab. This
+  // one shows what it found about the questions, which is where the advice
+  // about their order and their overlaps was always meant to be read.
+  const review = useReview({ meeting: m, save });
 
   // `items` is everything ever written for this meeting, including what has
   // been binned. `live` is what any list should show. Deleting puts a
@@ -562,6 +569,19 @@ export function QuestionsTab({
         <Button size="sm" variant="secondary" disabled={busy} onClick={() => setGuideScope("rewrite")}>
           <Wand2 size={14} /> Fix how these are written
         </Button>
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={review.reviewing || busy}
+          onClick={() => void review.runReview()}
+        >
+          <Stethoscope size={14} />
+          {review.reviewing
+            ? "Reading it…"
+            : review.notes.length
+              ? "Check it again"
+              : "Check it over"}
+        </Button>
         <span className="flex-1" />
         <Button
           size="sm"
@@ -575,6 +595,25 @@ export function QuestionsTab({
       </div>
 
       {busy && <ProgressBar pct={pct} label={`${busyLabel}…`} className="px-0.5" />}
+      {review.reviewing && (
+        <ProgressBar pct={review.pct} label="Reading your whole pack back…" className="px-0.5" />
+      )}
+
+      {/* No "Do it for me" here yet, and that is on purpose. What the
+          read-through finds about questions is mostly order and overlap —
+          "start with the metrics one", "these two ask the same thing" — and
+          neither can be applied without deciding which question loses. The
+          advice being on the tab where you can act on it is the part that was
+          missing; doing it for you is a separate problem. */}
+      <ReviewPanel
+        notes={review.notes}
+        at={review.at}
+        scope="questions"
+        busy={busy}
+        onToggleDone={(n) => review.patchNote(n.id, { done: !n.done })}
+        onDismiss={(n) => review.patchNote(n.id, { dismissed: true })}
+        onClear={review.clear}
+      />
 
       {(guidance || coverage) && (
         <div className="space-y-1.5 rounded-lg border border-border bg-canvas/50 px-3 py-2 text-xs text-muted">

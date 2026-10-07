@@ -36,6 +36,8 @@ import {
   type MpDocument,
   type MpMeeting,
 } from "@/lib/meetingprep/types";
+import { ReviewPanel } from "@/components/meetingprep/ReviewPanel";
+import { useReview } from "@/lib/meetingprep/useReview";
 
 function toLocalInput(iso: string | null): string {
   if (!iso) return "";
@@ -93,6 +95,10 @@ export function SetupTab({
   const toast = useToast();
   const [uploadingDoc, setUploadingDoc] = useState(false);
 
+  // Read-only here: Setup is where you answer what the read-through found
+  // missing, and the answer is you typing it, not the app guessing it.
+  const review = useReview({ meeting: m, save });
+
   const attendees: Attendee[] = m.attendees?.length
     ? m.attendees
     : [{ name: "", role: "", org: "", notes: "" }];
@@ -148,6 +154,24 @@ export function SetupTab({
 
   return (
     <div className="grid gap-5 lg:grid-cols-2">
+      {/* What the read-through found about what you told us — a session
+          length never given, a person named with no role. It is run over the
+          whole pack from any tab; this shows the part that gets fixed here,
+          and spans both columns because it is about the page, not a card. */}
+      {review.notes.length > 0 && (
+        <div className="lg:col-span-2">
+          <ReviewPanel
+            notes={review.notes}
+            at={review.at}
+            scope="setup"
+            busy={Boolean(busy)}
+            onToggleDone={(n) => review.patchNote(n.id, { done: !n.done })}
+            onDismiss={(n) => review.patchNote(n.id, { dismissed: true })}
+            onClear={review.clear}
+          />
+        </div>
+      )}
+
       {/* Explain — the fast path, and the first thing you land on. Creating a
           meeting drops you straight in here with the caret already blinking;
           the title, attendees, and objectives are either typed below or read
