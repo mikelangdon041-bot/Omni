@@ -310,6 +310,126 @@ Plain prose. No markdown, no quotation marks around the question. Never an em da
   return out;
 }
 
+const FILL_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    followUp: { type: "string" as const },
+    why: { type: "string" as const },
+    forWhom: { type: "string" as const },
+    sourceNote: { type: "string" as const },
+  },
+  required: ["followUp", "why", "forWhom", "sourceNote"],
+  additionalProperties: false,
+};
+
+export interface FilledQuestion {
+  /** The probe the writer's own question went in without. */
+  followUp: string;
+  why: string;
+  forWhom: string;
+  /** Backing from the research already gathered, or "" when there is none. */
+  sourceNote: string;
+}
+
+/**
+ * Finishing off a question the writer typed themselves.
+ *
+ * A question they write goes into the bank bare: no probe, no reason, and no
+ * sign that the research already sitting on this meeting has anything to say
+ * about it. Every question the model writes has all three, so their own
+ * questions read as the thin ones in their own list, which is backwards.
+ *
+ * Two rules do the work here. The question itself is theirs and never comes
+ * back changed — this call cannot return a `text`, so there is nothing to
+ * overwrite it with. And a source may only come out of the notes handed in:
+ * with no research there is no source, and a finding that merely shares a
+ * theme with the question is not backing for it.
+ */
+export async function fillOutQuestion({
+  meeting,
+  kolBlock = "",
+  research = "",
+  question,
+  standing = "",
+}: {
+  meeting: MeetingPayload;
+  kolBlock?: string;
+  /** The notes this meeting was prepared from: the only place a source may come from. */
+  research?: string;
+  question: { text: string; category?: string };
+  /** Their standing instruction about how all their questions must be written. */
+  standing?: string;
+}): Promise<FilledQuestion> {
+  const system = `You are finishing off one question that the writer typed themselves.
+
+The question is theirs, and it is not yours to rewrite. You are not judging it, sharpening it or replacing it, and there is no field here to put a new version of it in. You are adding the things it went in without: the probe underneath it, a line on what it gets them, and the source behind it where the research actually has one.
+
+${SEAT_RULE}
+
+${SPOKEN_SOURCING_RULE}
+
+Where that rule says the source goes in "why", in this call it goes in "sourceNote" instead.
+
+Fields:
+- followUp: the probe for when the first answer is thin or too comfortable, written word for word, exactly as it would be said, short enough to say in one breath. It asks for the part a comfortable answer leaves out: the example, the number, the time it did not work. Never a rephrasing of their question, never a second question about something else. Never empty.
+- why: at most 15 words on what this question gets them. Not a restatement of the question.
+- forWhom: who to put it to, when the context names someone it obviously belongs to. A name or a role, at most four words, because it is read at a glance beside the question. Never an instruction about how to ask it. Empty string whenever it is for everyone, which is the usual answer.
+- sourceNote: one line of backing drawn from the research notes below, and from nowhere else. The finding first, in the writer's own terms, then the source and year in brackets. Under 25 words. This one is read by the writer and never said out loud, so the name belongs in it. Return an empty string unless the notes carry something that genuinely bears on THIS question: no research, nothing relevant, or a match that is only thematic all mean an empty string. Never reach into your own memory for a source, and never stretch a real one to fit, because they may cite it in the room.
+${standing.trim() ? `\nTHE WRITER'S OWN INSTRUCTION ON HOW THEIR QUESTIONS ARE WRITTEN. It applies to the probe, and it outranks every rule above:\n${standing.trim()}\n` : ""}
+Plain prose. No markdown, no quotation marks around the question. Never an em dash or en dash.`;
+
+  const base = `${meetingContext(meeting, kolBlock) || "(minimal context)"}${
+    research.trim()
+      ? `\n\nThe research this meeting was already prepared from. This is the only place a source may come from:\n${research.slice(0, 20000)}`
+      : `\n\nNo research was gathered for this meeting, so there is nothing to draw a source from. Return an empty sourceNote.`
+  }\n\nThe writer's own question${
+    question.category ? `, filed under "${question.category}"` : ""
+  }:\n${question.text}`;
+
+  const allow = allowedNames(meeting.attendees);
+  let out: FilledQuestion = { followUp: "", why: "", forWhom: "", sourceNote: "" };
+
+  // Asking is not enough, so the probe is checked. It is said out loud, which
+  // makes a named source in it the exact thing the writer has twice asked not
+  // to be given; the offending phrase goes back quoted, once.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const dirty = attempt ? namedSource(out.followUp, allow) : null;
+    const res = await anthropic().messages.create({
+      model: WRITER_MODEL,
+      max_tokens: 1200,
+      output_config: { format: { type: "json_schema", schema: FILL_SCHEMA } },
+      system,
+      messages: [
+        {
+          role: "user",
+          content: dirty
+            ? `${base}\n\nYou wrote this probe: ${out.followUp}\nIt names "${dirty}", and the probe is said out loud, so it cannot name anyone. Ask the thing underneath the finding instead, just as specific, with the name taken out. The name can stay in sourceNote, where the writer reads it rather than says it.`
+            : base,
+        },
+      ],
+    });
+    if (res.stop_reason === "refusal") break;
+    const parsed = JSON.parse(firstText(res) || "{}");
+    out = {
+      followUp: String(parsed?.followUp || "").trim(),
+      why: String(parsed?.why || "").trim(),
+      forWhom: String(parsed?.forWhom || "").trim(),
+      // With nothing handed in to draw from, anything it names came out of
+      // its own memory, which is the one place a source may not come from.
+      sourceNote: research.trim() ? String(parsed?.sourceNote || "").trim() : "",
+    };
+    if (!namedSource(out.followUp, allow)) return out;
+  }
+
+  // Asked twice and still naming someone. They get no probe rather than that
+  // probe; the source still reaches them in sourceNote, where it belongs.
+  if (namedSource(out.followUp, allow)) {
+    console.warn(`[questions] probe would not come clean, dropped it: ${out.followUp.slice(0, 60)}`);
+    out = { ...out, followUp: "" };
+  }
+  return out;
+}
+
 export async function writeQuestions({
   meeting,
   kolBlock = "",

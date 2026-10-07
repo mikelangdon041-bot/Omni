@@ -27,6 +27,8 @@ export const WRITER_MODEL = process.env.ANTHROPIC_WRITER_MODEL || "claude-opus-4
 export const RESEARCH_MODEL = process.env.ANTHROPIC_RESEARCH_MODEL || "claude-sonnet-5";
 
 // Cheap, fast model for the small transformations that don't need the writer
-// model: condensing a bullet, drafting a recap email from notes that already
-// exist. Both are rewrites of text we already have, not fresh reasoning.
+// model: condensing a bullet, a title, a quick list. Rewrites of text we
+// already have, not fresh reasoning. The recap email moved to the writer
+// model: it goes out under the person's name, and the quick model's version
+// read like a form letter however the prompt asked.
 export const QUICK_MODEL = process.env.ANTHROPIC_QUICK_MODEL || "claude-haiku-4-5";

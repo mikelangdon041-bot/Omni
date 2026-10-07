@@ -8,7 +8,8 @@
 // Rather than have two prompts drift apart, the model half lives here and both
 // routes call it.
 
-import { anthropic, WRITER_MODEL } from "@/lib/anthropic";
+import { anthropic, QUICK_MODEL, WRITER_MODEL } from "@/lib/anthropic";
+import { applySpellings, spellingPromptBlock, type Spelling } from "./spellings";
 
 export const NO_DASH_RULE =
   "Never use an em dash or an en dash. Not to join clauses, not as an aside, not before a list. Use a comma, a semicolon, a colon or a full stop instead. Hyphens inside compound words (tier-one, endo-first, one-on-one) are fine.";
@@ -123,6 +124,8 @@ export interface CaptureInput {
   hint?: string;
   ownNotes?: string;
   emphasizeNotes?: boolean;
+  /** Words the user has corrected in earlier meetings (see spellings.ts). */
+  spellings?: Spelling[];
 }
 
 export interface CaptureOutput {
@@ -150,6 +153,8 @@ export async function captureFromTranscript(input: CaptureInput): Promise<Captur
   // priority signal rather than as one more piece of context.
   const ownNotes = String(input.ownNotes || "").slice(0, 20000);
   const emphasizeNotes = input.emphasizeNotes !== false;
+  const spellings = input.spellings || [];
+  const spellingBlock = spellingPromptBlock(spellings);
 
   const res = await anthropic().messages.create({
     model: WRITER_MODEL,
@@ -197,7 +202,7 @@ Write what is now true, decided, or open — not who uttered it:
   BAD:  "I stated they know nothing about this territory and only wanted the MSL to walk them through it."
   GOOD: "The territory review is for orientation — colour and background a list cannot give, plus who the key people are. Explicitly not a performance review."
   BAD:  "I committed to following up with team members."
-  GOOD: nothing — a commitment is not a note. It belongs in actions.
+  GOOD: "The morale concerns need a follow-up with the wider team." The subject and why it matters stay in the notes; who does what goes in actions.
 
 Most bullets need no attribution at all. Add the bracketed name only where a reader would act differently for knowing who holds the view: a contested position, an unresolved disagreement, a commitment someone owns. Shared context, agreed facts and background carry no name. If more than about a third of your bullets end in a name, you are over-attributing and should strip the ones that do not change what the reader does.
 
@@ -208,12 +213,18 @@ Also:
 - Where people disagreed, give the resolved position first and then what is still open, rather than replaying both sides in sequence. Where nothing was resolved, say so and say what would settle it.
 - A reader who was not in the meeting should skim this and know where things stand — not reconstruct who talked when.
 
-BEFORE YOU FINISH: reread every bullet you have written. If it describes someone saying, thinking or feeling something rather than stating what is true, decided or open, rewrite it. If a bullet is really a commitment, move it to actions and delete it from the notes.
+EVERY FOLLOW-UP HAS A HOME IN THE NOTES. A reader who sees a follow-up must be able to find, in the notes, what it is about and why it came up. When part of the conversation produced nothing but a next step, usually the last few minutes, it still gets a bullet saying what was discussed: what the thing is, what state it is in, what was agreed about it. A follow-up that mentions something the notes never mention is a sign that a topic was dropped. Put it back.
+
+BEFORE YOU FINISH: reread every bullet you have written. If it describes someone saying, thinking or feeling something rather than stating what is true, decided or open, rewrite it. If a bullet is only a promise ("I will send…"), reword it as what was decided and put the promise in actions. Then read the actions one by one and check each has a bullet behind it.
 - actions: every concrete follow-up the recording implies or someone promised, each as one imperative sentence, with the owner and any deadline when stated (e.g. "Send Dr. Chen the phase 3 subgroup data by Friday"). Only real commitments and next steps — not topics, not general observations. Empty array if there genuinely are none.
 - smallTalk: meetings usually open with pleasantries — greetings, travel, weather, weekend plans, waiting for people to join, tech checks — before anyone says anything substantive. Never make a section for it.
   - found: true only when there is a genuine run of opening pleasantries. A one-line "hi, how are you" before real content does not count.
   - description: what it was, 3-8 words ("greetings and weekend plans", "waiting for Dr. Ruiz to join").
   - firstSubstantiveLine: the first 8-15 words of the first sentence that carries real content, copied VERBATIM from the transcript — exact characters, including any speaker label. It is used to locate the cut point, so a paraphrase is useless. Empty string when found is false.${
+      spellingBlock ? `
+
+${spellingBlock}` : ""
+    }${
       ownNotes
         ? emphasizeNotes
           ? `
@@ -248,18 +259,144 @@ THE WRITER'S OWN NOTES are background context. Use them to understand the meetin
   // Surfaced so the caller can say the notes are unattributed rather than
   // silently presenting a guess as fact.
   const { grounded, dropped } = verifyPositions(parsed.positions, transcript);
+  // The prompt asks for the right spellings; this makes sure of them.
+  const actions: string[] = (Array.isArray(parsed.actions) ? parsed.actions : []).map(
+    (a: unknown) => applySpellings(stripDashes(String(a)), spellings),
+  );
+  let notes = applySpellings(stripDashes(String(parsed.notes || "")), spellings, true);
+  // The prompt also asks for every follow-up to have a bullet behind it. This
+  // checks, and asks again for just the missing ones when it does not.
+  const orphans = orphanedFollowUps(notes, actions, transcript);
+  if (orphans.length) {
+    notes = applySpellings(await fillOrphanedFollowUps(notes, orphans, transcript), spellings, true);
+  }
   return {
     positions: grounded,
     ungrounded: dropped,
-    title: String(parsed.title || "").slice(0, 200),
-    notes: stripDashes(String(parsed.notes || "")),
-    actions: (Array.isArray(parsed.actions) ? parsed.actions : []).map((a: unknown) =>
-      stripDashes(String(a)),
-    ),
+    title: applySpellings(String(parsed.title || "").slice(0, 200), spellings),
+    notes,
+    actions,
     smallTalk: {
       found: Boolean(parsed.smallTalk?.found),
       description: String(parsed.smallTalk?.description || ""),
       firstSubstantiveLine: String(parsed.smallTalk?.firstSubstantiveLine || ""),
     },
   };
+}
+
+// --- Follow-ups with nothing behind them ------------------------------------
+//
+// A follow-up that names something the notes never mention is the visible
+// trace of a dropped topic: "Update Santan and keep it current" under notes
+// that say nothing about Santan, so nobody reading them later knows what it is
+// or why it came up. It happens most at the end of a long meeting, where the
+// last few minutes produced a to-do and nothing else.
+//
+// The names are the test because they are what a reader would look for. A
+// capitalised word past the first (the first is the verb), or an acronym,
+// that appears in a follow-up and nowhere in the notes. Speaker labels and
+// the owner in brackets are left out: notes deliberately carry few names.
+
+const NOT_A_SUBJECT = new Set([
+  "Speaker", "The", "This", "That", "Then", "And", "But", "With", "For", "From",
+  "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+  "January", "February", "March", "April", "May", "June", "July", "August",
+  "September", "October", "November", "December",
+]);
+
+export interface OrphanedFollowUp {
+  action: string;
+  /** The words in it that the notes never mention. */
+  missing: string[];
+}
+
+function speakerLabels(transcript: string): Set<string> {
+  const out = new Set<string>();
+  for (const line of transcript.split("\n")) {
+    const m = line.match(/^([^:]{1,40}):\s/);
+    if (m) for (const w of m[1].split(/\s+/)) out.add(w.replace(/[^A-Za-z0-9]/g, ""));
+  }
+  return out;
+}
+
+export function orphanedFollowUps(
+  notesHtml: string,
+  actions: string[],
+  transcript = "",
+): OrphanedFollowUp[] {
+  const notes = ` ${normalizeForMatch(notesHtml.replace(/<[^>]+>/g, " "))} `;
+  const labels = speakerLabels(transcript);
+  const out: OrphanedFollowUp[] = [];
+  for (const action of actions) {
+    const words = action
+      .replace(/\([^)]*\)/g, " ")
+      .split(/\s+/)
+      .map((w) => w.replace(/['’]s$/, "").replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, ""))
+      .filter(Boolean);
+    const terms = words
+      .slice(1)
+      .filter((w) => w.length >= 3 && /^[A-Z]/.test(w) && !NOT_A_SUBJECT.has(w) && !labels.has(w));
+    const missing = [...new Set(terms)].filter(
+      (t) => !notes.includes(` ${normalizeForMatch(t)} `),
+    );
+    if (missing.length) out.push({ action, missing });
+  }
+  return out;
+}
+
+const ADDITIONS_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    additions: { type: "array" as const, items: { type: "string" as const } },
+  },
+  required: ["additions"],
+  additionalProperties: false,
+};
+
+/**
+ * Add a bullet to the notes for each follow-up that has none, from what the
+ * transcript says about it. Only adds: the notes that exist are not sent back
+ * to be rewritten, so nothing already there can change. Any failure returns
+ * the notes as they were, which is no worse than before the check existed.
+ */
+export async function fillOrphanedFollowUps(
+  notesHtml: string,
+  orphans: OrphanedFollowUp[],
+  transcript: string,
+): Promise<string> {
+  try {
+    const res = await anthropic().messages.create({
+      model: QUICK_MODEL,
+      max_tokens: 2000,
+      output_config: { format: { type: "json_schema", schema: ADDITIONS_SCHEMA } },
+      system: `Some follow-ups from a meeting name things the meeting notes never mention, so a reader cannot tell what they are about. For each follow-up listed, write ONE bullet for the notes from what the transcript says about it.
+
+- Each addition is a single top-level <li>: one complete sentence saying what the thing is and where it stands, then, only if the transcript has them, a nested <ul> of one to three specifics. HTML using only <li>, <ul>, <b>, <i>.
+- Only what the transcript says. If it says nothing beyond the follow-up itself, the bullet says just that much, plainly, and stops.
+- It is a note, not a to-do: never an imperative, and never a copy of the follow-up. The follow-up says "Send the deck to Dr. Chen"; the note says "The updated deck has not gone to Dr. Chen yet."
+- State what is true, decided or open. Never open with a person or pronoun followed by a verb of speaking (said, asked, noted, mentioned...).
+- One addition per follow-up listed, in the same order. Do not repeat anything already in the notes.
+- ${NO_DASH_RULE}`,
+      messages: [
+        {
+          role: "user",
+          content: `The notes so far:\n${notesHtml}\n\nFollow-ups with nothing behind them:\n${orphans
+            .map((o) => `- ${o.action} (not in the notes: ${o.missing.join(", ")})`)
+            .join("\n")}\n\nTranscript:\n${transcript.slice(0, 120000)}`,
+        },
+      ],
+    });
+    const parsed = JSON.parse(firstText(res) || "{}");
+    const additions = (Array.isArray(parsed.additions) ? parsed.additions : [])
+      .map((a: unknown) => stripDashes(String(a).trim()))
+      .filter((a: string) => /^<li[\s>][\s\S]*<\/li>$/i.test(a));
+    if (!additions.length) return notesHtml;
+    const trimmed = notesHtml.trim();
+    const at = trimmed.lastIndexOf("</ul>");
+    return /<\/ul>$/i.test(trimmed)
+      ? `${trimmed.slice(0, at)}${additions.join("")}${trimmed.slice(at)}`
+      : `${trimmed}<ul>${additions.join("")}</ul>`;
+  } catch {
+    return notesHtml;
+  }
 }

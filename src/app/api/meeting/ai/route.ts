@@ -8,6 +8,8 @@ import {
   captureFromTranscript,
   stripDashes,
 } from "@/lib/meetingprep/captureAi";
+import { loadSpellings } from "@/lib/meetingprep/spellings";
+import { voiceFor, writeRecap } from "@/lib/meetingprep/recapAi";
 import { stripHtml } from "@/lib/territory/utils";
 import {
   BriefRefusal,
@@ -18,7 +20,7 @@ import {
   type MeetingPayload,
 } from "@/lib/meetingprep/briefAi";
 import { MEETING_TYPES } from "@/lib/meetingprep/types";
-import { writeQuestions, writeVariants } from "@/lib/meetingprep/questionsAi";
+import { fillOutQuestion, writeQuestions, writeVariants } from "@/lib/meetingprep/questionsAi";
 import { reviewPrep } from "@/lib/meetingprep/reviewAi";
 
 export const runtime = "nodejs";
@@ -49,6 +51,8 @@ export const maxDuration = 300;
 //   debrief  { transcript, context }           → { summary, actions:[] }
 //   capture  { transcript, hint?, ownNotes?, emphasizeNotes? }
 //                                              → { title, notes, actions:[], smallTalk }
+//   recap_email { notes, actions:[], title?, when?, sender?, recipients:[],
+//              guidance?, previous? }          → { subject, body }
 
 function firstText(res: { content: { type: string; text?: string }[] }): string {
   const block = res.content.find((b) => b.type === "text");
@@ -193,16 +197,6 @@ const DEBRIEF_SCHEMA = {
   additionalProperties: false,
 };
 
-const EMAIL_SCHEMA = {
-  type: "object" as const,
-  properties: {
-    subject: { type: "string" as const },
-    body: { type: "string" as const },
-  },
-  required: ["subject", "body"],
-  additionalProperties: false,
-};
-
 const OUTLINE_RULE = `- summary: a nested bullet outline as plain text. Every line starts with "- ", and each level of nesting is indented exactly 2 more spaces than its parent. Go 2-3 levels deep: top-level bullets are the topics that came up, children are the specifics said about them (positions taken, decisions, numbers, objections, names). Complete sentences. Preserve names, figures, drug/product names and dates exactly as spoken. Never invent anything that wasn't said. No bold, no markdown, no headers.
 - actions: every concrete follow-up the recording implies or someone promised, each as one imperative sentence, with the owner and any deadline when stated (e.g. "Send Dr. Chen the phase 3 subgroup data by Friday"). Only real commitments and next steps — not topics, not general observations. Empty array if there genuinely are none.`;
 
@@ -317,6 +311,27 @@ export async function POST(req: Request) {
         standing: String(body?.standing || "").slice(0, 2000),
       });
       return NextResponse.json({ variants });
+    }
+
+    // A question the writer typed themselves, finished off: the probe it went
+    // in without, and backing from the research already on this meeting when
+    // that research has any. Their question is not sent back and cannot
+    // change — there is no field here to change it with.
+    if (action === "probe") {
+      const meeting: MeetingPayload = body?.meeting || {};
+      const kolBlock = await kolBlockFor(supabase, String(body?.kolId || ""));
+      const q = body?.question || {};
+      const filled = await fillOutQuestion({
+        meeting,
+        kolBlock,
+        research: String(body?.research || "").slice(0, 20000),
+        question: {
+          text: String(q?.text || "").slice(0, 2000),
+          category: String(q?.category || "").slice(0, 120),
+        },
+        standing: String(body?.standing || "").slice(0, 2000),
+      });
+      return NextResponse.json(filled);
     }
 
     // The subject changed and the meeting is still called what it was called
@@ -516,7 +531,12 @@ ${OUTLINE_RULE}`,
       if (!String(body?.transcript || "").trim())
         return NextResponse.json({ error: "No transcript provided" }, { status: 400 });
       try {
-        return NextResponse.json(await captureFromTranscript(body));
+        return NextResponse.json(
+          await captureFromTranscript({
+            ...body,
+            spellings: await loadSpellings(supabase, user.id),
+          }),
+        );
       } catch (e) {
         if (e instanceof CaptureRefusal)
           return NextResponse.json({ error: e.message }, { status: 502 });
@@ -548,69 +568,26 @@ ${OUTLINE_RULE}`,
       return NextResponse.json({ fragment: stripDashes(firstText(res)) });
     }
 
-    // Draft the "here's what we agreed" email people send after a meeting.
+    // Draft the friendly follow-up people send after a meeting. See
+    // lib/meetingprep/recapAi.ts.
     if (action === "recap_email") {
-      const notes = String(body?.notes || "").slice(0, 40000);
-      const acts: string[] = Array.isArray(body?.actions)
-        ? body.actions.map(String).slice(0, 40)
-        : [];
+      const notes = String(body?.notes || "");
+      const acts: string[] = Array.isArray(body?.actions) ? body.actions.map(String) : [];
       if (!notes.trim() && acts.length === 0)
         return NextResponse.json({ error: "Nothing to write about" }, { status: 400 });
-
-      const meetingTitle = String(body?.title || "").slice(0, 200);
-      const when = String(body?.when || "").slice(0, 60);
-      const sender = String(body?.sender || "").slice(0, 80);
-      const recipients = Array.isArray(body?.recipients)
-        ? body.recipients.map(String).slice(0, 20)
-        : [];
-
-      const res = await anthropic().messages.create({
-        model: QUICK_MODEL,
-        max_tokens: 3000,
-        output_config: { format: { type: "json_schema", schema: EMAIL_SCHEMA } },
-        system: `You write the short recap email someone sends after a meeting so everyone has the same understanding of what was agreed. Plain, professional, warm without being effusive.
-
-Shape it exactly like this:
-- One line thanking them for the time, naming the meeting or its subject.
-- One short line framing the summary ("Here's a quick recap of what we covered and what happens next" or similar). Vary it; don't use the same sentence every time.
-- The substance as plain-text bullets, each starting with a bullet character and a space: "• ". Never a hyphen or a dash. Indent a sub-point with two spaces then "◦ ". Keep them tight; this is an email, not the full notes. Merge or drop detail that does not matter to the recipients.
-- If there are follow-ups, a short "Next steps" block, each line also starting "• " and naming the owner where it is known.
-- A closing line inviting corrections, which is the real reason people send this: "If I've missed or misstated anything, let me know."
-- Sign off with the sender's name.
-
-Rules:
-- body is PLAIN TEXT, not HTML. Blank lines between blocks. No markdown, no bold, no headers, no emoji.
-- Write it as the sender, in the first person.
-- Only include what is in the notes and follow-ups. Never invent an agreement, a deadline or an owner.
-- Where the notes record something as unresolved, say it is still open rather than implying it was settled.
-- subject: short and specific, no "Re:", no quotes. Name the meeting and the date if known.
-- ${NO_DASH_RULE}`,
-        messages: [
-          {
-            role: "user",
-            content: [
-              meetingTitle && `Meeting: ${meetingTitle}`,
-              when && `When: ${when}`,
-              sender && `Sender (write as this person): ${sender}`,
-              recipients.length && `Recipients: ${recipients.join(", ")}`,
-              `Notes:\n${notes}`,
-              acts.length && `Follow-ups:\n${acts.map((a) => `- ${a}`).join("\n")}`,
-            ]
-              .filter(Boolean)
-              .join("\n\n"),
-          },
-        ],
-      });
-      const parsed = JSON.parse(firstText(res) || "{}");
-      return NextResponse.json({
-        subject: stripDashes(String(parsed.subject || "")),
-        // Backstop for the bullet character: models default to "- " however
-        // firmly the prompt says otherwise.
-        body: stripDashes(String(parsed.body || ""))
-          .replace(/^(\s*)[-*]\s+/gm, (_m, indent) =>
-            indent.length >= 2 ? `${indent}◦ ` : "• ",
-          ),
-      });
+      return NextResponse.json(
+        await writeRecap({
+          notes,
+          actions: acts,
+          title: String(body?.title || ""),
+          when: String(body?.when || ""),
+          sender: String(body?.sender || ""),
+          recipients: Array.isArray(body?.recipients) ? body.recipients.map(String) : [],
+          guidance: String(body?.guidance || ""),
+          previous: String(body?.previous || ""),
+          voice: await voiceFor(supabase, user.id),
+        }),
+      );
     }
 
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });

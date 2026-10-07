@@ -4,6 +4,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { dropCached, getCached, setCached } from "@/lib/cache";
 import type { FolderKind, MpFolder, MpMeeting, MpSettings } from "./types";
+import {
+  forgetSpelling,
+  loadSpellings,
+  normalizeSpellings,
+  rememberSpelling,
+  type Spelling,
+} from "./spellings";
 
 const supabase = createClient();
 
@@ -383,3 +390,47 @@ export function useMpFolders(userId: string | null) {
 }
 
 export { useUserId } from "@/lib/territory/hooks";
+
+// The words this user has taught the notes to spell (see spellings.ts). Every
+// change re-reads the stored list first, so a correction made in another tab
+// or on the recorder's review screen is added to rather than written over.
+export function useSpellings(userId: string | null) {
+  const [spellings, setSpellings] = useState<Spelling[]>([]);
+
+  useEffect(() => {
+    if (!userId) return;
+    let active = true;
+    void loadSpellings(supabase, userId).then((list) => {
+      if (active) setSpellings(list);
+    });
+    return () => {
+      active = false;
+    };
+  }, [userId]);
+
+  const change = useCallback(
+    async (fn: (list: Spelling[]) => Spelling[]) => {
+      if (!userId) return;
+      const next = fn(await loadSpellings(supabase, userId));
+      const { data, error } = await supabase
+        .from("mp_settings")
+        .upsert({ user_id: userId, spellings: next }, { onConflict: "user_id" })
+        .select("spellings")
+        .single();
+      if (error || !data) throw new Error(error?.message || "Could not save the spelling");
+      setSpellings(normalizeSpellings((data as { spellings?: unknown }).spellings));
+    },
+    [userId],
+  );
+
+  const remember = useCallback(
+    (wrong: string, right: string) => change((l) => rememberSpelling(l, wrong, right)),
+    [change],
+  );
+  const forget = useCallback(
+    (wrong: string) => change((l) => forgetSpelling(l, wrong)),
+    [change],
+  );
+
+  return { spellings, remember, forget };
+}

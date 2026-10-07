@@ -4,6 +4,7 @@ import { routeAuth } from "@/lib/supabase/route";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { CaptureRefusal, captureFromTranscript } from "@/lib/meetingprep/captureAi";
 import { exportHeaderHtml, tidyNotesHtml } from "@/lib/meetingprep/notes";
+import { loadSpellings } from "@/lib/meetingprep/spellings";
 import { createPage, prependToPage } from "@/lib/microsoft/graph";
 
 export const runtime = "nodejs";
@@ -84,6 +85,7 @@ export async function POST(req: Request) {
       hint: String(body.hint || ""),
       ownNotes: String(body.ownNotes || ""),
       emphasizeNotes: body.emphasizeNotes !== false,
+      spellings: await loadSpellings(supabase, user.id),
     });
 
     // Same rule the review screen uses: only trim when the quoted first

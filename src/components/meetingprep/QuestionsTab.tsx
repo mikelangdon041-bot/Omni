@@ -111,6 +111,8 @@ export function QuestionsTab({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [openCats, setOpenCats] = useState<Set<string>>(new Set());
   const [dragId, setDragId] = useState<string | null>(null);
+  // The one question having its probe written, so that row can say so.
+  const [fillingId, setFillingId] = useState<string | null>(null);
 
   // `items` is everything ever written for this meeting, including what has
   // been binned. `live` is what any list should show. Deleting puts a
@@ -124,6 +126,14 @@ export function QuestionsTab({
     () => live.filter((q) => q.picked).sort((a, b) => a.order - b.order),
     [live],
   );
+
+  // How long the list runs. Backups are left out of it on purpose: they are
+  // the ones held back for if the room goes quiet, so counting them would
+  // time a session where everything went wrong, which is not the number
+  // anyone is standing there trying to work out.
+  const pace = m.questions?.paceMin || 3;
+  const askingCount = useMemo(() => picked.filter((q) => !q.backup).length, [picked]);
+  const backupCount = picked.length - askingCount;
 
 
   // Categories in the order the model's strongest question in each appears,
@@ -208,6 +218,66 @@ export function QuestionsTab({
 
   function unpick(q: QuestionItem) {
     patch(q.id, { picked: false, backup: false, asked: false });
+  }
+
+  /**
+   * Finishes off a question the writer typed themselves.
+   *
+   * Theirs go into the bank bare — no probe, no reason, no sign that the
+   * research already sitting on this meeting has anything to say about them —
+   * so their own questions read as the thin ones in their own list. This adds
+   * the probe and, where the notes genuinely carry one, the source behind it.
+   * Their words are never touched: the route has no field to send a different
+   * question back in.
+   *
+   * `base` is for the question that was added a moment ago, which the saved
+   * list this render closed over does not have in it yet.
+   */
+  async function fillOut(q: QuestionItem, base?: QuestionItem[]) {
+    setFillingId(q.id);
+    try {
+      const res = await fetch("/api/meeting/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          action: "probe",
+          meeting: payloadOf(m),
+          kolId: m.kol_id || "",
+          // Notes about a subject this meeting is no longer on are not
+          // backing for anything, so they are not offered as any.
+          research: researchStale ? "" : m.brief?.research?.notes || "",
+          question: { text: q.text, category: q.category },
+          standing: guidance,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Could not write a probe for that one");
+      const followUp = String(json.followUp || "").trim();
+      const sourceNote = String(json.sourceNote || "").trim();
+      const why = String(json.why || "").trim();
+      const forWhom = String(json.forWhom || "").trim();
+      if (!followUp && !sourceNote) {
+        toast("info", "Nothing worth adding to that one.");
+        return;
+      }
+      const p: Partial<QuestionItem> = {
+        ...(followUp ? { followUp } : {}),
+        ...(sourceNote ? { sourceNote } : {}),
+        // Into the gaps only. Whatever they filled in themselves stands.
+        ...(why && !q.why ? { why } : {}),
+        ...(forWhom && !q.forWhom ? { forWhom } : {}),
+      };
+      setItems((base || items).map((x) => (x.id === q.id ? { ...x, ...p } : x)));
+      toast(
+        "success",
+        sourceNote ? "Probe written, with a source from the research" : "Probe written",
+      );
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setFillingId(null);
+    }
   }
 
   /** Move a picked question onto another's position. */
@@ -549,9 +619,18 @@ export function QuestionsTab({
             {picked.length}
           </span>
           <span className="flex-1" />
-          <span className="hidden text-xs text-muted sm:block">
-            {picked.length ? "The order you'll ask them in" : "Nothing picked yet"}
-          </span>
+          {picked.length ? (
+            <RunTime
+              asking={askingCount}
+              backups={backupCount}
+              pace={pace}
+              slot={m.duration_min}
+              onPace={(n) => save({ questions: { ...m.questions, paceMin: n } })}
+              onUseAsSlot={(mins) => save({ duration_min: mins })}
+            />
+          ) : (
+            <span className="hidden text-xs text-muted sm:block">Nothing picked yet</span>
+          )}
         </div>
         <div className="p-3">
         {picked.length === 0 ? (
@@ -632,20 +711,36 @@ export function QuestionsTab({
                         <span className="rounded-full bg-canvas px-1.5 py-0.5 text-[10px] font-medium">
                           {q.source === "user" ? "Yours" : q.category}
                         </span>
+                        {/* Held back, and until this chip existed the only
+                            sign of it was the greyed text above — which
+                            reads as a glitch, not a state, when the star
+                            that explains it only appears on hover. */}
+                        {q.backup && (
+                          <span className="rounded-full bg-canvas px-1.5 py-0.5 text-[10px] font-medium">
+                            Backup
+                          </span>
+                        )}
                         {q.forWhom && <span>For: {q.forWhom}</span>}
                       </div>
-                      {q.followUp && (
-                        <p className="mt-1 text-xs italic text-muted">
-                          Probe: {q.followUp}
-                        </p>
-                      )}
+                      <ProbeLine
+                        q={q}
+                        busy={fillingId === q.id}
+                        onFill={() => void fillOut(q)}
+                      />
                       <NoteLine q={q} openNote={openNote} setOpenNote={setOpenNote} onPatch={(p) => patch(q.id, p)} />
                     </>
                   )}
                 </div>
                 {/* Quiet until you are on the row. Six icons on every line
                     is what made this page look like a control panel. */}
-                <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition focus-within:opacity-100 group-hover/row:opacity-100 max-sm:opacity-100">
+                {/* Quiet, not hidden. These were invisible until you hovered,
+                    which is how the writer came to ask for a feature that was
+                    already here: three other ways to ask a question, behind
+                    the wand. Mobile has always shown them, so the control
+                    panel this was guarding against was only ever the desktop
+                    one, and a soft grey keeps that at bay without hiding the
+                    row's actions from the person looking for them. */}
+                <div className="flex shrink-0 items-center gap-0.5 opacity-60 transition focus-within:opacity-100 group-hover/row:opacity-100 max-sm:opacity-100">
                   <IconBtn
                     label={q.backup ? "Not a backup" : "Hold as a backup"}
                     active={q.backup}
@@ -777,14 +872,16 @@ export function QuestionsTab({
                             {q.why}
                             {q.forWhom ? ` · For: ${q.forWhom}` : ""}
                           </p>
-                          {q.followUp && (
-                            <p className="mt-1 text-xs italic text-muted">Probe: {q.followUp}</p>
-                          )}
+                          <ProbeLine
+                            q={q}
+                            busy={fillingId === q.id}
+                            onFill={() => void fillOut(q)}
+                          />
                           <NoteLine q={q} openNote={openNote} setOpenNote={setOpenNote} onPatch={(p) => patch(q.id, p)} />
                         </>
                       )}
                     </div>
-                    <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition focus-within:opacity-100 group-hover/row:opacity-100 max-sm:opacity-100">
+                    <div className="flex shrink-0 items-center gap-0.5 opacity-60 transition focus-within:opacity-100 group-hover/row:opacity-100 max-sm:opacity-100">
                       <IconBtn
                         label={
                           q.locked
@@ -949,24 +1046,27 @@ export function QuestionsTab({
         categories={allCategories}
         onAdd={(text, category, followUp, forWhom) => {
           const maxOrder = picked.length ? Math.max(...picked.map((p) => p.order)) : -1;
-          setItems([
-            ...items,
-            {
-              id: newId(),
-              text,
-              category: category || "Mine",
-              why: "",
-              followUp,
-              forWhom,
-              rank: 0,
-              picked: true,
-              backup: false,
-              asked: false,
-              order: maxOrder + 1,
-              source: "user",
-            },
-          ]);
+          const fresh: QuestionItem = {
+            id: newId(),
+            text,
+            category: category || "Mine",
+            why: "",
+            followUp,
+            forWhom,
+            rank: 0,
+            picked: true,
+            backup: false,
+            asked: false,
+            order: maxOrder + 1,
+            source: "user",
+          };
+          const next = [...items, fresh];
+          setItems(next);
           setShowAdd(false);
+          // No probe typed in means they do not have one, not that they want
+          // none — the box says so. Writing it here saves them adding the
+          // question and then asking for the same thing a second time.
+          if (!followUp) void fillOut(fresh, next);
         }}
       />
     </div>
@@ -981,6 +1081,118 @@ interface WrittenShape {
   followUp: string;
   forWhom: string;
   rank: number;
+}
+
+/**
+ * How long the list will take to get through.
+ *
+ * The question a moderator is actually standing there trying to answer is not
+ * "are these good questions" — they can see that — but "do these fit". Fourteen
+ * questions is a count. Forty two minutes against a forty five minute slot is
+ * a decision, and it is the one thing the page could not tell them.
+ *
+ * The pace is on screen and theirs to change rather than a constant buried in
+ * the code. There is no right answer to how long an answer runs: a panel of
+ * four and a one to one are different meetings, and a number nobody can see
+ * is a number nobody can disagree with.
+ */
+function RunTime({
+  asking,
+  backups,
+  pace,
+  slot,
+  onPace,
+  onUseAsSlot,
+}: {
+  asking: number;
+  backups: number;
+  pace: number;
+  /** The session length off Setup, when the writer has given one. */
+  slot?: number | null;
+  onPace: (minutes: number) => void;
+  onUseAsSlot: (minutes: number) => void;
+}) {
+  const total = asking * pace;
+  const over = Boolean(slot && total > slot);
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 text-xs">
+      <span className={over ? "font-semibold text-amber-700" : "font-medium text-ink"}>
+        about {total} min{slot ? ` of your ${slot}` : ""}
+        {over ? ` — ${total - slot!} over` : ""}
+      </span>
+      {backups > 0 && (
+        <span className="text-muted" title="Backups are not in the total">
+          +{backups * pace} held back
+        </span>
+      )}
+      <select
+        value={pace}
+        onChange={(e) => onPace(Number(e.target.value))}
+        title="How long you expect an answer to run"
+        className="rounded-md border border-border bg-surface px-1.5 py-0.5 text-xs text-muted outline-none focus:border-[var(--accent)]"
+      >
+        {[1, 2, 3, 4, 5].map((n) => (
+          <option key={n} value={n}>
+            {n} min an answer
+          </option>
+        ))}
+      </select>
+      {/* Nothing to measure against until the slot length is known, and this
+          is the moment they know it. */}
+      {!slot && total > 0 && (
+        <button
+          type="button"
+          onClick={() => onUseAsSlot(total)}
+          className="rounded-md px-1.5 py-0.5 font-medium text-[var(--accent)] transition hover:bg-[var(--accent-soft)]"
+        >
+          Use as the meeting length
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The probe under a question, and the way to get one where there is none.
+ *
+ * Every question the model writes comes with a probe; the ones the writer
+ * types do not, which left their own questions the thin ones in their own
+ * list. The offer empties itself — once there is a probe, this is just the
+ * probe — so it can sit in the row rather than in the hover rail. That is
+ * deliberate: an affordance you cannot see until you hover is how the greyed
+ * backup rows in this same list went unexplained.
+ *
+ * The source line underneath is read, never said. It is backing the writer
+ * can choose to cite, not a name to open a question with, which is the thing
+ * they have twice asked not to be handed.
+ */
+function ProbeLine({
+  q,
+  busy,
+  onFill,
+}: {
+  q: QuestionItem;
+  busy: boolean;
+  onFill: () => void;
+}) {
+  return (
+    <>
+      {q.followUp ? (
+        <p className="mt-1 text-xs italic text-muted">Probe: {q.followUp}</p>
+      ) : (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onFill}
+          className="mt-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium text-[var(--accent)] transition hover:bg-[var(--accent-soft)] disabled:opacity-60"
+        >
+          <Sparkles size={12} className={busy ? "animate-pulse" : ""} />
+          {busy ? "Writing the probe…" : "Write the probe"}
+        </button>
+      )}
+      {q.sourceNote && <p className="mt-1 text-xs text-muted">Source: {q.sourceNote}</p>}
+    </>
+  );
 }
 
 /**
@@ -1237,7 +1449,7 @@ function AddOwnModal({
           label="Probe, for when the answer is thin (optional)"
           value={followUp}
           onChange={(e) => setFollowUp(e.target.value)}
-          placeholder="What you ask next if they give you nothing"
+          placeholder="Leave it blank and I'll write one, with a source if the research has one"
         />
         <Input
           label="Who to put it to (optional)"
@@ -1367,6 +1579,12 @@ function QuestionEditor({
         value={q.forWhom}
         onChange={(e) => onPatch({ forWhom: e.target.value })}
         placeholder="Everyone"
+      />
+      <Input
+        label="The source behind it, for you to read, not to say"
+        value={q.sourceNote || ""}
+        onChange={(e) => onPatch({ sourceNote: e.target.value })}
+        placeholder="Nothing in the research backed this one up"
       />
       <Input
         label="Your note on why it's here"

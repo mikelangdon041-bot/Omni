@@ -339,7 +339,7 @@ export function BriefTab({
   // Empty / generating state.
   if (!hasBrief) {
     return (
-      <div className="mx-auto grid max-w-3xl place-items-center rounded-xl border border-dashed border-border bg-surface px-6 py-16 text-center">
+      <div className="grid place-items-center rounded-xl border border-dashed border-border bg-surface px-6 py-16 text-center">
         {busy === "all" ? (
           <>
             <ProgressRing percent={progress} />
@@ -377,7 +377,7 @@ export function BriefTab({
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4">
+    <div className="space-y-4">
       {/* One banner, two reasons. The setup moving on is the writer's doing;
           the engine moving on is ours, and until this existed there was no
           way for the app to admit the second one had happened. */}

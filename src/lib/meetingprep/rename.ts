@@ -20,6 +20,21 @@ function boundedRx(phrase: string, flags = "g"): RegExp {
   return new RegExp(`(?<![A-Za-z0-9])${escapeRx(phrase)}(?![A-Za-z0-9])`, flags);
 }
 
+// Case decides how literal a match is. Anything typed with a capital in it is
+// a proper noun or an acronym and matches exactly as typed, so renaming "Will"
+// leaves the verb "will" alone. All lower case means the word itself, wherever
+// it sits in a sentence, so "santan" also finds the "Santan" that opens one.
+function rxFor(phrase: string, flags = "g"): RegExp {
+  const loose = phrase === phrase.toLowerCase() && !flags.includes("i");
+  return boundedRx(phrase, loose ? `${flags}i` : flags);
+}
+
+// A word matched at the start of a sentence keeps its capital when the
+// replacement was typed in lower case.
+function keepCapital(matched: string, to: string): string {
+  return /^[A-Z]/.test(matched) && /^[a-z]/.test(to) ? to[0].toUpperCase() + to.slice(1) : to;
+}
+
 const FIRST_PERSON = new Set(["I", "i", "me"]);
 
 // Rename `from` to `to` inside a plain string.
@@ -53,7 +68,7 @@ export function renameInText(text: string, from: string, to: string): string {
     );
   }
 
-  return text.replace(boundedRx(from), to);
+  return text.replace(rxFor(from), (matched) => keepCapital(matched, to));
 }
 
 // Same, but only touching text between tags so a name that collides with
@@ -70,7 +85,7 @@ export function renameInHtml(html: string, from: string, to: string): string {
 // rename will touch before it is applied.
 export function countMatches(text: string, phrase: string): number {
   if (!phrase.trim() || !text) return 0;
-  return (text.match(boundedRx(phrase)) || []).length;
+  return (text.match(rxFor(phrase)) || []).length;
 }
 
 export function countMatchesInHtml(html: string, phrase: string): number {

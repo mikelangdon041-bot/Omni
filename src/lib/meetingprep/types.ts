@@ -121,6 +121,16 @@ export interface QuestionItem {
   why: string;
   /** The probe for when the first answer is thin. */
   followUp: string;
+  /**
+   * A finding from the research this meeting was already prepared from, which
+   * backs this question up. The writer reads it; they never say it, because a
+   * consultancy's name inside a spoken line is the thing they have twice asked
+   * not to be handed. Empty whenever the research carries nothing that
+   * genuinely bears on this question, which is the usual answer and not a
+   * failure: a source stretched to fit is worse than none, since they may
+   * cite it in the room.
+   */
+  sourceNote?: string;
   /** Who to put it to, when that matters. Empty = anyone. */
   forWhom: string;
   /** The model's ranking across the batch it came from; 1 is strongest. */
@@ -168,6 +178,11 @@ export interface QuestionBank {
   // differently: guidance is a rule every question must pass, coverage is a
   // floor the bank as a whole has to clear, with no quota attached.
   coverage?: string;
+  // Minutes an answer runs, used to total up how long the list will take.
+  // Kept per meeting and set on screen rather than fixed in the code: a panel
+  // of four and a one to one are not the same meeting, and the writer is the
+  // one who knows which they are walking into.
+  paceMin?: number;
 }
 
 // One piece of advice from a read-through of the whole prep pack. The point

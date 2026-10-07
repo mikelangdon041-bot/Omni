@@ -6,7 +6,7 @@
 // can be pushed to the to-do list and — when a KOL is linked — logged into
 // Territory Planning.
 
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import {
   CheckCircle2,
   Copy,
@@ -28,6 +28,7 @@ import { SendToOneNote } from "@/components/meetingprep/SendToOneNote";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
+import { ReplaceModal } from "./ReplaceModal";
 import { RichText } from "@/components/ui/RichText";
 import {
   cleanNotesHtml,
@@ -47,6 +48,7 @@ import { TranscriptCapture } from "@/components/studio/TranscriptCapture";
 import { useKolLite } from "./KolLink";
 import { MentionedPeople } from "./MentionedPeople";
 import { logMeetingToTerritory } from "@/lib/meetingprep/territoryLog";
+import { useSpellings } from "@/lib/meetingprep/hooks";
 import {
   DEBRIEF_QUESTIONS,
   meetingContextText,
@@ -83,6 +85,27 @@ function detectSpeakers(transcript: string): string[] {
     .sort();
 }
 
+// A follow-up you can edit where it sits. A textarea rather than an input so a
+// long one wraps instead of scrolling sideways out of sight, grown to fit its
+// text so it still reads as a line in a list rather than a form.
+function GrowingText(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [props.value]);
+  return <textarea ref={ref} rows={1} {...props} />;
+}
+
+// The words picked out of a text field. A selection inside a textarea is not
+// part of the page's selection, so it has to be read off the field itself.
+function selectedInField(el: HTMLTextAreaElement | HTMLInputElement): string {
+  const text = el.value.slice(el.selectionStart ?? 0, el.selectionEnd ?? 0).trim();
+  return text.length > 0 && text.length <= 60 ? text : "";
+}
+
 export function DebriefTab({
   m,
   save,
@@ -103,7 +126,15 @@ export function DebriefTab({
   const [oneNoteOpen, setOneNoteOpen] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
   const [findWhat, setFindWhat] = useState("");
-  const [findWith, setFindWith] = useState("");
+  // Words picked out of a follow-up or the drafted email, offered for replacing
+  // the same way a selection in the notes is.
+  const [fieldPick, setFieldPick] = useState<{ text: string; top: number; left: number } | null>(
+    null,
+  );
+  const [mailPick, setMailPick] = useState("");
+  const [mailGuide, setMailGuide] = useState("");
+  const followUpsRef = useRef<HTMLDivElement>(null);
+  const { spellings, remember, forget } = useSpellings(userId);
   // Where in the notes the user last selected something, so the rename button
   // can appear next to it.
   const [pick, setPick] = useState<{ text: string; top: number; left: number } | null>(null);
@@ -391,17 +422,48 @@ export function DebriefTab({
 
   function openRenameFor(text: string) {
     setFindWhat(text);
-    setFindWith("");
     setPick(null);
+    setFieldPick(null);
+    setMailPick("");
     setFindOpen(true);
+  }
+
+  // A selection inside one follow-up's text, offered for replacing everywhere.
+  // Before this, a word that appeared in nothing but a follow-up could not be
+  // selected for replacing at all.
+  function onFollowUpSelect(el: HTMLTextAreaElement) {
+    const text = selectedInField(el);
+    const box = followUpsRef.current;
+    if (!text || !box) return setFieldPick(null);
+    const r = el.getBoundingClientRect();
+    const b = box.getBoundingClientRect();
+    setFieldPick({ text, top: r.top - b.top - 34, left: Math.max(0, r.left - b.left) });
+  }
+
+  function patchAction(i: number, text: string) {
+    save({
+      debrief: { ...debrief, actions: actions.map((a, j) => (j === i ? { ...a, text } : a)) },
+    });
+  }
+
+  function removeAction(i: number) {
+    save({ debrief: { ...debrief, actions: actions.filter((_, j) => j !== i) } });
+  }
+
+  // A follow-up already on the to-do list keeps the list's copy in step with
+  // the wording here, so fixing it once fixes it in both places.
+  function syncTaskTitles(next: DebriefAction[], before: DebriefAction[]) {
+    for (let i = 0; i < next.length; i++) {
+      const a = next[i];
+      if (!a.taskId || !a.text.trim() || a.text === before[i]?.text) continue;
+      void supabase.from("tasks").update({ title: a.text.trim() }).eq("id", a.taskId);
+    }
   }
 
   // Replace a name (or any wording) everywhere at once — notes, follow-ups
   // and the stored transcript. A name that came out wrong is usually wrong in
   // every place it appears, so fixing them one at a time is the wrong shape.
-  function replaceEverywhere() {
-    const what = findWhat.trim();
-    const to = findWith.trim();
+  function replaceEverywhere(what: string, to: string, rememberIt: boolean) {
     if (!what || !to) return;
 
     // Every place a name lives, not just the notes. Missing one leaves the
@@ -411,8 +473,14 @@ export function DebriefTab({
       typedNotes[k] = renameInText(String(v || ""), what, to);
     }
 
+    const renamedActions = actions.map((a) => ({ ...a, text: renameInText(a.text, what, to) }));
     save({
       title: renameInText(m.title || "", what, to),
+      topic: renameInText(m.topic || "", what, to),
+      location: renameInText(m.location || "", what, to),
+      objectives: renameInHtml(m.objectives || "", what, to),
+      background: renameInHtml(m.background || "", what, to),
+      concerns: renameInHtml(m.concerns || "", what, to),
       attendees: (m.attendees || []).map((a) => ({
         ...a,
         name: renameInText(a.name || "", what, to),
@@ -423,7 +491,7 @@ export function DebriefTab({
         ...debrief,
         notesHtml: renameInHtml(notesHtml, what, to),
         notes: typedNotes,
-        actions: actions.map((a) => ({ ...a, text: renameInText(a.text, what, to) })),
+        actions: renamedActions,
         ...(debrief.transcript
           ? { transcript: renameInText(debrief.transcript, what, to) }
           : {}),
@@ -437,10 +505,18 @@ export function DebriefTab({
     setMailSubject((v) => renameInText(v, what, to));
     setMailBody((v) => renameInText(v, what, to));
 
+    syncTaskTitles(renamedActions, actions);
+
     setFindOpen(false);
     setFindWhat("");
-    setFindWith("");
-    toast("success", `"${what}" is now "${to}" throughout.`);
+    if (rememberIt) {
+      remember(what, to).then(
+        () => toast("success", `"${what}" is now "${to}" here, and new notes will spell it that way.`),
+        (e: Error) => toast("error", `Replaced here, but not remembered: ${e.message}`),
+      );
+    } else {
+      toast("success", `"${what}" is now "${to}" throughout.`);
+    }
   }
 
   // A kept recording is fetched behind a short-lived signed link rather than
@@ -536,8 +612,9 @@ export function DebriefTab({
   // --- recap email --------------------------------------------------------
   // Drafted from the notes that already exist, so it stays consistent with
   // what was agreed rather than being a second, divergent summary.
-  async function draftRecap() {
+  async function draftRecap(guidance = "", previous = "") {
     setMailBusy(true);
+    setMailPick("");
     try {
       const res = await fetch("/api/meeting/ai", {
         method: "POST",
@@ -551,6 +628,8 @@ export function DebriefTab({
           when: m.date ? new Date(m.date).toLocaleDateString() : "",
           sender: profile?.displayName || "",
           recipients: (m.attendees || []).map((a) => a.name).filter(Boolean),
+          guidance,
+          previous,
         }),
       });
       const json = await res.json();
@@ -559,7 +638,9 @@ export function DebriefTab({
       setMailBody(json.body || "");
     } catch (e) {
       toast("error", (e as Error).message);
-      setMailOpen(false);
+      // A failed redo keeps the draft that was there; only a failed first
+      // draft has nothing to show.
+      if (!previous) setMailOpen(false);
     } finally {
       setMailBusy(false);
     }
@@ -781,13 +862,19 @@ export function DebriefTab({
                   variant="secondary"
                   onClick={() => {
                     setMailOpen(true);
+                    setMailGuide("");
                     void draftRecap();
                   }}
                 >
                   <Mail size={14} /> Email recap
                 </Button>
-                <Button size="sm" variant="secondary" onClick={() => setFindOpen(true)}>
-                  <Replace size={14} /> Rename
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => openRenameFor("")}
+                  title="Change a word or phrase everywhere in this meeting"
+                >
+                  <Replace size={14} /> Replace
                 </Button>
                 <Button size="sm" variant="secondary" onClick={() => void copyNotes()}>
                   <Copy size={14} /> {copied ? "Copied" : "Copy all"}
@@ -859,7 +946,7 @@ export function DebriefTab({
                       onClick={() => openRenameFor(pick.text)}
                       className="flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition hover:bg-canvas"
                     >
-                      <Replace size={12} /> Rename &ldquo;{pick.text.slice(0, 20)}
+                      <Replace size={12} /> Replace &ldquo;{pick.text.slice(0, 20)}
                       {pick.text.length > 20 ? "…" : ""}&rdquo;
                     </button>
                   )}
@@ -960,7 +1047,20 @@ export function DebriefTab({
             {actions.length === 0 ? (
               <p className="text-sm text-muted">No follow-ups detected.</p>
             ) : (
-              <ul className="mt-2 space-y-1.5">
+              <div ref={followUpsRef} className="relative">
+              {fieldPick && (
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => openRenameFor(fieldPick.text)}
+                  style={{ top: fieldPick.top, left: fieldPick.left }}
+                  className="absolute z-20 flex items-center gap-1 rounded-lg border border-border bg-surface px-2 py-1 text-xs font-medium shadow-lg transition hover:bg-canvas"
+                >
+                  <Replace size={12} /> Replace &ldquo;{fieldPick.text.slice(0, 20)}
+                  {fieldPick.text.length > 20 ? "…" : ""}&rdquo;
+                </button>
+              )}
+              <ul className="mt-2 space-y-1">
                 {actions.map((a, i) => (
                   <li key={i} className="flex items-start gap-2">
                     {picking && !a.taskId && (
@@ -979,25 +1079,51 @@ export function DebriefTab({
                         aria-label={`Include: ${a.text}`}
                       />
                     )}
-                    <span className="flex-1 text-sm">{a.text}</span>
+                    <GrowingText
+                      value={a.text}
+                      onChange={(e) => patchAction(i, e.target.value)}
+                      onSelect={(e) => onFollowUpSelect(e.currentTarget)}
+                      onBlur={(e) => {
+                        setFieldPick(null);
+                        const text = e.currentTarget.value.trim();
+                        // Emptied is deleted, the way clearing a bullet in the
+                        // notes removes it.
+                        if (!text) removeAction(i);
+                        else if (a.taskId)
+                          void supabase.from("tasks").update({ title: text }).eq("id", a.taskId);
+                      }}
+                      aria-label="Follow-up wording"
+                      className="min-w-0 flex-1 resize-none overflow-hidden rounded-md border border-transparent bg-transparent px-1.5 py-0.5 text-sm leading-relaxed outline-none transition hover:border-border focus:border-[var(--accent)] focus:bg-canvas"
+                    />
                     {a.taskId ? (
-                      <span className="mt-0.5 flex shrink-0 items-center gap-1 text-[11px] font-medium text-emerald-700">
+                      <span className="mt-1 flex shrink-0 items-center gap-1 text-[11px] font-medium text-emerald-700">
                         <CheckCircle2 size={12} /> On your list
                       </span>
                     ) : (
                       !picking && (
                         <button
                           onClick={() => void pushActionsToTasks([i])}
-                          className="mt-0.5 flex shrink-0 items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-[11px] font-medium text-muted transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                          className="mt-1 flex shrink-0 items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-[11px] font-medium text-muted transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
                           title="Add this one to your to-do list"
                         >
                           <ListTodo size={11} /> Add
                         </button>
                       )
                     )}
+                    {!picking && (
+                      <button
+                        onClick={() => removeAction(i)}
+                        className="mt-1 shrink-0 rounded p-0.5 text-muted transition hover:text-red-600"
+                        aria-label={`Delete ${a.text}`}
+                        title="Remove this follow-up"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
+              </div>
             )}
           </section>
         </>
@@ -1018,8 +1144,8 @@ export function DebriefTab({
           ) : (
             <>
               <p className="text-sm text-muted">
-                The note people send round afterwards so everyone has the same
-                understanding of what was agreed. Edit it before you send.
+                A friendly follow-up from you to the people you met. Edit it
+                here, or tell it what to change below.
               </p>
               <Input
                 label="Subject"
@@ -1030,8 +1156,39 @@ export function DebriefTab({
                 label="Message"
                 value={mailBody}
                 onChange={(e) => setMailBody(e.target.value)}
+                onSelect={(e) => setMailPick(selectedInField(e.currentTarget))}
                 className="min-h-72 text-sm"
               />
+              {mailPick && (
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => openRenameFor(mailPick)}
+                  className="flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs font-medium transition hover:bg-canvas"
+                >
+                  <Replace size={12} /> Replace &ldquo;{mailPick.slice(0, 24)}
+                  {mailPick.length > 24 ? "…" : ""}&rdquo; everywhere
+                </button>
+              )}
+              <form
+                className="flex items-end gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (mailGuide.trim()) void draftRecap(mailGuide.trim(), mailBody);
+                }}
+              >
+                <div className="min-w-0 flex-1">
+                  <Input
+                    label="What should change?"
+                    value={mailGuide}
+                    onChange={(e) => setMailGuide(e.target.value)}
+                    placeholder="Only the Utah trip and next steps, keep it short"
+                  />
+                </div>
+                <Button type="submit" variant="secondary" disabled={!mailGuide.trim()}>
+                  <Sparkles size={14} /> Redo
+                </Button>
+              </form>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <Button variant="secondary" size="sm" onClick={() => void copyMail()}>
                   <Copy size={14} /> {mailCopied ? "Copied" : "Copy"}
@@ -1067,69 +1224,22 @@ export function DebriefTab({
         getNotes={notesForExport}
       />
 
-      <Modal
+      <ReplaceModal
         open={findOpen}
         onClose={() => setFindOpen(false)}
-        title={findWhat ? `Rename "${findWhat}"` : "Rename throughout"}
-        size="sm"
-      >
-        <div className="space-y-3">
-          <p className="text-sm text-muted">
-            Changes every mention at once — in the notes, the follow-ups and the
-            saved transcript — and remembers it, so redoing the notes from the
-            transcript keeps the name.
-          </p>
-          {!findWhat && (
-            <Input
-              label="Who or what"
-              value={findWhat}
-              onChange={(e) => setFindWhat(e.target.value)}
-              placeholder="the manager"
-              autoFocus
-            />
-          )}
-          <Input
-            label="Call them"
-            value={findWith}
-            onChange={(e) => setFindWith(e.target.value)}
-            placeholder="Sarah Chen"
-            autoFocus={!!findWhat}
-          />
-          <button
-            type="button"
-            onClick={() => setFindWith("I")}
-            className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-muted transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
-          >
-            This was me
-          </button>
-          {findWith.trim() === "I" && (
-            <p className="text-xs text-muted">
-              Object and possessive forms are handled too — &ldquo;send Zach the
-              data&rdquo; becomes &ldquo;send me the data&rdquo;, &ldquo;Zach&apos;s
-              territory&rdquo; becomes &ldquo;my territory&rdquo;.
-            </p>
-          )}
-          {findWhat.trim() && (
-            <p className="text-xs text-muted">
-              {countMatchesInHtml(notesHtml, findWhat.trim())} in the notes,{" "}
-              {actions.filter((a) => countMatchesInHtml(a.text, findWhat.trim())).length}{" "}
-              follow-up(s). Whole words only — renaming &ldquo;Zach&rdquo; leaves
-              &ldquo;Zachary&rdquo; alone.
-            </p>
-          )}
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setFindOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              disabled={!findWhat.trim() || !findWith.trim()}
-              onClick={replaceEverywhere}
-            >
-              Rename everywhere
-            </Button>
-          </div>
-        </div>
-      </Modal>
+        initialWhat={findWhat}
+        where="this meeting: the notes, the follow-ups, the title and setup, the saved transcript and any email drafted here"
+        describeMatches={(w) =>
+          `${countMatchesInHtml(notesHtml, w)} in the notes, ${
+            actions.filter((a) => countMatchesInHtml(a.text, w)).length
+          } follow-up(s). Whole words only, so replacing “Zach” leaves “Zachary” alone.`
+        }
+        spellings={spellings}
+        onApply={replaceEverywhere}
+        onForget={(w) => {
+          forget(w).catch((e: Error) => toast("error", e.message));
+        }}
+      />
 
       <Modal
         open={redoOpen}
@@ -1142,8 +1252,8 @@ export function DebriefTab({
             Re-runs the notes and follow-ups from the saved transcript — no
             need to upload anything again. It always uses the current version,
             so this is how you pick up any improvement to how notes are
-            written. The existing notes and follow-ups are replaced; names you
-            renamed are reapplied.
+            written. The existing notes and follow-ups are replaced. Words you
+            replaced are put back, and so are spellings you have taught it.
           </p>
 
           {notesText && (
@@ -1172,7 +1282,7 @@ export function DebriefTab({
               here — it was transcribed as one stream and the notes will stay
               impersonal rather than guess who said what. Recordings made from
               now on separate the voices. To put a real name on something like
-              &ldquo;the manager&rdquo;, select it in the notes and use Rename.
+              &ldquo;the manager&rdquo;, select it in the notes and use Replace.
             </p>
           )}
 

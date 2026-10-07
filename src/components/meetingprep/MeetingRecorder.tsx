@@ -42,7 +42,9 @@ import { FolderPicker } from "@/components/meetingprep/FolderPicker";
 import { startLiveCapture, type LiveCapture } from "@/lib/meetingprep/liveCapture";
 import { tidyNotesHtml } from "@/lib/meetingprep/notes";
 import type { MpFolder } from "@/lib/meetingprep/types";
-import { renameInHtml, renameInText } from "@/lib/meetingprep/rename";
+import { countMatches, countMatchesInHtml, renameInHtml, renameInText } from "@/lib/meetingprep/rename";
+import { useSpellings } from "@/lib/meetingprep/hooks";
+import { ReplaceModal } from "@/components/meetingprep/ReplaceModal";
 import { transcribeUpload, type UploadProgress } from "@/lib/meetingprep/uploadCapture";
 import { createClient } from "@/lib/supabase/client";
 import { usePersistedFlag } from "@/lib/usePersistedFlag";
@@ -193,7 +195,9 @@ export function MeetingRecorder({
   const [reviewPick, setReviewPick] = useState<{ text: string; top: number; left: number } | null>(null);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameWhat, setRenameWhat] = useState("");
-  const [renameWith, setRenameWith] = useState("");
+  // A word picked out of one of the follow-up fields, offered for replacing.
+  const [actionPick, setActionPick] = useState("");
+  const { spellings, remember, forget } = useSpellings(userId);
   const [nameMap, setNameMap] = useState<Record<string, string>>({});
   const [titleOverride, setTitleOverride] = useState("");
   const [kolQuery, setKolQuery] = useState("");
@@ -442,9 +446,7 @@ export function MeetingRecorder({
     });
   }
 
-  function applyReviewRename() {
-    const what = renameWhat.trim();
-    const to = renameWith.trim();
+  function applyReviewRename(what: string, to: string, rememberIt: boolean) {
     if (!what || !to || !result) return;
     setResult({
       ...result,
@@ -457,7 +459,12 @@ export function MeetingRecorder({
     setNameMap((m) => ({ ...m, [what]: to }));
     setRenameOpen(false);
     setRenameWhat("");
-    setRenameWith("");
+    setActionPick("");
+    if (rememberIt) {
+      remember(what, to).catch((e: Error) =>
+        toast("error", `Replaced here, but not remembered: ${e.message}`),
+      );
+    }
   }
 
   const rosterNames = roster
@@ -889,14 +896,13 @@ export function MeetingRecorder({
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => {
                   setRenameWhat(reviewPick.text);
-                  setRenameWith("");
                   setReviewPick(null);
                   setRenameOpen(true);
                 }}
                 style={{ top: reviewPick.top, left: reviewPick.left }}
                 className="absolute z-20 flex items-center gap-1 rounded-lg border border-border bg-surface px-2 py-1 text-xs font-medium shadow-lg"
               >
-                <Replace size={12} /> Rename &ldquo;{reviewPick.text.slice(0, 22)}
+                <Replace size={12} /> Replace &ldquo;{reviewPick.text.slice(0, 22)}
                 {reviewPick.text.length > 22 ? "…" : ""}&rdquo;
               </button>
             )}
@@ -907,8 +913,8 @@ export function MeetingRecorder({
             />
           </div>
           <p className="mt-2 text-xs text-muted">
-            Select a name to change it everywhere, including the title, the
-            follow-ups and the transcript, before any of this is saved.
+            Select any word or name, here or in a follow-up, to change it
+            everywhere before any of this is saved.
           </p>
         </section>
 
@@ -926,6 +932,20 @@ export function MeetingRecorder({
                 Untick anything you don&apos;t want kept, and edit the wording
                 before it lands on your to-do list.
               </p>
+              {actionPick && (
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    setRenameWhat(actionPick);
+                    setRenameOpen(true);
+                  }}
+                  className="mb-2 flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs font-medium transition hover:bg-canvas"
+                >
+                  <Replace size={12} /> Replace &ldquo;{actionPick.slice(0, 24)}
+                  {actionPick.length > 24 ? "…" : ""}&rdquo; everywhere
+                </button>
+              )}
               <ul className="space-y-2">
                 {result.actions.map((a, i) => (
                   <li key={i} className="flex items-start gap-2">
@@ -939,6 +959,13 @@ export function MeetingRecorder({
                     <input
                       value={a.text}
                       onChange={(e) => patchAction(i, { text: e.target.value })}
+                      onSelect={(e) => {
+                        const el = e.currentTarget;
+                        const t = el.value
+                          .slice(el.selectionStart ?? 0, el.selectionEnd ?? 0)
+                          .trim();
+                        setActionPick(t.length <= 60 ? t : "");
+                      }}
                       className={`min-w-0 flex-1 rounded-md border border-transparent bg-canvas px-2 py-1.5 text-sm outline-none transition focus:border-[var(--accent)] ${
                         a.selected ? "" : "text-muted line-through"
                       }`}
@@ -1141,41 +1168,24 @@ export function MeetingRecorder({
         the review screen; by default only the notes are saved.
       </p>
 
-      <Modal
+      <ReplaceModal
         open={renameOpen}
         onClose={() => setRenameOpen(false)}
-        title={renameWhat ? `Rename "${renameWhat}"` : "Rename"}
-        size="sm"
-      >
-        <div className="space-y-3">
-          <p className="text-sm text-muted">
-            Changes every mention: the notes, the title, the follow-ups and the
-            transcript. Nothing is saved until you save the meeting.
-          </p>
-          <Input
-            label="Call them"
-            value={renameWith}
-            onChange={(e) => setRenameWith(e.target.value)}
-            placeholder="Dr. Chen"
-            autoFocus
-          />
-          <button
-            type="button"
-            onClick={() => setRenameWith("I")}
-            className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-muted transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
-          >
-            This was me
-          </button>
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setRenameOpen(false)}>
-              Cancel
-            </Button>
-            <Button disabled={!renameWith.trim()} onClick={applyReviewRename}>
-              Rename everywhere
-            </Button>
-          </div>
-        </div>
-      </Modal>
+        initialWhat={renameWhat}
+        where="these notes: the title, the follow-ups and the transcript. Nothing is saved until you save the meeting"
+        describeMatches={(w) =>
+          result
+            ? `${countMatchesInHtml(result.notesHtml, w)} in the notes, ${
+                result.actions.filter((a) => countMatches(a.text, w)).length
+              } follow-up(s).`
+            : ""
+        }
+        spellings={spellings}
+        onApply={applyReviewRename}
+        onForget={(w) => {
+          forget(w).catch((e: Error) => toast("error", e.message));
+        }}
+      />
 
       <Modal
         open={pasteOpen}

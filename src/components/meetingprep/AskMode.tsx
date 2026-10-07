@@ -175,6 +175,13 @@ export function AskMode({
               </div>
             )}
 
+            {/* Quiet, and small, because it is the one thing on this screen
+                that is not to be read out: it is what they stand on if the
+                answer comes back as a challenge. */}
+            {cur.sourceNote && (
+              <p className="mt-3 text-sm text-muted">Source: {cur.sourceNote}</p>
+            )}
+
             <div className="mt-7 flex items-center gap-2">
               <Button
                 variant="secondary"

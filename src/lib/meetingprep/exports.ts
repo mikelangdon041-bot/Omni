@@ -116,6 +116,15 @@ export async function exportBriefDocx(m: MpMeeting): Promise<void> {
             bullet: { level: 1 },
           }),
         );
+      if (q.sourceNote)
+        children.push(
+          new Paragraph({
+            children: [
+              new TextRun({ text: `Source: ${q.sourceNote}`, italics: true, color: "666666" }),
+            ],
+            bullet: { level: 1 },
+          }),
+        );
     }
   }
 
