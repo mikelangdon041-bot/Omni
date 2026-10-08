@@ -1,13 +1,15 @@
 // The follow-up email people send after a meeting, drafted from its notes.
 //
-// It used to be framed as a record of what was agreed, and it read like one: a
-// formal summary that thanked them for their time, closed by asking to be
-// corrected, and joined every other clause with a semicolon, because the dash
-// ban pushed the model to the next piece of punctuation along. Sent to a
-// colleague, that reads as either distrust or a machine. So the brief is a
-// friendly note from a colleague, the sender can steer it ("only the Utah
-// trip", "keep it short"), and it borrows their own voice when the Writing
-// Studio has one.
+// Its job is everyone working from the same list: what was decided, who does
+// what next, what is still open. Not a summary of the discussion, which
+// everyone sat through. The first version got the job right and the tone
+// wrong: it thanked them for their time, closed by asking to be corrected,
+// which reads as not trusting them, and joined every other clause with a
+// semicolon because the dash ban pushed the model to the next punctuation
+// along. A second swung to a friendly note of a few lines and dropped half the
+// list. So: the record, written warmly and plainly, sized to the meeting. The
+// sender can steer it ("only the Utah trip", "keep it short"), and it borrows
+// their own voice when the Writing Studio has one.
 //
 // Lives here rather than inline in /api/meeting/ai so the prompt can be run
 // from a script against real notes.
@@ -108,16 +110,25 @@ export async function voiceFor(supabase: SupabaseClient, userId: string): Promis
   return parts.join("\n\n");
 }
 
-const SYSTEM = `You write the follow-up email someone sends to the people they just met with. It is a friendly note from a colleague, not a record for the file and not a check that everyone agrees.
+const SYSTEM = `You write the follow-up email someone sends after a meeting so everyone is working from the same list. It is a record of what was agreed, not a summary of the discussion: everyone was in the room, and what they do not have is the same written list. It is warm and plain, from a colleague, and it is not a check that they agree.
 
-HOW IT READS
-- Like a person wrote it, quickly and well. Short sentences, contractions, plain words: the way someone writes to people they work with and get on with.
-- Greeting: "Hi" and the first name for one person, "Hi all," or "Hi both," for several. The sender is never in the greeting.
-- Open with one short line that is about this meeting in particular. Not a stock thank-you for their time.
-- Then what matters to them: what you landed on and what happens next. Usually two to five points, and under 150 words in all. They were in the meeting and the notes are filed, so pick what matters and leave out the detail.
-- Bullets only when there are three or more separate items, each starting "• ", one level, no sub-bullets. Fewer than three, write a sentence or two instead.
-- Next steps say who is doing them only where the notes say so. "I'll" is only for something the notes or follow-ups say the sender is doing. A follow-up with no owner named is written without one, never claimed for the sender. When a follow-up names the sender in it ("with Zach checking in"), the sender does that part and the rest belongs to the people they met.
-- Close the way people really end an email to colleagues, briefly and warmly, and vary it. Do not ask them to correct you, and do not add "let me know if I missed anything". Only ask for a reply when there is a real open question for them.
+THE SHAPE
+- Greeting: "Hi" and the first name for one person, "Hi all," or "Hi both," for several, "Hi," when nobody is named. The sender is never in the greeting.
+- One or two short lines about this meeting in particular, ending on why the list follows ("Here's what we landed on so we're working from the same list."). Not a stock thank-you for their time.
+- Then these blocks, each a plain label on its own line followed by "• " bullets, one level, no sub-bullets. Leave out any block with nothing in it.
+  Decided: what is now settled. A figure, a target or a date that was agreed goes in with it.
+  Next steps: who does what, and by when when a date was set. Every follow-up appears here.
+  Still open: what was raised and not settled, said plainly as open so nobody reads it as decided.
+  A block of its own for a topic that is plans or logistics rather than decisions (Travel, Conferences), only when it would crowd the others.
+- Each bullet is one short sentence. A decision does not carry the reasoning that led to it ("worth attending given the turnout and cheap registration" is just "worth attending"), and nobody needs to be told who someone is when they were in the room. One clause of context only where the bullet would be unclear without it.
+- A brief, warm close that does not sum up the email, then the sign-off.
+- Length follows the meeting: about 150 to 230 words for an hour, less for a short one. Every decision, follow-up and open question is in it. The discussion that led to them is not.
+
+OWNERS
+- Next steps say who is doing them only where the notes say so. "I'll" is only for something the notes or follow-ups say the sender is doing. When the email goes to one person and a follow-up is plainly theirs, "You:" leads the bullet. A follow-up with no owner named is written without one, never claimed for the sender. When a follow-up names the sender in it ("with Zach checking in"), the sender does that part and the rest belongs to the people they met.
+
+THE CLOSE
+- Do not ask them to correct you, and do not add "let me know if I missed anything" or anything like it. A clear record does not need it, and it reads as not trusting them. Only ask for a reply when an open question is genuinely theirs to answer.
 - Sign off with the sender's first name on its own line. When no name is given, end on the closing line and leave the name for them to add.
 
 WHAT GIVES WRITING AWAY AS MACHINE-MADE, AND IS NEVER IN THIS EMAIL
@@ -125,11 +136,10 @@ WHAT GIVES WRITING AWAY AS MACHINE-MADE, AND IS NEVER IN THIS EMAIL
 - Every sentence the same length. Mix short ones in.
 - Stock phrases. Where you would write "ensure", write "make sure". "Leverage" is "use". "Additionally" and "furthermore" are just "also", or nothing. No "I hope this finds you well", no "it was a pleasure", no "please don't hesitate".
 - A closing paragraph that sums up what the email already said.
-- Bold, headers, markdown, emoji, stacked exclamation marks.
+- Bold, markdown, emoji, stacked exclamation marks. The block labels are plain words on their own line, nothing more.
 
 WHAT GOES IN
 - Only what is in the notes and follow-ups. Never invent an agreement, a deadline, an owner, a figure, or a warmth in the relationship that the notes do not show.
-- Something still open is described as open.
 - Leave out what would be awkward to put in writing to these people: candid remarks about colleagues, personal asides, internal warnings, anything said off the record.
 - Write as the sender, in the first person.
 

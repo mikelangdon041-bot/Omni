@@ -7,8 +7,8 @@
 // follow-up was left mentioning a word the notes never explain.
 //
 // The transcript is made up, shaped like the one that did it. Two
-// writer-model calls (one without spellings, one with) and one quick-model
-// call for the backstop that adds a bullet when the prompt still drops one.
+// writer-model calls (one without spellings, one with), each followed by the
+// quick-model coverage check, plus one more coverage check on its own.
 //
 //   npx -y tsx scripts/check-capture-followups.ts [path/to/captureAi.ts]
 //
@@ -86,28 +86,29 @@ async function main() {
     report(/veeva/i.test(plain(b.notes)) && b.actions.some((x) => /veeva/i.test(x)), "'Veeva' in both notes and follow-ups");
   }
 
-  // 3. The backstop: notes that dropped the topic get a bullet added for it,
-  //    and nothing already there changes. Notes shaped like the real meeting
-  //    that prompted this, shortened.
-  if (mod.fillOrphanedFollowUps) {
+  // 3. The backstop: every follow-up is judged against the notes by what it
+  //    is about. One that names something missing (Santan) and one in plain
+  //    words (the hotel, with the Utah trip dropped from the notes) both get a
+  //    bullet. One the notes already cover (Dr. He) does not. Nothing already
+  //    there changes. Notes shaped like the real meeting, shortened.
+  if (mod.coverFollowUps) {
     const dropped =
       "<ul><li>Territory splits are causing NPSE confusion.<ul><li>Dr. Nguyen and John Gilbert are inherited contacts.</li></ul></li><li>A Dr. He MIRF prompts a cross-territory meeting.<ul><li>Approval appears granted.</li></ul></li></ul>";
     const follow = [
       "Arrange the LA sit-down with Dr. He.",
       "Update Santan and keep it current, with Zach checking in on it during meetings.",
+      "Drive to Utah on Monday and hold the Tuesday meetings.",
     ];
-    const orphans = mod.orphanedFollowUps(dropped, follow, TRANSCRIPT);
-    report(
-      orphans.length === 1 && orphans[0].missing.includes("Santan"),
-      "the check finds the one follow-up with nothing behind it",
-    );
-    const fixed: string = await mod.fillOrphanedFollowUps(dropped, orphans, TRANSCRIPT);
-    console.log("\nADDED: " + plain(fixed.slice(dropped.lastIndexOf("</ul>"))));
+    const fixed: string = await mod.coverFollowUps(dropped, follow, TRANSCRIPT);
+    const added = fixed.slice(dropped.lastIndexOf("</ul>"));
+    console.log("\nADDED: " + plain(added));
     report(
       fixed.startsWith(dropped.slice(0, dropped.lastIndexOf("</ul>"))),
       "the notes already there are untouched",
     );
-    report(/santan/i.test(plain(fixed)), "a Santan bullet is added");
+    report(/santan/i.test(plain(added)), "a Santan bullet is added (names something missing)");
+    report(/utah|salt lake|sandy/i.test(plain(added)), "a Utah bullet is added (plain words, no missing name)");
+    report(!/dr\. he\b/i.test(plain(added)), "nothing added for Dr. He, which the notes cover");
   }
 
   console.log(failed ? `\n${failed} failed` : "\nall passed");

@@ -1,10 +1,11 @@
 // The follow-up email (src/lib/meetingprep/recapAi.ts), against a real
 // meeting's notes.
 //
-// What it guards against, all of which the old recap did: a closing line
-// asking to be corrected, which reads as not trusting the people you met;
-// semicolons and dashes, which read as a machine; and no way to steer it, so
-// "only the Utah trip" or "keep it short" meant rewriting it by hand.
+// What it guards against: a closing line asking to be corrected, which reads
+// as not trusting the people you met; semicolons and dashes, which read as a
+// machine; a "friendly note" so short it dropped half of what was agreed; and
+// no way to steer it, so "only the Utah trip" or "keep it short" meant
+// rewriting it by hand.
 //
 // Four or more writer-model calls: a plain draft, one with instructions, a redo
 // of the first draft, and one signed by an account handle (plus a cut pass
@@ -57,6 +58,12 @@ async function main() {
   const a = await writeRecap(base);
   console.log(`\n--- plain (${words(a.body)} words) ---\nSubject: ${a.subject}\n\n${a.body}\n`);
   common("plain", a.body);
+  // The record: every block that has something in it, every follow-up.
+  report(/^\s*Next steps:?\s*$/im.test(a.body), "plain: has a Next steps block");
+  report(/^\s*Still open:?\s*$/im.test(a.body), "plain: has a Still open block (Rosalynn NPSCs are open)");
+  report(/rosalynn|npsc/i.test(a.body), "plain: names the open question");
+  report(/santan/i.test(a.body) && /dr\. he\b/i.test(a.body) && /56/.test(a.body), "plain: carries the follow-ups and the agreed target");
+  report(words(a.body) >= 120 && words(a.body) <= 280, `plain: sized to an hour's meeting (${words(a.body)} words)`);
 
   const b = await writeRecap({
     ...base,

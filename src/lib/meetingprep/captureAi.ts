@@ -8,7 +8,7 @@
 // Rather than have two prompts drift apart, the model half lives here and both
 // routes call it.
 
-import { anthropic, QUICK_MODEL, WRITER_MODEL } from "@/lib/anthropic";
+import { anthropic, CHECK_MODEL, WRITER_MODEL } from "@/lib/anthropic";
 import { applySpellings, spellingPromptBlock, type Spelling } from "./spellings";
 
 export const NO_DASH_RULE =
@@ -265,10 +265,16 @@ THE WRITER'S OWN NOTES are background context. Use them to understand the meetin
   );
   let notes = applySpellings(stripDashes(String(parsed.notes || "")), spellings, true);
   // The prompt also asks for every follow-up to have a bullet behind it. This
-  // checks, and asks again for just the missing ones when it does not.
-  const orphans = orphanedFollowUps(notes, actions, transcript);
-  if (orphans.length) {
-    notes = applySpellings(await fillOrphanedFollowUps(notes, orphans, transcript), spellings, true);
+  // checks each one, and adds a bullet for any the notes do not cover.
+  if (actions.length) {
+    // The check reads the transcript with the corrections already made, or
+    // it sees "Santan" there and "Veeva" in the notes and calls them two
+    // different things.
+    notes = applySpellings(
+      await coverFollowUps(notes, actions, applySpellings(transcript, spellings)),
+      spellings,
+      true,
+    );
   }
   return {
     positions: grounded,
@@ -292,10 +298,13 @@ THE WRITER'S OWN NOTES are background context. Use them to understand the meetin
 // or why it came up. It happens most at the end of a long meeting, where the
 // last few minutes produced a to-do and nothing else.
 //
-// The names are the test because they are what a reader would look for. A
-// capitalised word past the first (the first is the verb), or an acronym,
-// that appears in a follow-up and nowhere in the notes. Speaker labels and
-// the owner in brackets are left out: notes deliberately carry few names.
+// Names alone were the first test, and they miss the plain ones: "Book the
+// hotel by Friday" under notes that never mention a hotel names nothing. So
+// every follow-up is judged by what it is about (coverFollowUps), and the
+// name check below rides along as evidence: a name in a follow-up that the
+// notes never mention is the clearest sign of all. Speaker labels and the
+// owner in brackets are left out of it, since notes deliberately carry few
+// names.
 
 const NOT_A_SUBJECT = new Set([
   "Speaker", "The", "This", "That", "Then", "And", "But", "With", "For", "From",
@@ -344,58 +353,94 @@ export function orphanedFollowUps(
   return out;
 }
 
-const ADDITIONS_SCHEMA = {
+const COVERAGE_SCHEMA = {
   type: "object" as const,
   properties: {
-    additions: { type: "array" as const, items: { type: "string" as const } },
+    checks: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: {
+          followUp: { type: "string" as const },
+          covered: { type: "boolean" as const },
+          bullet: { type: "string" as const },
+        },
+        required: ["followUp", "covered", "bullet"],
+        additionalProperties: false,
+      },
+    },
   },
-  required: ["additions"],
+  required: ["checks"],
   additionalProperties: false,
 };
 
+/** Put new top-level bullets at the end of the notes' outer list. */
+function appendBullets(notesHtml: string, bullets: string[]): string {
+  if (!bullets.length) return notesHtml;
+  const trimmed = notesHtml.trim();
+  const at = trimmed.lastIndexOf("</ul>");
+  return /<\/ul>$/i.test(trimmed)
+    ? `${trimmed.slice(0, at)}${bullets.join("")}${trimmed.slice(at)}`
+    : `${trimmed}<ul>${bullets.join("")}</ul>`;
+}
+
 /**
- * Add a bullet to the notes for each follow-up that has none, from what the
- * transcript says about it. Only adds: the notes that exist are not sent back
- * to be rewritten, so nothing already there can change. Any failure returns
- * the notes as they were, which is no worse than before the check existed.
+ * Every follow-up has to be in the notes: the notes are the record, and a
+ * follow-up is one thing that came out of it. Each one is judged against the
+ * notes by what it is about, and any the notes do not cover gets a bullet,
+ * written from the transcript. Only adds: the notes that exist are not sent
+ * back to be rewritten, so nothing already there can change. Any failure
+ * returns the notes as they were, which is no worse than before the check.
  */
-export async function fillOrphanedFollowUps(
+export async function coverFollowUps(
   notesHtml: string,
-  orphans: OrphanedFollowUp[],
+  actions: string[],
   transcript: string,
 ): Promise<string> {
+  if (!actions.length) return notesHtml;
+  const hints = new Map(
+    orphanedFollowUps(notesHtml, actions, transcript).map((o) => [o.action, o.missing]),
+  );
   try {
     const res = await anthropic().messages.create({
-      model: QUICK_MODEL,
-      max_tokens: 2000,
-      output_config: { format: { type: "json_schema", schema: ADDITIONS_SCHEMA } },
-      system: `Some follow-ups from a meeting name things the meeting notes never mention, so a reader cannot tell what they are about. For each follow-up listed, write ONE bullet for the notes from what the transcript says about it.
+      // Not the quick model: it marked "Drive to Utah on Monday" covered by
+      // notes that never mention Utah. Judging coverage is the whole job here.
+      model: CHECK_MODEL,
+      max_tokens: 3000,
+      output_config: { format: { type: "json_schema", schema: COVERAGE_SCHEMA } },
+      system: `You check that every follow-up from a meeting is covered by the meeting notes, and add a bullet to the notes for any that is not.
 
-- Each addition is a single top-level <li>: one complete sentence saying what the thing is and where it stands, then, only if the transcript has them, a nested <ul> of one to three specifics. HTML using only <li>, <ul>, <b>, <i>.
-- Only what the transcript says. If it says nothing beyond the follow-up itself, the bullet says just that much, plainly, and stops.
+COVERED means a reader of the notes alone would know what the follow-up is about and why it came up. The words do not have to match. "Book the Utah hotel" is covered by a bullet about the Utah trip next week. It is NOT covered when the notes never mention the thing, or mention it so vaguely that the follow-up would come as a surprise. Where a follow-up is marked with what the notes never mention, it is NOT covered, unless every word listed is just the name of the person doing it. A place, a system, a product, an event or a document the notes never mention means the topic was dropped.
+
+For each follow-up, in the order given, return:
+- followUp: the follow-up, copied.
+- covered: true or false.
+- bullet: "" when covered. When not covered, ONE top-level <li> for the notes: one complete sentence saying what the thing is and where it stands, then, only if the transcript has them, a nested <ul> of one to three specifics. HTML using only <li>, <ul>, <b>, <i>.
+
+Rules for a bullet:
+- Only what the transcript says. With no transcript, or nothing in it beyond the follow-up, the bullet says just that much, plainly, and stops.
 - It is a note, not a to-do: never an imperative, and never a copy of the follow-up. The follow-up says "Send the deck to Dr. Chen"; the note says "The updated deck has not gone to Dr. Chen yet."
 - State what is true, decided or open. Never open with a person or pronoun followed by a verb of speaking (said, asked, noted, mentioned...).
-- One addition per follow-up listed, in the same order. Do not repeat anything already in the notes.
+- When two uncovered follow-ups are about the same thing, write the bullet once, on the first, and leave the second "".
 - ${NO_DASH_RULE}`,
       messages: [
         {
           role: "user",
-          content: `The notes so far:\n${notesHtml}\n\nFollow-ups with nothing behind them:\n${orphans
-            .map((o) => `- ${o.action} (not in the notes: ${o.missing.join(", ")})`)
-            .join("\n")}\n\nTranscript:\n${transcript.slice(0, 120000)}`,
+          content: `The notes:\n${notesHtml}\n\nFollow-ups:\n${actions
+            .map((a) => {
+              const missing = hints.get(a);
+              return `- ${a}${missing ? ` (the notes never mention: ${missing.join(", ")})` : ""}`;
+            })
+            .join("\n")}${transcript.trim() ? `\n\nTranscript:\n${transcript.slice(0, 120000)}` : ""}`,
         },
       ],
     });
     const parsed = JSON.parse(firstText(res) || "{}");
-    const additions = (Array.isArray(parsed.additions) ? parsed.additions : [])
-      .map((a: unknown) => stripDashes(String(a).trim()))
-      .filter((a: string) => /^<li[\s>][\s\S]*<\/li>$/i.test(a));
-    if (!additions.length) return notesHtml;
-    const trimmed = notesHtml.trim();
-    const at = trimmed.lastIndexOf("</ul>");
-    return /<\/ul>$/i.test(trimmed)
-      ? `${trimmed.slice(0, at)}${additions.join("")}${trimmed.slice(at)}`
-      : `${trimmed}<ul>${additions.join("")}</ul>`;
+    const bullets = (Array.isArray(parsed.checks) ? parsed.checks : [])
+      .filter((c: { covered?: boolean }) => c && c.covered === false)
+      .map((c: { bullet?: unknown }) => stripDashes(String(c.bullet || "").trim()))
+      .filter((b: string) => /^<li[\s>][\s\S]*<\/li>$/i.test(b));
+    return appendBullets(notesHtml, bullets);
   } catch {
     return notesHtml;
   }

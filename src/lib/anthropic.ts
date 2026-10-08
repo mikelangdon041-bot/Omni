@@ -32,3 +32,7 @@ export const RESEARCH_MODEL = process.env.ANTHROPIC_RESEARCH_MODEL || "claude-so
 // model: it goes out under the person's name, and the quick model's version
 // read like a form letter however the prompt asked.
 export const QUICK_MODEL = process.env.ANTHROPIC_QUICK_MODEL || "claude-haiku-4-5";
+
+// Judging rather than writing, where the quick model is too lenient: whether
+// the meeting notes actually cover each follow-up.
+export const CHECK_MODEL = process.env.ANTHROPIC_CHECK_MODEL || "claude-sonnet-5";
