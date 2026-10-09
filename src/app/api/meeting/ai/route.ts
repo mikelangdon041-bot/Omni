@@ -284,6 +284,7 @@ export async function POST(req: Request) {
         kolBlock,
         briefText: String(body?.briefText || "").slice(0, 24000),
         questionsText: String(body?.questionsText || "").slice(0, 12000),
+        questionCount: Math.max(0, Math.min(500, Number(body?.questionCount) || 0)),
         sectionKeys: Array.isArray(body?.sectionKeys)
           ? body.sectionKeys.map(String).slice(0, 40)
           : [],

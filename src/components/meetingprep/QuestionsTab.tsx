@@ -54,6 +54,7 @@ import {
   setupFingerprint,
   type MpMeeting,
   type QuestionItem,
+  type ReviewNote,
 } from "@/lib/meetingprep/types";
 
 const newId = () => `q${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
@@ -301,6 +302,45 @@ export function QuestionsTab({
       toast("error", (e as Error).message);
     } finally {
       setFillingId(null);
+    }
+  }
+
+  /**
+   * Doing what a read-through note says, to the questions it named.
+   *
+   * Only two things are ever done here, and both are reversible. "bin" sends
+   * the duplicates to the bin, which is not deletion — the bin keeps them and
+   * says so — and it only ever touches the ones the note listed, never the
+   * one it said to keep. "rewrite" sends each named question back through the
+   * single-question rewrite with the note's fix as the instruction, so it is
+   * swapped in place and keeps its spot in the running order.
+   *
+   * Order advice gets no button at all. Rearranging someone's list out from
+   * under them is worse than telling them where to drag it.
+   */
+  async function applyQuestionNote(n: ReviewNote) {
+    const ids = (n.questionIds || []).filter((id) => live.some((q) => q.id === id));
+    if (!ids.length) {
+      toast("info", "Those questions are not in the list any more.");
+      return;
+    }
+    if (n.action === "bin") {
+      setItems(items.map((q) => (ids.includes(q.id) ? { ...q, deleted: true, picked: false } : q)));
+      review.patchNote(n.id, { done: true });
+      toast("success", `${ids.length} sent to the bin — open it to get one back`);
+      return;
+    }
+    if (n.action === "rewrite") {
+      review.patchNote(n.id, { done: true });
+      // One at a time, because each is a replacement for a specific question
+      // and `generate` slots it back into that question's own place.
+      for (const id of ids) {
+        await generate({
+          onlyId: id,
+          focus: n.fix,
+          label: ids.length > 1 ? `Rewriting ${ids.length} questions` : "Rewriting that one",
+        });
+      }
     }
   }
 
@@ -689,17 +729,13 @@ export function QuestionsTab({
         />
       )}
 
-      {/* No "Do it for me" here yet, and that is on purpose. What the
-          read-through finds about questions is mostly order and overlap —
-          "start with the metrics one", "these two ask the same thing" — and
-          neither can be applied without deciding which question loses. The
-          advice being on the tab where you can act on it is the part that was
-          missing; doing it for you is a separate problem. */}
       <ReviewPanel
         notes={review.notes}
         at={review.at}
         scope="questions"
         busy={busy}
+        questionText={(id) => items.find((q) => q.id === id)?.text}
+        onFix={(n) => void applyQuestionNote(n)}
         onToggleDone={(n) => review.patchNote(n.id, { done: !n.done })}
         onDismiss={(n) => review.patchNote(n.id, { dismissed: true })}
         onClear={review.clear}

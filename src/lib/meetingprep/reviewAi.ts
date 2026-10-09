@@ -22,6 +22,15 @@ export interface WrittenNote {
   targetLabel: string;
   fix: string;
   severity: "high" | "medium" | "low";
+  /**
+   * Which questions the note is actually about, as the 1-based numbers the
+   * bank was handed over with. "Cut the duplicates down to one" is useless
+   * without them: the writer is left hunting their own list for the pair the
+   * reviewer had in mind.
+   */
+  questionRefs: number[];
+  /** What to do to those questions, when it is something safe to do. */
+  action?: "rewrite" | "bin";
 }
 
 const REVIEW_SCHEMA = {
@@ -38,8 +47,19 @@ const REVIEW_SCHEMA = {
           targetLabel: { type: "string" as const },
           fix: { type: "string" as const },
           severity: { type: "string" as const, enum: ["high", "medium", "low"] },
+          questionRefs: { type: "array" as const, items: { type: "number" as const } },
+          action: { type: "string" as const, enum: ["rewrite", "bin", ""] },
         },
-        required: ["title", "detail", "target", "targetLabel", "fix", "severity"],
+        required: [
+          "title",
+          "detail",
+          "target",
+          "targetLabel",
+          "fix",
+          "severity",
+          "questionRefs",
+          "action",
+        ],
         additionalProperties: false,
       },
     },
@@ -58,6 +78,7 @@ export async function reviewPrep({
   kolBlock = "",
   briefText = "",
   questionsText = "",
+  questionCount = 0,
   sectionKeys = [],
   research = "",
 }: {
@@ -65,8 +86,10 @@ export async function reviewPrep({
   kolBlock?: string;
   /** The brief as plain text, box by box, each headed by its key and title. */
   briefText?: string;
-  /** The question bank as plain text, grouped. */
+  /** The question bank as plain text, each line numbered from 1. */
   questionsText?: string;
+  /** How many questions were handed over, so a reference out of range is caught. */
+  questionCount?: number;
   /** The section keys that exist, so a note can target a real box. */
   sectionKeys?: string[];
   research?: string;
@@ -75,7 +98,11 @@ export async function reviewPrep({
     meetingContext(meeting, kolBlock),
     research && `The research this pack was built from:\n${research.slice(0, 12000)}`,
     briefText && `THE BRIEF AS IT STANDS:\n${briefText.slice(0, 24000)}`,
-    questionsText && `THE QUESTION BANK AS IT STANDS:\n${questionsText.slice(0, 12000)}`,
+    questionsText &&
+      `THE QUESTION BANK AS IT STANDS, numbered. Use these numbers in questionRefs whenever a note is about the questions:\n${questionsText.slice(
+        0,
+        12000,
+      )}`,
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -111,6 +138,11 @@ Fields:
 - targetLabel: how to say that target to a person ("Agenda", "Your questions", "Setup"). Two or three words.
 - fix: the same advice rewritten as an instruction addressed to whoever will rewrite that section, specific enough to act on without the rest of this note. This gets handed over verbatim, so no "consider" and no "maybe" — say what to do.
 - severity: "high" if the meeting goes materially worse without it, "medium" if it is a real improvement, "low" if it is a tidy-up.
+- questionRefs: the numbers of the exact questions this note is about, from the numbered bank below. REQUIRED on every note about the questions, and the note is worthless without it: "cut the duplicates down to one" leaves the writer hunting their own list for the pair you meant. Name them. Empty array for a note that is not about specific questions.
+- action: what should happen to those questions, when it is something that can simply be done.
+  - "bin" when the questions themselves should go: duplicates, a question that asks what another already asks, one that no longer fits the subject. List ONLY the ones to remove in questionRefs, never the one that is being kept. Say in the detail which one you are keeping and why. Use it only when your fix is to be rid of the question outright — if the fix says to move it, re-file it, or keep it for somewhere else in the running order, the action is "", because the button would otherwise promise something your own note does not say.
+  - "rewrite" when the questions should stay but be asked better, and your fix says how.
+  - "" for everything else, including anything about the ORDER they are asked in. Order is the writer's to arrange, and a note that reshuffles their list out from under them is worse than one that tells them where to drag it.
 
 Plain prose. No markdown, no bold, no emoji. Never an em dash or en dash.
 
@@ -139,6 +171,26 @@ The sections that exist, by key: ${sectionKeys.length ? sectionKeys.join(", ") :
     const severity = ["high", "medium", "low"].includes(String(n?.severity))
       ? (String(n.severity) as WrittenNote["severity"])
       : "medium";
+    // A reference to a question that is not in the bank would put somebody
+    // else's question under the note, or bin one nobody meant, so anything
+    // outside the range is dropped rather than guessed at.
+    const questionRefs = Array.isArray(n?.questionRefs)
+      ? [
+          ...new Set(
+            (n.questionRefs as unknown[])
+              .map(Number)
+              .filter((x: number) => Number.isInteger(x) && x >= 1 && x <= questionCount),
+          ),
+        ]
+      : [];
+    const rawAction = String(n?.action || "").trim();
+    // An action is only ever offered on questions it actually named. Without
+    // the numbers there is nothing to do it to, and a button that cannot say
+    // what it will change is a button nobody should press.
+    const action =
+      target === "questions" && questionRefs.length && (rawAction === "rewrite" || rawAction === "bin")
+        ? (rawAction as "rewrite" | "bin")
+        : undefined;
     out.push({
       title,
       detail: String(n?.detail || "").trim(),
@@ -146,6 +198,8 @@ The sections that exist, by key: ${sectionKeys.length ? sectionKeys.join(", ") :
       targetLabel: String(n?.targetLabel || "").trim() || "This pack",
       fix,
       severity,
+      questionRefs,
+      action,
     });
   }
   return out;

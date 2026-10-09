@@ -61,9 +61,13 @@ export function useReview({
       const briefText = sections
         .map((s) => `[${s.key}] ${sectionTitle(s.key, s.title)}:\n${htmlToPlain(s.content)}`)
         .join("\n\n");
-      const questionsText = (m.questions?.items || [])
-        .filter((q) => !q.deleted)
-        .map((q) => `(${q.category}) ${q.text}`)
+      // Numbered, so a note can say WHICH questions it means. Unnumbered,
+      // the best the reviewer could manage was "cut the duplicates down to
+      // one", which leaves the writer hunting their own list for the pair it
+      // had in mind. The same array resolves those numbers back to ids below.
+      const asked = (m.questions?.items || []).filter((q) => !q.deleted);
+      const questionsText = asked
+        .map((q, i) => `${i + 1}. (${q.category}) ${q.text}`)
         .join("\n");
       const res = await fetch("/api/meeting/ai", {
         method: "POST",
@@ -88,6 +92,7 @@ export function useReview({
           kolId: m.kol_id || "",
           briefText,
           questionsText,
+          questionCount: asked.length,
           sectionKeys: sections.map((s) => s.key),
           research: m.brief?.research?.notes || "",
         }),
@@ -95,12 +100,28 @@ export function useReview({
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Could not review it");
       const fresh: ReviewNote[] = (json.notes || []).map(
-        (n: Omit<ReviewNote, "id" | "done" | "dismissed">, i: number) => ({
-          ...n,
-          id: `r${Date.now()}_${i}`,
-          done: false,
-          dismissed: false,
-        }),
+        (
+          n: Omit<ReviewNote, "id" | "done" | "dismissed"> & { questionRefs?: number[] },
+          i: number,
+        ) => {
+          // Resolve the reviewer's numbers to ids now, while the list it was
+          // shown is still the list in front of us. Keeping the numbers would
+          // mean every note silently pointed at the wrong question the moment
+          // one was added above it.
+          const questionIds = (n.questionRefs || [])
+            .map((r) => asked[r - 1]?.id)
+            .filter((id): id is string => Boolean(id));
+          return {
+            ...n,
+            questionIds,
+            // An action with nothing left to act on is a button that does
+            // nothing, so it goes with the ids.
+            action: questionIds.length ? n.action : undefined,
+            id: `r${Date.now()}_${i}`,
+            done: false,
+            dismissed: false,
+          };
+        },
       );
       if (!fresh.length) toast("success", "Read it through, nothing worth changing.");
       else toast("success", `${fresh.length} thing${fresh.length === 1 ? "" : "s"} worth a look`);

@@ -191,6 +191,15 @@ export interface QuestionBank {
 // that ask the same thing.
 export interface ReviewNote {
   id: string;
+  /**
+   * The exact questions this note is about, resolved from the numbers the
+   * reviewer was given to the ids they refer to, at the moment the note was
+   * written. Stored resolved because the bank moves: a number means nothing
+   * once a question has been added above it.
+   */
+  questionIds?: string[];
+  /** What can simply be done to those questions, where that is safe. */
+  action?: "rewrite" | "bin";
   /** The advice itself, one line, written as something to do. */
   title: string;
   /** Why it matters and what good looks like. */

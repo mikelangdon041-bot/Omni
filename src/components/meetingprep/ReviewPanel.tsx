@@ -28,6 +28,7 @@ export function ReviewPanel({
   onToggleDone,
   onDismiss,
   onClear,
+  questionText,
 }: {
   notes: ReviewNote[];
   at?: string;
@@ -36,6 +37,8 @@ export function ReviewPanel({
   busy: boolean;
   /** Absent on a tab that cannot act on its own notes yet. */
   onFix?: (n: ReviewNote) => void;
+  /** Looks up a question the note named, so the note can quote it. */
+  questionText?: (id: string) => string | undefined;
   onFixAll?: (ns: ReviewNote[]) => void;
   onToggleDone: (n: ReviewNote) => void;
   onDismiss: (n: ReviewNote) => void;
@@ -52,7 +55,12 @@ export function ReviewPanel({
 
   const open = here.filter((n) => !n.done);
   const done = here.filter((n) => n.done);
-  const fixable = onFix ? open : [];
+  // On the brief, any note can be handed back to the writer of that section.
+  // On the questions, only one that named the questions and said what to do
+  // to them — the rest are about the order, which is the writer's to arrange.
+  const canFix = (n: ReviewNote) =>
+    Boolean(onFix) && (scope !== "questions" || Boolean(n.action));
+  const fixable = open.filter(canFix);
 
   // Nothing for this tab at all: say where the advice is rather than nothing,
   // or the button looks like it did nothing.
@@ -155,13 +163,35 @@ export function ReviewPanel({
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium">{n.title}</p>
               {n.detail && <p className="mt-0.5 text-sm text-muted">{n.detail}</p>}
+              {/* The questions it actually means. "Cut the duplicates down
+                  to one" sent the writer hunting their own list for the pair
+                  the reviewer had in mind; now the note shows them. */}
+              {questionText && (n.questionIds?.length ?? 0) > 0 && (
+                <ul className="mt-1.5 space-y-1 border-l-2 border-[var(--accent)]/25 pl-2.5">
+                  {n.questionIds!.map((id) => {
+                    const text = questionText(id);
+                    return text ? (
+                      <li key={id} className="text-xs text-ink/80">
+                        {text}
+                      </li>
+                    ) : null;
+                  })}
+                </ul>
+              )}
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                 <span className="rounded-full bg-surface px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
                   {n.targetLabel}
                 </span>
-                {onFix && (
-                  <Button size="sm" variant="secondary" disabled={busy} onClick={() => onFix(n)}>
-                    <Wand2 size={12} /> Do it for me
+                {canFix(n) && (
+                  <Button size="sm" variant="secondary" disabled={busy} onClick={() => onFix!(n)}>
+                    <Wand2 size={12} />
+                    {/* Say what the button will do, not "do it". Binning a
+                        question and rewording one are not the same promise. */}
+                    {n.action === "bin"
+                      ? `Bin ${n.questionIds!.length === 1 ? "it" : `those ${n.questionIds!.length}`}`
+                      : n.action === "rewrite"
+                        ? `Rewrite ${n.questionIds!.length === 1 ? "it" : `those ${n.questionIds!.length}`}`
+                        : "Do it for me"}
                   </Button>
                 )}
                 <Button size="sm" variant="ghost" onClick={() => onToggleDone(n)}>

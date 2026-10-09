@@ -38,9 +38,9 @@ async function main() {
   const briefText = sections
     .map((s) => `[${s.key}] ${sectionTitle(s.key, s.title)}:\n${htmlToPlain(s.content)}`)
     .join("\n\n");
-  const questionsText = (m.questions?.items || [])
-    .filter((q) => !q.deleted)
-    .map((q) => `(${q.category}) ${q.text}`)
+  const asked = (m.questions?.items || []).filter((q) => !q.deleted);
+  const questionsText = asked
+    .map((q, i) => `${i + 1}. (${q.category}) ${q.text}`)
     .join("\n");
 
   const t0 = Date.now();
@@ -58,6 +58,7 @@ async function main() {
     },
     briefText,
     questionsText,
+    questionCount: asked.length,
     sectionKeys: sections.map((s) => s.key),
     research: m.brief?.research?.notes || "",
   });
@@ -109,6 +110,18 @@ async function main() {
   console.log(`grounded in this pack: ${grounded.length}/${notes.length}`);
   if (grounded.length < Math.ceil(notes.length / 2))
     problems.push("most notes could have been written without reading this pack");
+
+  
+  // The point of this change: a note about the questions has to say WHICH.
+  // questionRefs check
+  const qNotes = notes.filter((n) => n.target === 'questions');
+  for (const n of qNotes) {
+    console.log('  [questions] ' + n.title + ' -> refs ' + JSON.stringify(n.questionRefs) + ' action ' + (n.action || '(none)'));
+    if (!n.questionRefs.length) problems.push('a questions note named no questions: ' + n.title);
+    if (n.action && !n.questionRefs.length) problems.push('an action with nothing to act on: ' + n.title);
+  }
+  const refd = notes.flatMap((n) => n.questionRefs);
+  if (refd.some((r) => r < 1 || r > asked.length)) problems.push('a reference points outside the bank');
 
   console.log(problems.length ? `PROBLEMS:\n- ${problems.join("\n- ")}` : "checks passed");
   if (problems.length) process.exitCode = 1;
