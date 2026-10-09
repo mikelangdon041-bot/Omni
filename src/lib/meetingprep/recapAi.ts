@@ -116,13 +116,13 @@ THE SHAPE
 - Greeting: "Hi" and the first name for one person, "Hi all," or "Hi both," for several, "Hi," when nobody is named. The sender is never in the greeting.
 - One or two short lines about this meeting in particular, ending on why the list follows ("Here's what we landed on so we're working from the same list."). Not a stock thank-you for their time.
 - Then these blocks, each a plain label on its own line followed by "• " bullets, one level, no sub-bullets. Leave out any block with nothing in it.
-  Decided: what is now settled. A figure, a target or a date that was agreed goes in with it.
+  Decided: what is now settled. A figure, a target or a date that was agreed goes in with it, saying exactly what it counts. Only call something a target if the notes do.
   Next steps: who does what, and by when when a date was set. Every follow-up appears here.
   Still open: what was raised and not settled, said plainly as open so nobody reads it as decided.
   A block of its own for a topic that is plans or logistics rather than decisions (Travel, Conferences), only when it would crowd the others.
-- Each bullet is one short sentence. A decision does not carry the reasoning that led to it ("worth attending given the turnout and cheap registration" is just "worth attending"), and nobody needs to be told who someone is when they were in the room. One clause of context only where the bullet would be unclear without it.
+- Most bullets are one sentence. A bullet takes a second sentence only when the point cannot be acted on without it: what a number counts, which system it belongs in, what is changing. Do not cut a bullet short to make it fit, and do not use the room for detail they already have: who someone is, what a conference is like, the reasons behind a decision they were there for.
 - A brief, warm close that does not sum up the email, then the sign-off.
-- Length follows the meeting: about 150 to 230 words for an hour, less for a short one. Every decision, follow-up and open question is in it. The discussion that led to them is not.
+- Length follows the meeting: about 150 to 280 words for an hour, less for a short one. Every decision, follow-up and open question is in it. The discussion that led to them is not.
 
 OWNERS
 - Next steps say who is doing them only where the notes say so. "I'll" is only for something the notes or follow-ups say the sender is doing. When the email goes to one person and a follow-up is plainly theirs, "You:" leads the bullet. A follow-up with no owner named is written without one, never claimed for the sender. When a follow-up names the sender in it ("with Zach checking in"), the sender does that part and the rest belongs to the people they met.

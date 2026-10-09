@@ -62,8 +62,10 @@ async function main() {
   report(/^\s*Next steps:?\s*$/im.test(a.body), "plain: has a Next steps block");
   report(/^\s*Still open:?\s*$/im.test(a.body), "plain: has a Still open block (Rosalynn NPSCs are open)");
   report(/rosalynn|npsc/i.test(a.body), "plain: names the open question");
-  report(/santan/i.test(a.body) && /dr\. he\b/i.test(a.body) && /56/.test(a.body), "plain: carries the follow-ups and the agreed target");
-  report(words(a.body) >= 120 && words(a.body) <= 280, `plain: sized to an hour's meeting (${words(a.body)} words)`);
+  // These are the stored notes, which still carry the wrong "target of 56"
+  // (see check-figures.ts), so the recap is not asked to repeat any figure.
+  report(/santan/i.test(a.body) && /dr\. he\b/i.test(a.body), "plain: carries the follow-ups");
+  report(words(a.body) >= 120 && words(a.body) <= 340, `plain: sized to an hour's meeting (${words(a.body)} words)`);
 
   const b = await writeRecap({
     ...base,

@@ -174,6 +174,7 @@ Attribution, which matters and is easy to get wrong:
 - notes: ONE nested bullet list covering the whole meeting, as HTML using ONLY <ul>, <li>, <b> and <i>. No headings, no <p>, no styling attributes, no markdown. Structure:
   - Top level: one <li> per topic, in the order topics came up, 3-7 of them; no "Introduction" / "Discussion" / "Conclusion" filler. The topic bullet is itself a complete statement of what that topic came to — it is not a heading and it is not a label. It must NOT end in a dash, colon, ellipsis or any other trailing punctuation waiting for the nested bullets to finish the thought; it has to stand on its own if the nested list under it were deleted.
   - Nested <ul> inside each topic for the substance, 2-3 levels deep. Complete sentences. Preserve names, figures, product names and dates exactly as spoken. Never invent anything that wasn't said.
+  - FIGURES. Every number keeps what it counts and where it comes from: "28 logged in the activity log for July" is not "July had 28", and a count in one system is not the same as a count in another. Never call a figure a target, goal, quota, budget or deadline unless it was said as one, and when a target is stated, record it exactly with its unit (20 to 25 a month is not a quarterly number). Do not add figures up or work out new ones and present them as something that was said or agreed. Adding counts together and calling the total a target is exactly the mistake to avoid.
   - It must read as one document someone can paste straight into OneNote or Word and have it keep its shape.
   - ${NO_DASH_RULE}
 
@@ -264,6 +265,12 @@ THE WRITER'S OWN NOTES are background context. Use them to understand the meetin
     (a: unknown) => applySpellings(stripDashes(String(a)), spellings),
   );
   let notes = applySpellings(stripDashes(String(parsed.notes || "")), spellings, true);
+  // Every figure in the notes has to be one somebody said. Checked against
+  // everything the notes were written from, with the corrections applied.
+  notes = await groundFigures(
+    notes,
+    applySpellings([transcript, ownNotes, hint].join("\n"), spellings),
+  );
   // The prompt also asks for every follow-up to have a bullet behind it. This
   // checks each one, and adds a bullet for any the notes do not cover.
   if (actions.length) {
@@ -441,6 +448,139 @@ Rules for a bullet:
       .map((c: { bullet?: unknown }) => stripDashes(String(c.bullet || "").trim()))
       .filter((b: string) => /^<li[\s>][\s\S]*<\/li>$/i.test(b));
     return appendBullets(notesHtml, bullets);
+  } catch {
+    return notesHtml;
+  }
+}
+
+// --- Figures nobody said ------------------------------------------------------
+//
+// The notes for a real meeting read "July had 28; August and September had 14
+// each, giving a target of 56 for the quarter". The three counts were said:
+// they were what had been logged. The 56 was not: the model added them up and
+// called the sum a target, while the target that WAS said, 20 to 25 a month,
+// never made it in. A figure is the worst place for this, because it reads as
+// the most precise thing on the page.
+//
+// So every number in the notes is looked for in what the notes were written
+// from, as digits or spelled out. One that is not there is sent back, with the
+// sentence it sits in and the transcript, to be removed, or kept only as the
+// plain arithmetic it is. Only those sentences change.
+
+const ONES = [
+  "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+  "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen",
+  "nineteen",
+];
+const TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
+
+function spelledOut(n: number): string[] {
+  if (!Number.isInteger(n) || n < 0 || n >= 1000) return [];
+  const under100 = (k: number): string =>
+    k < 20 ? ONES[k] : `${TENS[Math.floor(k / 10)]}${k % 10 ? ` ${ONES[k % 10]}` : ""}`;
+  if (n < 100) return [under100(n)];
+  const h = `${ONES[Math.floor(n / 100)]} hundred`;
+  const rest = n % 100;
+  return rest ? [`${h} ${under100(rest)}`, `${h} and ${under100(rest)}`] : [h];
+}
+
+/** Numbers in the notes that appear nowhere in what they were written from. */
+export function unsaidFigures(notesHtml: string, source: string): string[] {
+  const text = notesHtml.replace(/<[^>]+>/g, " ");
+  const plain = ` ${source.toLowerCase().replace(/[-‐]/g, " ").replace(/[^a-z0-9.%, ]+/g, " ").replace(/\s+/g, " ")} `;
+  const saidDigits = new Set(
+    (source.match(/\d[\d,]*(?:\.\d+)?/g) || []).map((d) => d.replace(/,/g, "")),
+  );
+  const out = new Set<string>();
+  for (const raw of text.match(/\d[\d,]*(?:\.\d+)?/g) || []) {
+    const d = raw.replace(/,/g, "");
+    const n = Number(d);
+    // Small numbers are said a dozen ways ("a couple", "both"), and years and
+    // the like are not where this goes wrong. Ten and up, under ten thousand,
+    // not a year.
+    if (!Number.isFinite(n) || n < 10 || n >= 10000 || (n >= 1990 && n <= 2100)) continue;
+    if (saidDigits.has(d)) continue;
+    if (spelledOut(n).some((w) => plain.includes(` ${w} `))) continue;
+    out.add(d);
+  }
+  return [...out];
+}
+
+const FIGURES_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    fixes: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: {
+          index: { type: "integer" as const },
+          text: { type: "string" as const },
+        },
+        required: ["index", "text"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["fixes"],
+  additionalProperties: false,
+};
+
+function escapeText(t: string): string {
+  return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * Send back the sentences carrying a figure nobody said, and put the answers
+ * in place of just those sentences. Any failure keeps the notes as they were.
+ */
+export async function groundFigures(notesHtml: string, source: string): Promise<string> {
+  if (!source.trim()) return notesHtml;
+  const missing = unsaidFigures(notesHtml, source);
+  if (!missing.length) return notesHtml;
+
+  const parts = notesHtml.split(/(<[^>]*>)/g);
+  const has = (t: string, d: string) =>
+    new RegExp(`(?<![\\d.,])${d.replace(/\./g, "\\.")}(?![\\d])`).test(t.replace(/,(?=\d{3})/g, ""));
+  const flagged = parts
+    .map((part, i) => ({ part, i, figs: part.startsWith("<") ? [] : missing.filter((d) => has(part, d)) }))
+    .filter((x) => x.figs.length);
+  if (!flagged.length) return notesHtml;
+
+  try {
+    const res = await anthropic().messages.create({
+      model: CHECK_MODEL,
+      max_tokens: 2000,
+      output_config: { format: { type: "json_schema", schema: FIGURES_SCHEMA } },
+      system: `Sentences from a set of meeting notes contain figures that do not appear anywhere in the transcript they were written from. Fix each one against the transcript.
+
+- A figure that was said in other words (spelled out, "a couple of dozen", "twenty-ish") stays.
+- A figure worked out from figures that were said (a total, a difference) stays ONLY as plainly that: "together 56 logged across the quarter". Never as a target, goal, quota, budget, deadline or anything somebody agreed to.
+- A figure that was not said and cannot be worked out from what was said comes out, with whatever in the sentence rests on it.
+- If the transcript states the real figure for what the sentence is about (the target that was actually given, the count that was actually logged), use that, with its unit.
+- Keep everything else in the sentence as it was. Never add a figure the transcript does not support.
+- Return every sentence you were given, by its index: the corrected sentence as plain text, no HTML. If nothing of it survives, return "".
+- ${NO_DASH_RULE}`,
+      messages: [
+        {
+          role: "user",
+          content: `Sentences:\n${flagged
+            .map((x) => `[${x.i}] ${x.part.trim()} (not in the transcript: ${x.figs.join(", ")})`)
+            .join("\n")}\n\nTranscript:\n${source.slice(0, 120000)}`,
+        },
+      ],
+    });
+    const parsed = JSON.parse(firstText(res) || "{}");
+    const allowed = new Set(flagged.map((x) => x.i));
+    for (const fix of Array.isArray(parsed.fixes) ? parsed.fixes : []) {
+      const i = Number(fix?.index);
+      if (!allowed.has(i)) continue;
+      const lead = parts[i].match(/^\s*/)?.[0] || "";
+      const text = stripDashes(String(fix?.text || "").trim());
+      parts[i] = text ? `${lead}${escapeText(text)}` : "";
+    }
+    // A bullet whose only sentence came out goes with it.
+    return parts.join("").replace(/<li>\s*<\/li>/gi, "");
   } catch {
     return notesHtml;
   }

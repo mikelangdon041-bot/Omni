@@ -29,8 +29,10 @@ Speaker B: NPSE is up to date. Everything through September is in.
 Speaker A: Good. What about the other scientific exchange, the face to face and the phone calls?
 Speaker B: Honestly not great. I have notes for most of them, I just never put them in the monthly log.
 Speaker A: OK, so go back and enter those from your notes. Emails don't count, only face to face or phone.
-Speaker B: Got it. July was 28, August and September were 14 each.
-Speaker A: So 56 for the quarter. That's the number to get to.
+Speaker B: Got it. In the activity log July is 28, August and September are 14 each.
+Speaker A: And Santan doesn't match that yet. Get Santan updated so it lines up with the activity log.
+Speaker B: Will do.
+Speaker A: For reference, the target is twenty to twenty-five a month.
 Speaker B: Makes sense.
 Speaker A: Next thing, travel. You're in Utah next week?
 Speaker B: Yes, Salt Lake and Sandy. I'll drive Monday, meetings Tuesday.
@@ -72,6 +74,10 @@ async function main() {
   const santanActions = a.actions.filter((x) => /santan/i.test(x));
   report(santanActions.length > 0, "a follow-up about Santan exists");
   report(/santan/i.test(plain(a.notes)), "the notes say what Santan is about");
+  // The figures, which the real meeting got wrong: the logged counts are not
+  // a target, and the target is per month.
+  report(!/56/.test(plain(a.notes)) || !/56[^.]*target|target[^.]*56/i.test(plain(a.notes)), "the logged counts are never summed into a target");
+  report(/(20|twenty)\D{1,12}(25|twenty.five)[^.]*month/i.test(plain(a.notes)), "the stated target is there, per month");
 
   // 2. With a remembered spelling: the wrong word is gone everywhere.
   if (path.endsWith("captureAi.ts") && !process.argv[2]) {
