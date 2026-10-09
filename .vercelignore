@@ -10,3 +10,7 @@
 # The recorder's installer, kept at the top of the repo so it is easy to find
 # and easy to hand to a machine. It is not part of the site.
 Install Omni Recorder.exe
+
+# Local secrets, the Vercel token among them. Production reads its env from
+# Vercel itself, so nothing here should ever ride along with an upload.
+.env*
