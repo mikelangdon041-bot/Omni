@@ -36,6 +36,14 @@ const nextConfig: NextConfig = {
     "/api/meeting/transcribe-upload": ["./node_modules/ffmpeg-static/**"],
     ...Object.fromEntries(PDF_ROUTES.map((route) => [route, PDF_ASSETS])),
   },
+  // Something reads files by a path built at runtime, so the tracer packs the
+  // whole project into the functions, the Windows recorder's source and its
+  // installer included. .vercelignore keeps both out of the upload, and the
+  // deploy then failed reading a file it had been told a function needed
+  // (ENOENT on "Install Omni Recorder.exe"). Neither is part of the site.
+  outputFileTracingExcludes: {
+    "*": ["./desktop/**", "./Install Omni Recorder.exe"],
+  },
 };
 
 export default nextConfig;
