@@ -651,7 +651,7 @@ export function QuestionsTab({
 
       {/* Your list — the questions you carry in, in your order. */}
       <section className="overflow-hidden rounded-xl border border-[var(--accent)]/30 bg-surface">
-        <div className="flex items-center gap-2 border-b border-[var(--accent)]/20 bg-gradient-to-r from-[var(--accent-soft)]/70 to-transparent px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2 border-b border-[var(--accent)]/20 bg-gradient-to-r from-[var(--accent-soft)]/70 to-transparent px-4 py-3">
           <ListChecks size={16} className="shrink-0 text-[var(--accent)]" />
           <h3 className="text-sm font-semibold tracking-tight">Your list</h3>
           <span className="rounded-full bg-[var(--accent)] px-2 py-0.5 text-[11px] font-semibold tabular-nums text-[var(--accent-fg)]">
@@ -739,9 +739,13 @@ export function QuestionsTab({
                     />
                   ) : (
                     <>
-                      <p className={`text-sm ${q.backup ? "text-muted" : "text-ink"}`}>
-                        {q.text}
-                      </p>
+                      {/* Every question reads at the same weight. Backups
+                          used to be greyed out, which made a held-back
+                          question look like a rendering fault rather than a
+                          choice — the chip below says it is a backup, and
+                          that is the whole job. Nothing in this list is
+                          less readable than anything else in it. */}
+                      <p className="text-sm text-ink">{q.text}</p>
                       {/* Your list is one running order, not groups: the
                           order you ask them in is the whole point of it. But
                           which group a question came out of is worth knowing
