@@ -116,6 +116,9 @@ export function QuestionsTab({
   const [dragId, setDragId] = useState<string | null>(null);
   // The one question having its probe written, so that row can say so.
   const [fillingId, setFillingId] = useState<string | null>(null);
+  // Writing every missing probe at once, and how many are home.
+  const [fillingAll, setFillingAll] = useState(false);
+  const [filledCount, setFilledCount] = useState(0);
   // The read-through is one pass over the whole pack, run from any tab. This
   // one shows what it found about the questions, which is where the advice
   // about their order and their overlaps was always meant to be read.
@@ -141,6 +144,10 @@ export function QuestionsTab({
   const pace = m.questions?.paceMin || 3;
   const askingCount = useMemo(() => picked.filter((q) => !q.backup).length, [picked]);
   const backupCount = picked.length - askingCount;
+
+  // Questions that went in without a probe. In practice these are the ones
+  // the writer typed: everything the model writes comes with one.
+  const missingProbes = useMemo(() => live.filter((q) => !q.followUp).length, [live]);
 
 
   // Categories in the order the model's strongest question in each appears,
@@ -240,51 +247,112 @@ export function QuestionsTab({
    * `base` is for the question that was added a moment ago, which the saved
    * list this render closed over does not have in it yet.
    */
+  /**
+   * The call itself, for one question. Returns what to merge into it, or
+   * null when there was nothing worth adding. Throws so the caller can say
+   * so — one on its own is a toast, one of twenty is a tally.
+   */
+  async function fetchProbe(q: QuestionItem): Promise<Partial<QuestionItem> | null> {
+    const res = await fetch("/api/meeting/ai", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({
+        action: "probe",
+        meeting: payloadOf(m),
+        kolId: m.kol_id || "",
+        // Notes about a subject this meeting is no longer on are not
+        // backing for anything, so they are not offered as any.
+        research: researchStale ? "" : m.brief?.research?.notes || "",
+        question: { text: q.text, category: q.category },
+        standing: guidance,
+      }),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || "Could not write a probe for that one");
+    const followUp = String(json.followUp || "").trim();
+    const sourceNote = String(json.sourceNote || "").trim();
+    const why = String(json.why || "").trim();
+    const forWhom = String(json.forWhom || "").trim();
+    if (!followUp && !sourceNote) return null;
+    return {
+      ...(followUp ? { followUp } : {}),
+      ...(sourceNote ? { sourceNote } : {}),
+      // Into the gaps only. Whatever they filled in themselves stands.
+      ...(why && !q.why ? { why } : {}),
+      ...(forWhom && !q.forWhom ? { forWhom } : {}),
+    };
+  }
+
   async function fillOut(q: QuestionItem, base?: QuestionItem[]) {
     setFillingId(q.id);
     try {
-      const res = await fetch("/api/meeting/ai", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({
-          action: "probe",
-          meeting: payloadOf(m),
-          kolId: m.kol_id || "",
-          // Notes about a subject this meeting is no longer on are not
-          // backing for anything, so they are not offered as any.
-          research: researchStale ? "" : m.brief?.research?.notes || "",
-          question: { text: q.text, category: q.category },
-          standing: guidance,
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Could not write a probe for that one");
-      const followUp = String(json.followUp || "").trim();
-      const sourceNote = String(json.sourceNote || "").trim();
-      const why = String(json.why || "").trim();
-      const forWhom = String(json.forWhom || "").trim();
-      if (!followUp && !sourceNote) {
+      const p = await fetchProbe(q);
+      if (!p) {
         toast("info", "Nothing worth adding to that one.");
         return;
       }
-      const p: Partial<QuestionItem> = {
-        ...(followUp ? { followUp } : {}),
-        ...(sourceNote ? { sourceNote } : {}),
-        // Into the gaps only. Whatever they filled in themselves stands.
-        ...(why && !q.why ? { why } : {}),
-        ...(forWhom && !q.forWhom ? { forWhom } : {}),
-      };
       setItems((base || items).map((x) => (x.id === q.id ? { ...x, ...p } : x)));
       toast(
         "success",
-        sourceNote ? "Probe written, with a source from the research" : "Probe written",
+        p.sourceNote ? "Probe written, with a source from the research" : "Probe written",
       );
     } catch (e) {
       toast("error", (e as Error).message);
     } finally {
       setFillingId(null);
     }
+  }
+
+  /**
+   * Every question that went in without a probe, in one go.
+   *
+   * One at a time is fine for the question you just typed and tedious for the
+   * six you typed last week. Each still gets its own call, because a probe is
+   * only worth having if it is about that question, and one call asked for
+   * six probes writes six versions of the same shrug.
+   *
+   * They run a few at a time rather than all at once: a bank can be twenty
+   * deep, and twenty requests in the same breath is a thundering herd that
+   * buys nothing. Results are collected and written ONCE at the end — writing
+   * each as it lands would have every save racing the others off a stale list
+   * and the last one home would win.
+   */
+  async function fillMissingProbes() {
+    const targets = live.filter((q) => !q.followUp);
+    if (!targets.length) return;
+    setFillingAll(true);
+    setFilledCount(0);
+    const got = new Map<string, Partial<QuestionItem>>();
+    let failed = 0;
+    const queue = [...targets];
+    await Promise.all(
+      Array.from({ length: Math.min(4, queue.length) }, async () => {
+        for (let q = queue.shift(); q; q = queue.shift()) {
+          try {
+            const p = await fetchProbe(q);
+            if (p) got.set(q.id, p);
+          } catch {
+            // One that would not come back should not take the other five
+            // with it; it keeps its "Write the probe" line and can be asked
+            // again on its own.
+            failed++;
+          }
+          setFilledCount((c) => c + 1);
+        }
+      }),
+    );
+    if (got.size) setItems(items.map((x) => ({ ...x, ...(got.get(x.id) || {}) })));
+    setFillingAll(false);
+    const sourced = [...got.values()].filter((p) => p.sourceNote).length;
+    toast(
+      got.size ? "success" : "error",
+      got.size
+        ? `${got.size} probe${got.size === 1 ? "" : "s"} written${
+            sourced ? `, ${sourced} with a source` : ""
+          }${failed ? ` — ${failed} could not be written` : ""}`
+        : "None of them could be written — try again.",
+    );
   }
 
   /** Move a picked question onto another's position. */
@@ -566,6 +634,21 @@ export function QuestionsTab({
         <Button size="sm" variant="secondary" onClick={() => setShowAdd(true)}>
           <Pencil size={14} /> Type one of my own
         </Button>
+        {/* Only while there is something to do, so it takes itself off the
+            bar once every question has a probe. */}
+        {missingProbes > 0 && (
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={fillingAll || busy}
+            onClick={() => void fillMissingProbes()}
+          >
+            <Sparkles size={14} className={fillingAll ? "animate-pulse" : ""} />
+            {fillingAll
+              ? `Writing probes… ${filledCount}/${missingProbes}`
+              : `Write the ${missingProbes} missing probe${missingProbes === 1 ? "" : "s"}`}
+          </Button>
+        )}
         <Button size="sm" variant="secondary" disabled={busy} onClick={() => setGuideScope("rewrite")}>
           <Wand2 size={14} /> Fix how these are written
         </Button>
@@ -597,6 +680,13 @@ export function QuestionsTab({
       {busy && <ProgressBar pct={pct} label={`${busyLabel}…`} className="px-0.5" />}
       {review.reviewing && (
         <ProgressBar pct={review.pct} label="Reading your whole pack back…" className="px-0.5" />
+      )}
+      {fillingAll && (
+        <ProgressBar
+          pct={Math.round((filledCount / Math.max(1, missingProbes)) * 100)}
+          label={`Writing probes… ${filledCount} of ${missingProbes}`}
+          className="px-0.5"
+        />
       )}
 
       {/* No "Do it for me" here yet, and that is on purpose. What the
@@ -767,7 +857,7 @@ export function QuestionsTab({
                       </div>
                       <ProbeLine
                         q={q}
-                        busy={fillingId === q.id}
+                        busy={fillingId === q.id || (fillingAll && !q.followUp)}
                         onFill={() => void fillOut(q)}
                       />
                       <NoteLine q={q} openNote={openNote} setOpenNote={setOpenNote} onPatch={(p) => patch(q.id, p)} />
@@ -917,7 +1007,7 @@ export function QuestionsTab({
                           </p>
                           <ProbeLine
                             q={q}
-                            busy={fillingId === q.id}
+                            busy={fillingId === q.id || (fillingAll && !q.followUp)}
                             onFill={() => void fillOut(q)}
                           />
                           <NoteLine q={q} openNote={openNote} setOpenNote={setOpenNote} onPatch={(p) => patch(q.id, p)} />
