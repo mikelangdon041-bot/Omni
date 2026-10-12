@@ -25,7 +25,9 @@ pub mod omni;
 mod session;
 mod settings;
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
@@ -196,10 +198,18 @@ fn find_orphans(app: &AppHandle, stubs: Stubs) -> Vec<Orphan> {
         return Vec::new();
     };
 
+    // A recording still being made or still being sent is not lost. With a
+    // meeting allowed to start while the last one is written up, a failure in
+    // one would otherwise offer the other, still running, for recovery.
+    let in_flight = app.state::<AppState>().in_flight.lock().unwrap().clone();
+
     let mut out: Vec<(std::time::SystemTime, Orphan)> = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("mp3") {
+            continue;
+        }
+        if in_flight.contains(&path) {
             continue;
         }
         let Ok(meta) = entry.metadata() else { continue };
@@ -212,9 +222,9 @@ fn find_orphans(app: &AppHandle, stubs: Stubs) -> Vec<Orphan> {
         }
         let modified = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
         let when: chrono::DateTime<chrono::Local> = modified.into();
-        // 64 kbps mono, so bytes to seconds is a division. Near enough for
+        // 32 kbps mono, so bytes to seconds is a division. Near enough for
         // "was this the hour-long one or the short one?".
-        let minutes = meta.len() / (8_000 * 60);
+        let minutes = meta.len() / (4_000 * 60);
         out.push((
             modified,
             Orphan {
@@ -234,9 +244,24 @@ pub struct AppState {
     settings: Mutex<settings::Settings>,
     status: Mutex<Status>,
     tray: Mutex<Option<TrayIcon>>,
-    /// Guards against a second hotkey press while a stop is still being
-    /// processed, which would otherwise start a recording on top of an upload.
-    busy: Mutex<bool>,
+    /// The write-up whose progress the window shows. Starting a recording
+    /// while one is still being written up sends that one to the background:
+    /// it carries on, but no longer writes to the status line.
+    foreground_job: Mutex<Option<u64>>,
+    /// Title and folders of write-ups sent to the background, taken the moment
+    /// the next recording started, so typing a title for the next meeting
+    /// cannot rename the last one.
+    detached: Mutex<HashMap<u64, Filing>>,
+    next_job: AtomicU64,
+    /// Recordings being made or sent right now; never offered as lost.
+    in_flight: Mutex<HashSet<PathBuf>>,
+}
+
+#[derive(Clone, Default)]
+struct Filing {
+    title: String,
+    person_folder_id: String,
+    topic_folder_id: String,
 }
 
 impl AppState {
@@ -282,8 +307,87 @@ impl AppState {
             settings: Mutex::new(settings),
             status: Mutex::new(status),
             tray: Mutex::new(None),
-            busy: Mutex::new(false),
+            foreground_job: Mutex::new(None),
+            detached: Mutex::new(HashMap::new()),
+            next_job: AtomicU64::new(0),
+            in_flight: Mutex::new(HashSet::new()),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Write-ups: one per stopped recording, any number running at once
+// ---------------------------------------------------------------------------
+
+/// Start a write-up. In the foreground it owns the status line; in the
+/// background it gets its filing now, because the window belongs to
+/// whatever is being recorded.
+fn begin_job(app: &AppHandle, path: &std::path::Path, foreground: bool) -> u64 {
+    let state = app.state::<AppState>();
+    let id = state.next_job.fetch_add(1, Ordering::Relaxed) + 1;
+    state.in_flight.lock().unwrap().insert(path.to_path_buf());
+    if foreground {
+        *state.foreground_job.lock().unwrap() = Some(id);
+    } else {
+        state.detached.lock().unwrap().insert(id, Filing::default());
+    }
+    id
+}
+
+fn is_foreground(app: &AppHandle, id: u64) -> bool {
+    *app.state::<AppState>().foreground_job.lock().unwrap() == Some(id)
+}
+
+/// Send the foreground write-up to the background, keeping the title and
+/// folders it had at this moment. Returns whether there was one.
+fn detach_foreground(app: &AppHandle) -> bool {
+    let state = app.state::<AppState>();
+    let Some(id) = state.foreground_job.lock().unwrap().take() else {
+        return false;
+    };
+    let filing = {
+        let s = state.status.lock().unwrap();
+        Filing {
+            title: s.title.clone(),
+            person_folder_id: s.person_folder_id.clone(),
+            topic_folder_id: s.topic_folder_id.clone(),
+        }
+    };
+    state.detached.lock().unwrap().insert(id, filing);
+    true
+}
+
+/// Update the status line, but only for the write-up that owns it.
+fn job_status(app: &AppHandle, id: u64, mutate: impl FnOnce(&mut Status)) {
+    if is_foreground(app, id) {
+        set_status(app, mutate);
+    }
+}
+
+/// A write-up is over, however it went.
+fn end_job(app: &AppHandle, id: u64, path: &std::path::Path) {
+    let state = app.state::<AppState>();
+    state.in_flight.lock().unwrap().remove(path);
+    state.detached.lock().unwrap().remove(&id);
+    let mut fg = state.foreground_job.lock().unwrap();
+    if *fg == Some(id) {
+        *fg = None;
+    }
+}
+
+/// A write-up failed. In the foreground that is the usual error screen; in
+/// the background a meeting is being recorded, so it says so in a
+/// notification and adds the recording to the unfinished list, and leaves
+/// the window alone.
+fn job_fail(app: &AppHandle, id: u64, path: &std::path::Path, message: String) {
+    let foreground = is_foreground(app, id);
+    end_job(app, id, path);
+    if foreground {
+        fail(app, message);
+    } else {
+        let orphans = find_orphans(app, Stubs::Keep);
+        set_status(app, move |s| s.orphans = orphans);
+        notify(app, "A meeting could not be saved", &message);
     }
 }
 
@@ -370,12 +474,16 @@ fn start_recording(app: &AppHandle) -> Result<(), String> {
     }
 
     let path = recording_path(app);
+    app.state::<AppState>().in_flight.lock().unwrap().insert(path.clone());
     let recorder = audio::Recorder::start(
-        path,
+        path.clone(),
         settings.capture_mic.then(|| settings.mic_device_id.clone()),
         settings.capture_system.then(|| settings.system_device_id.clone()),
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| {
+        app.state::<AppState>().in_flight.lock().unwrap().remove(&path);
+        e.to_string()
+    })?;
 
     {
         let state = app.state::<AppState>();
@@ -477,40 +585,33 @@ fn start_recording(app: &AppHandle) -> Result<(), String> {
 ///
 /// Says why, because a recording that ended without being asked to has to be
 /// visible or it reads as a lost meeting. Does nothing when there is no
-/// recording, or when a stop is already being processed — the same guard the
-/// hotkey uses, so a lock screen arriving during an upload cannot start a
-/// second one.
+/// recording; a stop already under way has taken the recorder, so a second
+/// one finds nothing and returns.
 fn auto_stop(app: &AppHandle, why: &str) {
-    {
-        let state = app.state::<AppState>();
-        if state.recorder.lock().unwrap().is_none() {
-            return;
-        }
-        let mut busy = state.busy.lock().unwrap();
-        if *busy {
-            return;
-        }
-        *busy = true;
+    if app.state::<AppState>().recorder.lock().unwrap().is_none() {
+        return;
     }
     notify(app, "Recording stopped", why);
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        stop_recording(app.clone()).await;
-        let state = app.state::<AppState>();
-        let mut busy = state.busy.lock().unwrap();
-        *busy = false;
-    });
+    tauri::async_runtime::spawn(stop_recording(app.clone()));
 }
 
 async fn stop_recording(app: AppHandle) {
+    // The write-up is registered while the recorder slot is still locked, so
+    // a press that lands in between sees it and starts the next recording
+    // with this one already in the background, rather than this one taking
+    // the status line back from it.
     let recorder = {
         let state = app.state::<AppState>();
         let mut slot = state.recorder.lock().unwrap();
-        slot.take()
+        slot.take().map(|r| {
+            let id = begin_job(&app, r.path(), true);
+            (r, id)
+        })
     };
-    let Some(recorder) = recorder else { return };
+    let Some((recorder, id)) = recorder else { return };
+    let path = recorder.path().to_path_buf();
 
-    set_status(&app, |s| {
+    job_status(&app, id, |s| {
         s.phase = Phase::Working;
         s.message = "Finishing the recording".into();
         s.percent = 0;
@@ -523,16 +624,18 @@ async fn stop_recording(app: AppHandle) {
 
     let recording = match recorder.stop() {
         Ok(r) => r,
-        Err(e) => return fail(&app, format!("Could not finish the recording: {e}")),
+        Err(e) => return job_fail(&app, id, &path, format!("Could not finish the recording: {e}")),
     };
 
     if recording.seconds < 1.0 {
-        return fail(&app, "That recording was too short to transcribe.".into());
+        return job_fail(&app, id, &path, "That recording was too short to transcribe.".into());
     }
     if !recording.heard_mic && !recording.heard_system {
         let _ = std::fs::remove_file(&recording.path);
-        return fail(
+        return job_fail(
             &app,
+            id,
+            &path,
             "No sound reached the recorder. Check the devices in Settings.".into(),
         );
     }
@@ -543,28 +646,37 @@ async fn stop_recording(app: AppHandle) {
         s.clone()
     };
 
-    match upload_and_capture(&app, &settings, &recording.path).await {
+    match upload_and_capture(&app, id, &settings, &recording.path).await {
         Ok(captured) => {
             let url = format!("{}{}", settings.normalized_url(), captured.path);
             forget_recording(&recording.path);
             let title = captured.title.clone();
-            set_status(&app, |s| {
-                s.phase = Phase::Done;
-                s.percent = 100;
-                s.message = title.clone();
-                s.last_meeting = url.clone();
-            });
+            let foreground = is_foreground(&app, id);
+            end_job(&app, id, &path);
             notify(&app, "Meeting saved", &captured.title);
-            if settings.open_when_done {
-                let _ = tauri_plugin_opener::open_url(&url, None::<&str>);
+            // In the background another meeting is being recorded: the
+            // notification says it is saved, and the browser stays shut
+            // rather than opening on top of that meeting.
+            if foreground {
+                set_status(&app, |s| {
+                    s.phase = Phase::Done;
+                    s.percent = 100;
+                    s.message = title.clone();
+                    s.last_meeting = url.clone();
+                });
+                if settings.open_when_done {
+                    let _ = tauri_plugin_opener::open_url(&url, None::<&str>);
+                }
             }
         }
         Err(e) => {
             // The recording stays on disk when the upload fails: it is the
             // only copy of the meeting, and it can be dropped into the web
             // uploader by hand.
-            fail(
+            job_fail(
                 &app,
+                id,
+                &path,
                 format!("{e}\n\nThe recording is kept at {}", recording.path.display()),
             );
         }
@@ -573,6 +685,7 @@ async fn stop_recording(app: AppHandle) {
 
 async fn upload_and_capture(
     app: &AppHandle,
+    id: u64,
     settings: &settings::Settings,
     audio: &std::path::Path,
 ) -> Result<omni::Captured, String> {
@@ -586,7 +699,7 @@ async fn upload_and_capture(
     let progress = {
         let app = app.clone();
         move |p: omni::Progress| {
-            set_status(&app, |s| {
+            job_status(&app, id, |s| {
                 s.phase = Phase::Working;
                 s.percent = p.percent;
                 s.message = p.label;
@@ -615,7 +728,7 @@ async fn upload_and_capture(
         }
     };
 
-    set_status(app, |s| {
+    job_status(app, id, |s| {
         s.phase = Phase::Working;
         s.percent = 100;
         s.message = "Writing your notes".into();
@@ -623,15 +736,24 @@ async fn upload_and_capture(
 
     // Read now rather than earlier: this is the last moment a title typed —
     // or a person or topic picked — while the upload was running still makes
-    // it in.
+    // it in. Sent to the background, it uses what the window held when the
+    // next recording started; the window now belongs to that meeting.
     let (title, person_folder_id, topic_folder_id) = {
         let state = app.state::<AppState>();
-        let status = state.status.lock().unwrap();
-        (
-            status.title.clone(),
-            status.person_folder_id.clone(),
-            status.topic_folder_id.clone(),
-        )
+        // Held across the status read, so a recording starting this instant
+        // waits for it instead of clearing the title in between.
+        let detached = state.detached.lock().unwrap();
+        match detached.get(&id).cloned() {
+            Some(f) => (f.title, f.person_folder_id, f.topic_folder_id),
+            None => {
+                let status = state.status.lock().unwrap();
+                (
+                    status.title.clone(),
+                    status.person_folder_id.clone(),
+                    status.topic_folder_id.clone(),
+                )
+            }
+        }
     };
 
     client
@@ -698,43 +820,27 @@ fn toggle(app: &AppHandle) {
     };
 
     if recording {
-        {
-            let state = app.state::<AppState>();
-            let mut busy = state.busy.lock().unwrap();
-            if *busy {
-                return;
-            }
-            *busy = true;
-        }
-        let app = app.clone();
-        tauri::async_runtime::spawn(async move {
-            stop_recording(app.clone()).await;
-            let state = app.state::<AppState>();
-            let mut busy = state.busy.lock().unwrap();
-            *busy = false;
-        });
+        tauri::async_runtime::spawn(stop_recording(app.clone()));
         return;
     }
 
-    let working = {
-        let state = app.state::<AppState>();
-        let phase = state.status.lock().unwrap().phase;
-        phase == Phase::Working
-    };
-    if working {
-        // The previous meeting is still uploading. Starting another recording
-        // now would compete with it for the network and the status line;
-        // there is nothing useful to do but say so.
-        notify(
-            app,
-            "Omni Recorder",
-            "Still finishing the last meeting. Try again in a moment.",
-        );
-        return;
-    }
+    // The last meeting may still be being written up. That used to refuse
+    // the new recording, which with back-to-back meetings meant losing the
+    // start of the next one. Now the write-up carries on in the background,
+    // keeping the title and folders it had, and the window moves on to this
+    // meeting.
+    let previous = detach_foreground(app);
 
     match start_recording(app) {
-        Ok(()) => notify(app, "Recording", "Omni is recording this meeting."),
+        Ok(()) => notify(
+            app,
+            "Recording",
+            if previous {
+                "Omni is recording this meeting. The last one is still being written up and will be saved on its own."
+            } else {
+                "Omni is recording this meeting."
+            },
+        ),
         Err(e) => fail(app, e),
     }
 }
@@ -935,6 +1041,7 @@ fn cancel_recording(app: AppHandle) {
         slot.take()
     };
     let Some(recorder) = recorder else { return };
+    app.state::<AppState>().in_flight.lock().unwrap().remove(recorder.path());
     if let Ok(recording) = recorder.stop() {
         let _ = std::fs::remove_file(&recording.path);
     }
@@ -1033,7 +1140,15 @@ async fn recover(app: AppHandle, path: String) -> Result<(), String> {
         let s = state.settings.lock().unwrap();
         s.clone()
     };
-    set_status(&app, |s| {
+    // Sent while a meeting is being recorded, it goes in the background with
+    // no title of its own, and the window stays on that meeting. Otherwise any
+    // write-up already showing moves to the background to make room.
+    let recording = app.state::<AppState>().recorder.lock().unwrap().is_some();
+    if !recording {
+        detach_foreground(&app);
+    }
+    let id = begin_job(&app, &file, !recording);
+    job_status(&app, id, |s| {
         s.phase = Phase::Working;
         s.percent = 0;
         s.message = "Sending the recovered recording".into();
@@ -1041,30 +1156,40 @@ async fn recover(app: AppHandle, path: String) -> Result<(), String> {
         // was typed into it since) belongs to.
         s.title = String::new();
     });
+    // Off the unfinished list while it is being sent.
+    let orphans = find_orphans(&app, Stubs::Keep);
+    set_status(&app, move |s| s.orphans = orphans);
 
-    match upload_and_capture(&app, &settings, &file).await {
+    match upload_and_capture(&app, id, &settings, &file).await {
         Ok(captured) => {
             let url = format!("{}{}", settings.normalized_url(), captured.path);
             forget_recording(&file);
             let title = captured.title.clone();
+            let foreground = is_foreground(&app, id);
+            end_job(&app, id, &file);
             let orphans = find_orphans(&app, Stubs::Prune);
-            let for_status = url.clone();
-            set_status(&app, move |s| {
-                s.phase = Phase::Done;
-                s.percent = 100;
-                s.message = title;
-                s.last_meeting = for_status;
-                s.orphans = orphans;
-            });
-            if settings.open_when_done {
-                let _ = tauri_plugin_opener::open_url(&url, None::<&str>);
+            if foreground {
+                let for_status = url.clone();
+                set_status(&app, move |s| {
+                    s.phase = Phase::Done;
+                    s.percent = 100;
+                    s.message = title;
+                    s.last_meeting = for_status;
+                    s.orphans = orphans;
+                });
+                if settings.open_when_done {
+                    let _ = tauri_plugin_opener::open_url(&url, None::<&str>);
+                }
+            } else {
+                set_status(&app, move |s| s.orphans = orphans);
+                notify(&app, "Meeting saved", &captured.title);
             }
             Ok(())
         }
         Err(e) => {
             // Left on disk deliberately: a failed recovery must not be the
             // thing that finally loses the recording.
-            fail(&app, e.clone());
+            job_fail(&app, id, &file, e.clone());
             Err(e)
         }
     }

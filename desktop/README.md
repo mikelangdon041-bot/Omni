@@ -59,9 +59,9 @@ mixer works out how many samples should exist by now, takes that many from each
 source, and pads with silence whatever a source could not supply. A silent gap
 stays a silent gap instead of pulling everything after it earlier.
 
-Audio is encoded to 64 kbps mono MP3 as it is captured, not afterwards. A
-two-hour meeting is about 60 MB rather than the 700 MB the same thing would be
-as WAV, which matters because it all has to go up over whatever connection the
+Audio is encoded to 32 kbps mono 16 kHz MP3 as it is captured, not afterwards.
+A two-hour meeting is about 29 MB rather than the 700 MB the same thing would be
+as WAV, and 16 kHz is what the server transcribes at anyway, which matters because it all has to go up over whatever connection the
 meeting was on.
 
 ## What it does with it
@@ -75,10 +75,14 @@ Nothing new server-side. It drives the same endpoints the web app does:
 | Upload, prepare, transcribe, discard | `POST /api/meeting/transcribe-upload` |
 | Notes, follow-ups, and the meeting row | `POST /api/meeting/capture` |
 
-Uploads go to Supabase storage in 40 MB parts through signed URLs, because
+Uploads go to Supabase storage in 8 MB parts, three at a time, through signed URLs, because
 Vercel rejects request bodies past about 4.5 MB and Supabase rejects any single
-object over 50 MB. Transcription runs one chunk per request, so a long meeting
-costs more requests rather than a timeout.
+object over 50 MB. Transcription runs one chunk per request, ten at a time, so a
+long meeting costs more requests rather than a timeout.
+
+A recording can start while the last one is still being written up. That one
+carries on in the background with the title and folders it had, says so in a
+notification when it is saved, and stays off the unfinished list while it runs.
 
 `/api/meeting/capture` is the one piece the web app did not already have.
 In the browser, creating the meeting is client-side: the record page asks for

@@ -448,6 +448,10 @@ impl Recorder {
         })
     }
 
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
     pub fn seconds(&self) -> f64 {
         self.written.load(Ordering::Relaxed) as f64 / RATE as f64
     }
@@ -537,10 +541,14 @@ fn mix_loop(
     encoder
         .set_sample_rate(RATE as u32)
         .map_err(|e| anyhow!("MP3 sample rate: {e}"))?;
-    // Speech, mono. Higher bitrates buy nothing a transcript can use and cost
-    // upload time on a connection that may be a hotel wifi.
+    // Speech, mono, 16 kHz at 32 kbps: about 14 MB an hour. The server turns
+    // every recording into 16 kHz mono before transcribing it, so anything
+    // above that is detail nobody reads, and it was half of the upload wait.
     encoder
-        .set_brate(mp3lame_encoder::Bitrate::Kbps64)
+        .set_output_sample_rate(std::num::NonZeroU32::new(16_000))
+        .map_err(|e| anyhow!("MP3 output rate: {e}"))?;
+    encoder
+        .set_brate(mp3lame_encoder::Bitrate::Kbps32)
         .map_err(|e| anyhow!("MP3 bitrate: {e}"))?;
     encoder
         .set_quality(mp3lame_encoder::Quality::Good)

@@ -9,7 +9,7 @@
 // Two ceilings shape the upload and both belong to the server, not to us:
 // Vercel rejects request bodies past about 4.5 MB, so parts go straight to
 // Supabase storage through signed URLs; and Supabase rejects any single object
-// over 50 MB, reported as a 400 whose body says 413, so parts are 40 MB.
+// over 50 MB, reported as a 400 whose body says 413, so parts are 8 MB.
 //
 // One chunk per request is what makes meeting length a matter of more
 // requests rather than a timeout. The loop lives here for the same reason it
@@ -17,15 +17,21 @@
 // by a function's time limit.
 
 use anyhow::{anyhow, Context, Result};
+use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-/// Comfortably under Supabase's 50 MB per-object limit.
-const PART_BYTES: usize = 40 * 1024 * 1024;
-/// Chunk requests in flight at once, matching the web client.
-const CONCURRENCY: usize = 3;
+/// Well under Supabase's 50 MB per-object limit, and small enough that the
+/// bar moves: a whole recording sent as one part sat at 0% until it landed.
+const PART_BYTES: usize = 8 * 1024 * 1024;
+/// Parts uploading at once.
+const UPLOAD_CONCURRENCY: usize = 3;
+/// Chunk requests in flight at once, matching the web client. A chunk takes
+/// about 70s to transcribe with speakers, and six at once took no longer
+/// than one, so this is what sets how long "Transcribing" lasts.
+const CONCURRENCY: usize = 10;
 
 pub struct Progress {
     /// 0-100 across the whole job.
@@ -185,42 +191,18 @@ impl Client {
         const PREPARE_SHARE: u32 = 15;
 
         on_progress(Progress { percent: 0, label: "Uploading".into() });
-        for i in 0..parts {
-            let signed: Signed = serde_json::from_str(
-                &self
-                    .upload(json!({
-                        "action": "sign",
-                        "uploadId": upload_id,
-                        "part": i,
-                        "ext": ext,
-                    }))
-                    .await?,
-            )
-            .context("Omni sent an unexpected reply while starting the upload")?;
-
-            let start = i * PART_BYTES;
-            let end = ((i + 1) * PART_BYTES).min(bytes.len());
-            let res = self
-                .http
-                .put(&signed.signed_url)
-                .header("Content-Type", "audio/mpeg")
-                .body(bytes[start..end].to_vec())
-                .send()
-                .await
-                .context("Could not upload the recording")?;
-            if !res.status().is_success() {
-                let status = res.status();
-                let detail = res.text().await.unwrap_or_default();
-                return Err(anyhow!(
-                    "Upload failed ({status}){}",
-                    if detail.is_empty() { String::new() } else { format!(": {}", &detail[..detail.len().min(200)]) }
-                ));
-            }
+        let mut uploads = futures_util::stream::iter(0..parts)
+            .map(|i| self.upload_part(upload_id, ext, bytes, i))
+            .buffer_unordered(UPLOAD_CONCURRENCY);
+        let mut sent = 0usize;
+        while let Some(result) = uploads.next().await {
+            sent += result?;
             on_progress(Progress {
-                percent: ((end as f64 / bytes.len() as f64) * UPLOAD_SHARE as f64) as u32,
+                percent: ((sent as f64 / bytes.len() as f64) * UPLOAD_SHARE as f64) as u32,
                 label: "Uploading".into(),
             });
         }
+        drop(uploads);
 
         // --- 2. Reassemble and split ---------------------------------------
         on_progress(Progress {
@@ -268,31 +250,23 @@ impl Client {
             label: "Transcribing".into(),
         });
 
-        let mut index = 1usize;
-        while index < prepared.total_chunks {
-            let batch: Vec<usize> = (index..prepared.total_chunks)
-                .take(CONCURRENCY)
-                .collect();
-            index += batch.len();
-
-            let results = futures_util::future::join_all(
-                batch
-                    .iter()
-                    .map(|i| self.transcribe_chunk(upload_id, *i, &prepared.chunk_ext)),
-            )
-            .await;
-
-            for (i, result) in batch.iter().zip(results) {
-                let chunk = result?;
-                texts[*i] = chunk.text;
-                speakers.extend(chunk.speakers);
-                done += 1;
-            }
+        // A steady CONCURRENCY in flight rather than batches, so one slow chunk
+        // does not hold the next batch back.
+        let chunk_ext = prepared.chunk_ext.as_str();
+        let mut chunks = futures_util::stream::iter(1..prepared.total_chunks)
+            .map(|i| async move { (i, self.transcribe_chunk(upload_id, i, chunk_ext).await) })
+            .buffer_unordered(CONCURRENCY);
+        while let Some((i, result)) = chunks.next().await {
+            let chunk = result?;
+            texts[i] = chunk.text;
+            speakers.extend(chunk.speakers);
+            done += 1;
             on_progress(Progress {
                 percent: base + (done as f64 / prepared.total_chunks as f64 * span as f64) as u32,
                 label: "Transcribing".into(),
             });
         }
+        drop(chunks);
 
         // Each chunk was removed as it was read; this clears anything left.
         let _ = self
@@ -306,6 +280,56 @@ impl Client {
             .join("\n\n");
 
         Ok((transcript, speakers.into_iter().collect(), prepared.audio_path))
+    }
+
+    /// Sign and upload one part, returning how many bytes it carried. Retried
+    /// like a chunk is, because one dropped part would otherwise sink the job.
+    async fn upload_part(&self, upload_id: &str, ext: &str, bytes: &[u8], i: usize) -> Result<usize> {
+        let start = i * PART_BYTES;
+        let end = ((i + 1) * PART_BYTES).min(bytes.len());
+        let mut last = None;
+        for attempt in 1..=3u64 {
+            match self.try_upload_part(upload_id, ext, &bytes[start..end], i).await {
+                Ok(()) => return Ok(end - start),
+                Err(e) => last = Some(e),
+            }
+            if attempt < 3 {
+                tokio::time::sleep(Duration::from_millis(attempt * 1500)).await;
+            }
+        }
+        Err(last.unwrap_or_else(|| anyhow!("Could not upload the recording")))
+    }
+
+    async fn try_upload_part(&self, upload_id: &str, ext: &str, slice: &[u8], i: usize) -> Result<()> {
+        let signed: Signed = serde_json::from_str(
+            &self
+                .upload(json!({
+                    "action": "sign",
+                    "uploadId": upload_id,
+                    "part": i,
+                    "ext": ext,
+                }))
+                .await?,
+        )
+        .context("Omni sent an unexpected reply while starting the upload")?;
+
+        let res = self
+            .http
+            .put(&signed.signed_url)
+            .header("Content-Type", "audio/mpeg")
+            .body(slice.to_vec())
+            .send()
+            .await
+            .context("Could not upload the recording")?;
+        if !res.status().is_success() {
+            let status = res.status();
+            let detail = res.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Upload failed ({status}){}",
+                if detail.is_empty() { String::new() } else { format!(": {}", &detail[..detail.len().min(200)]) }
+            ));
+        }
+        Ok(())
     }
 
     /// One chunk, with a couple of retries — a single dropped connection

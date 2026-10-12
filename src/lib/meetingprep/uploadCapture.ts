@@ -19,14 +19,18 @@
 // each reset to zero read as "it started over".
 
 const ENDPOINT = "/api/meeting/transcribe-upload";
-// Comfortably under Supabase's 50 MB per-object limit.
-const PART_BYTES = 40 * 1024 * 1024;
+// Well under Supabase's 50 MB per-object limit, and small enough to send
+// several at once.
+const PART_BYTES = 16 * 1024 * 1024;
+// Parts uploading at once.
+const UPLOAD_CONCURRENCY = 3;
 // Stage weights, summing to 100.
 const UPLOAD_SHARE = 20;
 const PREPARE_SHARE = 15;
-// Chunk requests in flight at once. Enough to keep things moving without
-// tripping rate limits on a long recording.
-const CONCURRENCY = 3;
+// Chunk requests in flight at once. A chunk takes about 70s to transcribe
+// with speakers, and six at once took no longer than one, so this is what
+// sets how long "Transcribing" lasts.
+const CONCURRENCY = 10;
 
 export interface UploadProgress {
   /** 0-100 across the whole operation. */
@@ -127,27 +131,47 @@ export async function transcribeUpload(
   try {
     // --- 1. Upload the file in parts -------------------------------------
     onProgress({ percent: 0, label: "Uploading" });
-    let uploadedBefore = 0;
-    for (let i = 0; i < parts; i++) {
-      const { signedUrl } = await post<{ signedUrl: string }>(
-        { action: "sign", uploadId, part: i, ext },
-        signal,
-      );
-      const slice = file.slice(i * PART_BYTES, (i + 1) * PART_BYTES);
-      const base = uploadedBefore;
-      await putSlice(
-        signedUrl,
-        slice,
-        contentType,
-        (loaded) =>
-          onProgress({
-            percent: Math.round(((base + loaded) / file.size) * UPLOAD_SHARE),
-            label: "Uploading",
-          }),
-        signal,
-      );
-      uploadedBefore += slice.size;
-    }
+    const loaded: number[] = new Array(parts).fill(0);
+    const reportUpload = () =>
+      onProgress({
+        percent: Math.round((loaded.reduce((a, b) => a + b, 0) / file.size) * UPLOAD_SHARE),
+        label: "Uploading",
+      });
+    let nextPart = 0;
+    const uploader = async () => {
+      for (;;) {
+        const i = nextPart++;
+        if (i >= parts) return;
+        const slice = file.slice(i * PART_BYTES, (i + 1) * PART_BYTES);
+        // Retried like a chunk is: one dropped part would sink the job.
+        for (let attempt = 1; ; attempt++) {
+          try {
+            const { signedUrl } = await post<{ signedUrl: string }>(
+              { action: "sign", uploadId, part: i, ext },
+              signal,
+            );
+            await putSlice(
+              signedUrl,
+              slice,
+              contentType,
+              (n) => {
+                loaded[i] = n;
+                reportUpload();
+              },
+              signal,
+            );
+            break;
+          } catch (e) {
+            if (signal?.aborted || attempt >= 3) throw e;
+            loaded[i] = 0;
+            await new Promise((r) => setTimeout(r, attempt * 1500));
+          }
+        }
+        loaded[i] = slice.size;
+        reportUpload();
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, parts) }, uploader));
 
     // --- 2. Reassemble and split ------------------------------------------
     onProgress({ percent: UPLOAD_SHARE, label: "Preparing the audio" });
