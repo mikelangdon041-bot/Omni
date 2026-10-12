@@ -18,6 +18,7 @@ import {
   Minimize2,
   NotebookPen,
   Replace,
+  RotateCcw,
   Undo2,
   Wand2,
   Sparkles,
@@ -56,6 +57,7 @@ import {
   type MpMeeting,
 } from "@/lib/meetingprep/types";
 import { htmlToPlain } from "@/lib/writer/types";
+import { plainToHtml, toEmailHtml, toEmailText } from "@/lib/writer/clipboard";
 import type { DueDatePreset } from "@/lib/territory/types";
 
 const supabase = createClient();
@@ -101,6 +103,27 @@ function GrowingText(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
 
 // The words picked out of a text field. A selection inside a textarea is not
 // part of the page's selection, so it has to be read off the field itself.
+/**
+ * A fingerprint of what a recap is written from: the notes' words and the
+ * ticked follow-ups. Taken from the text, so tidying or bolding the notes is
+ * not a change.
+ */
+function recapSource(notesHtml: string, actions: DebriefAction[]): string {
+  const text = [
+    htmlToPlain(notesHtml).replace(/\s+/g, " ").trim(),
+    ...actions.filter((a) => a.selected !== false).map((a) => a.text.trim()),
+  ].join("\n");
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+  return `${text.length}:${(h >>> 0).toString(36)}`;
+}
+
+/** The current page selection, when it is short enough to be a name. */
+function selectedInPage(): string {
+  const text = (window.getSelection()?.toString() || "").trim();
+  return text.length > 0 && text.length <= 60 && !text.includes("\n") ? text : "";
+}
+
 function selectedInField(el: HTMLTextAreaElement | HTMLInputElement): string {
   const text = el.value.slice(el.selectionStart ?? 0, el.selectionEnd ?? 0).trim();
   return text.length > 0 && text.length <= 60 ? text : "";
@@ -146,7 +169,7 @@ export function DebriefTab({
   const [mailOpen, setMailOpen] = useState(false);
   const [mailBusy, setMailBusy] = useState(false);
   const [mailSubject, setMailSubject] = useState("");
-  const [mailBody, setMailBody] = useState("");
+  const [mailHtml, setMailHtml] = useState("");
   const [mailCopied, setMailCopied] = useState(false);
   const [filling, setFilling] = useState(false);
   const [audioUrl, setAudioUrl] = useState("");
@@ -160,6 +183,10 @@ export function DebriefTab({
   // Folds the two older shapes (sections, outline summary) into the one
   // document, so meetings saved before this still open with their notes.
   const notesHtml = debriefNotesHtml(debrief);
+  const debriefRef = useRef(debrief);
+  useLayoutEffect(() => {
+    debriefRef.current = debrief;
+  });
 
   /**
    * The notes as they should leave here — which is to say, saying which meeting
@@ -497,13 +524,26 @@ export function DebriefTab({
           : {}),
         // Remembered, so re-running the notes doesn't undo it.
         nameMap: { ...(debrief.nameMap || {}), [what]: to },
+        ...(debrief.recap
+          ? {
+              recap: {
+                subject: renameInText(debrief.recap.subject, what, to),
+                html: renameInHtml(debrief.recap.html, what, to),
+                // The email was renamed along with the notes, so it is still
+                // up to date with them.
+                source:
+                  debrief.recap.source &&
+                  recapSource(renameInHtml(notesHtml, what, to), renamedActions),
+              },
+            }
+          : {}),
       },
     });
 
-    // A drafted email is on screen and saved nowhere, so it has to be renamed
-    // in place or it silently keeps the old name.
+    // The email on screen is local state as well as saved, so both copies
+    // are renamed or the box keeps showing the old name.
     setMailSubject((v) => renameInText(v, what, to));
-    setMailBody((v) => renameInText(v, what, to));
+    setMailHtml((v) => renameInHtml(v, what, to));
 
     syncTaskTitles(renamedActions, actions);
 
@@ -615,6 +655,9 @@ export function DebriefTab({
   async function draftRecap(guidance = "", previous = "") {
     setMailBusy(true);
     setMailPick("");
+    // Taken before the request, so notes edited while it runs still count
+    // as a change next time.
+    const source = recapSource(notesHtml, actions);
     try {
       const res = await fetch("/api/meeting/ai", {
         method: "POST",
@@ -627,15 +670,18 @@ export function DebriefTab({
           title: m.title,
           when: m.date ? new Date(m.date).toLocaleDateString() : "",
           sender: profile?.displayName || "",
-          recipients: (m.attendees || []).map((a) => a.name).filter(Boolean),
+          recipients: await recapRecipients(),
           guidance,
           previous,
         }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Could not draft the email");
-      setMailSubject(json.subject || m.title || "Meeting recap");
-      setMailBody(json.body || "");
+      const subject = json.subject || m.title || "Meeting recap";
+      const html = json.html || plainToHtml(json.body || "");
+      setMailSubject(subject);
+      setMailHtml(html);
+      saveRecap(subject, html, source);
     } catch (e) {
       toast("error", (e as Error).message);
       // A failed redo keeps the draft that was there; only a failed first
@@ -646,10 +692,102 @@ export function DebriefTab({
     }
   }
 
+  // Every edit is saved with the meeting, so the draft is still there, as
+  // edited, the next time the box opens.
+  // `source` is set only when a draft is written, and records which notes it
+  // was written from; an edit keeps the one already there.
+  function saveRecap(subject: string, html: string, source?: string) {
+    const d = debriefRef.current;
+    save({
+      debrief: { ...d, recap: { subject, html, source: source ?? d.recap?.source } },
+    });
+  }
+
+  // Reopening shows the draft as you left it. Only when the notes or the
+  // follow-ups have changed since it was written does it offer a new one,
+  // and saying no keeps yours.
+  async function openRecap() {
+    setMailGuide("");
+    const saved = debrief.recap;
+    if (!saved?.html) {
+      setMailOpen(true);
+      void draftRecap();
+      return;
+    }
+    setMailSubject(saved.subject);
+    setMailHtml(saved.html);
+    const stale = !!saved.source && saved.source !== recapSource(notesHtml, actions);
+    if (
+      stale &&
+      (await confirm({
+        title: "The notes changed",
+        message:
+          "The notes or follow-ups have changed since this email was written. Write a new draft from them? Your edited email is replaced if you do.",
+        confirmLabel: "New draft",
+        cancelLabel: "Keep my email",
+      }))
+    ) {
+      setMailOpen(true);
+      void draftRecap();
+      return;
+    }
+    setMailOpen(true);
+  }
+
+  async function freshRecap() {
+    const ok = await confirm({
+      title: "Write a new draft?",
+      message: "This one, and any changes you made to it, are replaced by a fresh draft from the notes.",
+      confirmLabel: "New draft",
+    });
+    if (ok) void draftRecap();
+  }
+
+  /**
+   * Plain text for a compose link and for redo. Same as the clipboard's plain
+   * flavour, but a label sits directly on its bullets rather than a blank line
+   * above them.
+   */
+  function mailPlain(html: string) {
+    return toEmailText(html).replace(/\n\n(?=• )/g, "\n");
+  }
+
+  // Rich text first, so the bold labels and real bullet lists land in
+  // Outlook or Gmail as formatting rather than typed characters.
+  // Who the recap greets. Attendees when the setup lists them; otherwise the
+  // person folder the meeting is filed under ("Ryan"), then the linked KOL,
+  // so a one-to-one opens "Hi Ryan," instead of a bare "Hi,". The folder is
+  // read here, not loaded on mount: "Email recap" is often the first thing
+  // pressed, before a background load would have landed.
+  async function recapRecipients(): Promise<string[]> {
+    const named = (m.attendees || []).map((a) => a.name?.trim()).filter(Boolean) as string[];
+    if (named.length) return named;
+    if (m.person_folder_id) {
+      const { data } = await supabase
+        .from("mp_folders")
+        .select("name")
+        .eq("id", m.person_folder_id)
+        .maybeSingle();
+      const folder = String(data?.name || "").trim();
+      if (folder) return [folder];
+    }
+    const kolName = kol ? `${kol.first_name || ""} ${kol.last_name || ""}`.trim() : "";
+    return kolName ? [kolName] : [];
+  }
+
   async function copyMail() {
-    await navigator.clipboard
-      .writeText(`${mailSubject}\n\n${mailBody}`)
-      .catch(() => {});
+    const html = toEmailHtml(mailHtml, "", mailSubject);
+    const plain = `Subject: ${mailSubject}\n\n${mailPlain(mailHtml)}`;
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "text/html": new Blob([html], { type: "text/html" }),
+          "text/plain": new Blob([plain], { type: "text/plain" }),
+        }),
+      ]);
+    } catch {
+      await navigator.clipboard.writeText(plain).catch(() => {});
+    }
     setMailCopied(true);
     setTimeout(() => setMailCopied(false), 1800);
   }
@@ -659,7 +797,8 @@ export function DebriefTab({
     // the user to fill in wherever they compose.
     const to = "";
     const s = encodeURIComponent(mailSubject);
-    const b = encodeURIComponent(mailBody);
+    // A compose link only carries plain text.
+    const b = encodeURIComponent(mailPlain(mailHtml));
     const url =
       where === "gmail"
         ? `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(to)}&su=${s}&body=${b}`
@@ -860,11 +999,7 @@ export function DebriefTab({
                 <Button
                   size="sm"
                   variant="secondary"
-                  onClick={() => {
-                    setMailOpen(true);
-                    setMailGuide("");
-                    void draftRecap();
-                  }}
+                  onClick={() => void openRecap()}
                 >
                   <Mail size={14} /> Email recap
                 </Button>
@@ -1145,20 +1280,44 @@ export function DebriefTab({
             <>
               <p className="text-sm text-muted">
                 A friendly follow-up from you to the people you met. Edit it
-                here, or tell it what to change below.
+                here, or tell it what to change below. Changes save as you type.
               </p>
               <Input
                 label="Subject"
                 value={mailSubject}
-                onChange={(e) => setMailSubject(e.target.value)}
+                onChange={(e) => {
+                  setMailSubject(e.target.value);
+                  saveRecap(e.target.value, mailHtml);
+                }}
               />
-              <Textarea
-                label="Message"
-                value={mailBody}
-                onChange={(e) => setMailBody(e.target.value)}
-                onSelect={(e) => setMailPick(selectedInField(e.currentTarget))}
-                className="min-h-72 text-sm"
-              />
+              <div>
+                <p className="mb-1 text-sm font-medium text-ink">Message</p>
+                <div
+                  onMouseUp={() => setMailPick(selectedInPage())}
+                  onKeyUp={() => setMailPick(selectedInPage())}
+                >
+                  <RichText
+                    value={mailHtml}
+                    onChange={(html) => {
+                      setMailHtml(html);
+                      saveRecap(mailSubject, html);
+                    }}
+                    minHeight="min-h-72"
+                    onCopy={(e) => {
+                      // Ctrl+C on a selection goes through the same mail
+                      // formatting as the Copy button.
+                      const selection = window.getSelection();
+                      if (!selection || selection.rangeCount === 0 || selection.isCollapsed)
+                        return;
+                      const container = document.createElement("div");
+                      container.appendChild(selection.getRangeAt(0).cloneContents());
+                      e.preventDefault();
+                      e.clipboardData.setData("text/html", toEmailHtml(container.innerHTML));
+                      e.clipboardData.setData("text/plain", mailPlain(container.innerHTML));
+                    }}
+                  />
+                </div>
+              </div>
               {mailPick && (
                 <button
                   type="button"
@@ -1174,7 +1333,7 @@ export function DebriefTab({
                 className="flex items-end gap-2"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  if (mailGuide.trim()) void draftRecap(mailGuide.trim(), mailBody);
+                  if (mailGuide.trim()) void draftRecap(mailGuide.trim(), mailPlain(mailHtml));
                 }}
               >
                 <div className="min-w-0 flex-1">
@@ -1190,9 +1349,14 @@ export function DebriefTab({
                 </Button>
               </form>
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <Button variant="secondary" size="sm" onClick={() => void copyMail()}>
-                  <Copy size={14} /> {mailCopied ? "Copied" : "Copy"}
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="secondary" size="sm" onClick={() => void copyMail()}>
+                    <Copy size={14} /> {mailCopied ? "Copied" : "Copy"}
+                  </Button>
+                  <Button variant="secondary" size="sm" onClick={() => void freshRecap()}>
+                    <RotateCcw size={14} /> New draft
+                  </Button>
+                </div>
                 <div className="flex flex-wrap gap-2">
                   <Button variant="secondary" size="sm" onClick={() => openMail("outlook")}>
                     Open in Outlook
@@ -1206,8 +1370,10 @@ export function DebriefTab({
                 </div>
               </div>
               <p className="text-[11px] text-muted">
-                Long recaps can exceed what a compose link will carry. If the
-                message opens truncated, use Copy and paste it in.
+                Copy keeps the bold and bullet lists. The Outlook, Gmail and
+                Mail app buttons can only carry plain text, and a long recap can
+                arrive cut short, so for the formatted version use Copy and
+                paste it into the message.
               </p>
             </>
           )}

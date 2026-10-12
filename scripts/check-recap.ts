@@ -66,6 +66,16 @@ async function main() {
   // (see check-figures.ts), so the recap is not asked to repeat any figure.
   report(/santan/i.test(a.body) && /dr\. he\b/i.test(a.body), "plain: carries the follow-ups");
   report(words(a.body) >= 120 && words(a.body) <= 340, `plain: sized to an hour's meeting (${words(a.body)} words)`);
+  // The editor and the clipboard get HTML: real lists and bold labels, not
+  // typed bullet characters that paste as text.
+  console.log(`\n--- plain as html ---\n${a.html}\n`);
+  report(/<ul><li>/.test(a.html) && !/[•◦]/.test(a.html), "html: bullets are a real list");
+  report(/<p><b>Next steps<\/b><\/p><ul>/i.test(a.html), "html: block label is bold, directly above its list");
+  report(/^<p>Hi\b/.test(a.html) && /Zach<\/p>$/.test(a.html), "html: greeting and sign-off stay paragraphs");
+  report(
+    (a.body.match(/^\s*[•◦]/gm) || []).length === (a.html.match(/<li>/g) || []).length,
+    "html: every bullet line is a list item",
+  );
 
   const b = await writeRecap({
     ...base,

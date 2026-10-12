@@ -269,6 +269,11 @@ export interface Debrief {
   sections?: DebriefSection[];
   summary?: string;
   actions?: DebriefAction[];
+  // The recap email as last edited, so closing the box does not throw away
+  // the changes and reopening it does not pay for a fresh draft.
+  // `source` fingerprints the notes it was written from, so reopening can
+  // tell whether they have changed since.
+  recap?: { subject: string; html: string; source?: string };
 }
 
 // Structured debrief questions the user can type answers into (alongside

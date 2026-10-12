@@ -50,6 +50,79 @@ export interface RecapInput {
 export interface RecapOutput {
   subject: string;
   body: string;
+  /** The same email as editor HTML: labels in bold, bullets as real lists. */
+  html: string;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+const BULLET = /^\s*[•◦]\s+/;
+
+/**
+ * The model writes plain text with "• " bullets, which is what it is reliable
+ * at. The sender edits and copies HTML, so it is rebuilt here: a bullet run
+ * becomes a real list (◦ nests under the bullet above it), and a short line
+ * that introduces a list ("Decided", "Next steps") becomes a bold label. A
+ * typed "•" pastes into Outlook as a character, not a list, and the indent
+ * under a wrapped line is lost.
+ */
+export function recapToHtml(body: string): string {
+  const lines = body.replace(/\r\n?/g, "\n").split("\n");
+  const out: string[] = [];
+  let para: string[] = [];
+  let list: { text: string; sub: string[] }[] = [];
+
+  const flushPara = () => {
+    if (para.length) out.push(`<p>${para.join("<br>")}</p>`);
+    para = [];
+  };
+  const flushList = () => {
+    if (list.length)
+      out.push(
+        `<ul>${list
+          .map(
+            (li) =>
+              `<li>${li.text}${li.sub.length ? `<ul>${li.sub.map((s) => `<li>${s}</li>`).join("")}</ul>` : ""}</li>`,
+          )
+          .join("")}</ul>`,
+      );
+    list = [];
+  };
+  const nextLine = (i: number) => {
+    for (let j = i + 1; j < lines.length; j++) if (lines[j].trim()) return lines[j];
+    return "";
+  };
+
+  lines.forEach((raw, i) => {
+    const line = raw.trim();
+    if (!line) {
+      flushPara();
+      flushList();
+      return;
+    }
+    if (BULLET.test(raw)) {
+      flushPara();
+      const text = escapeHtml(raw.replace(BULLET, ""));
+      if (/^\s*◦/.test(raw) && list.length) list[list.length - 1].sub.push(text);
+      else list.push({ text, sub: [] });
+      return;
+    }
+    flushList();
+    // A label is short, has no sentence punctuation at the end ("Thanks," and
+    // "Hi all," are not labels), and has bullets straight after it.
+    const isLabel =
+      line.length <= 50 && !/[.!?,]$/.test(line) && BULLET.test(nextLine(i)) && !para.length;
+    if (isLabel) {
+      out.push(`<p><b>${escapeHtml(line.replace(/:$/, ""))}</b></p>`);
+      return;
+    }
+    para.push(escapeHtml(line));
+  });
+  flushPara();
+  flushList();
+  return out.join("");
 }
 
 function firstText(res: { content: { type: string; text?: string }[] }): string {
@@ -194,7 +267,8 @@ export async function writeRecap(input: RecapInput): Promise<RecapOutput> {
   });
 
   const parsed = JSON.parse(firstText(res) || "{}");
-  const out = {
+  const out: RecapOutput = {
+    html: "",
     subject: plainPunctuation(String(parsed.subject || "")),
     // Backstop for the bullet character: models default to "- " however
     // firmly the prompt says otherwise.
@@ -215,6 +289,7 @@ export async function writeRecap(input: RecapInput): Promise<RecapOutput> {
       cutting: true,
     });
   }
+  out.html = recapToHtml(out.body);
   return out;
 }
 
