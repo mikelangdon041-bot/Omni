@@ -110,6 +110,10 @@ async function diarize(
     file,
     model: DIARIZE_MODEL,
     response_format: "diarized_json",
+    // Required for anything over 30 seconds, and every chunk is longer than
+    // that. Without it the API answered 400 on every chunk, the catch below
+    // fell back to Whisper, and no recording ever came back with speakers.
+    chunking_strategy: "auto",
     ...(known?.names.length
       ? { known_speaker_names: known.names, known_speaker_references: known.refs }
       : {}),

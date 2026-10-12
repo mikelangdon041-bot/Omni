@@ -4,13 +4,20 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import ffmpegStatic from "ffmpeg-static";
 
-// 3 minutes per chunk, normalized to mono 16 kHz mp3.
+// About 3 minutes per chunk, normalized to mono 16 kHz mp3.
+//
+// Each cut is moved to the nearest pause rather than made at exactly 180s. A
+// cut mid-word costs that word in both chunks, and the diarising model
+// filled the gap with words nobody said ("the slide deck needs some work").
 //
 // mp3 rather than wav: at 16 kHz mono, wav is ~32 KB/s and this mp3 setting is
 // ~11 KB/s, so every chunk sent to Whisper is roughly a third the size. On a
 // long meeting that is the difference between comfortably inside the
 // transcription budget and not — and speech recognition is unaffected.
 const CHUNK_SECONDS = 180;
+// How far a cut may move to land in a pause: back up to 30s, forward up to 15s.
+const CUT_EARLIER = 30;
+const CUT_LATER = 15;
 const MP3_ARGS = ["-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-q:a", "6"];
 // m4a holds an untouched AAC stream, which is what phone recordings and the
 // audio track of an mp4/mov almost always are.
@@ -27,6 +34,72 @@ function run(args: string[]): Promise<void> {
     proc.on("close", (code) => {
       if (code === 0) resolve();
       else reject(new Error(`ffmpeg exited ${code}: ${stderr.slice(-2000)}`));
+    });
+  });
+}
+
+// Pauses in the recording, as [start, end] seconds. A failure here only costs
+// the pause-aware cuts, so it returns nothing rather than throwing.
+function findPauses(inputPath: string): Promise<[number, number][]> {
+  return new Promise((resolve) => {
+    const proc = spawn(
+      ffmpegPath,
+      ["-hide_banner", "-nostats", "-i", inputPath, "-vn", "-af", "silencedetect=noise=-35dB:d=0.3", "-f", "null", "-"],
+      { stdio: ["ignore", "ignore", "pipe"] },
+    );
+    let stderr = "";
+    proc.stderr.on("data", (d) => (stderr += d.toString()));
+    proc.on("error", () => resolve([]));
+    proc.on("close", () => {
+      const pauses: [number, number][] = [];
+      let start: number | null = null;
+      for (const line of stderr.split("\n")) {
+        const s = line.match(/silence_start: (-?[\d.]+)/);
+        if (s) start = Math.max(0, parseFloat(s[1]));
+        const e = line.match(/silence_end: ([\d.]+)/);
+        if (e && start !== null) {
+          pauses.push([start, parseFloat(e[1])]);
+          start = null;
+        }
+      }
+      resolve(pauses);
+    });
+  });
+}
+
+// Cut points every CHUNK_SECONDS, each moved to the middle of the nearest
+// pause within reach. Where there is no pause in reach, the cut stays put.
+export function pickCuts(pauses: [number, number][], duration: number): number[] {
+  const cuts: number[] = [];
+  let last = 0;
+  for (let target = CHUNK_SECONDS; target < duration - 10; target = last + CHUNK_SECONDS) {
+    let best = target;
+    let bestDistance = Infinity;
+    for (const [s, e] of pauses) {
+      const mid = (s + e) / 2;
+      if (mid <= last + 30 || mid < target - CUT_EARLIER || mid > target + CUT_LATER) continue;
+      const distance = Math.abs(mid - target);
+      if (distance < bestDistance) {
+        best = mid;
+        bestDistance = distance;
+      }
+    }
+    cuts.push(best);
+    last = best;
+  }
+  return cuts;
+}
+
+// Length in seconds, from the "Duration:" line ffmpeg prints for any input.
+function probeDuration(inputPath: string): Promise<number> {
+  return new Promise((resolve) => {
+    const proc = spawn(ffmpegPath, ["-hide_banner", "-i", inputPath], { stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    proc.stderr.on("data", (d) => (stderr += d.toString()));
+    proc.on("error", () => resolve(0));
+    proc.on("close", () => {
+      const m = stderr.match(/Duration: (\d+):(\d+):([\d.]+)/);
+      resolve(m ? +m[1] * 3600 + +m[2] * 60 + parseFloat(m[3]) : 0);
     });
   });
 }
@@ -103,9 +176,11 @@ export async function chunkAudio(
     const inputPath = path.join(dir, `input.${inputExt}`);
     await writeFile(inputPath, input);
 
-    // 1. Segment split.
+    // 1. Segment split, at pauses where there are any.
     try {
       const pattern = path.join(dir, "chunk_%03d.mp3");
+      const [pauses, duration] = await Promise.all([findPauses(inputPath), probeDuration(inputPath)]);
+      const cuts = duration > 0 ? pickCuts(pauses, duration) : [];
       await run([
         "-hide_banner",
         "-loglevel", "error",
@@ -113,7 +188,9 @@ export async function chunkAudio(
         "-vn",
         ...MP3_ARGS,
         "-f", "segment",
-        "-segment_time", String(CHUNK_SECONDS),
+        ...(cuts.length
+          ? ["-segment_times", cuts.map((t) => t.toFixed(2)).join(",")]
+          : ["-segment_time", String(CHUNK_SECONDS)]),
         "-reset_timestamps", "1",
         pattern,
       ]);

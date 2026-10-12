@@ -11,6 +11,12 @@
 import { anthropic, CHECK_MODEL, WRITER_MODEL } from "@/lib/anthropic";
 import { applySpellings, spellingPromptBlock, type Spelling } from "./spellings";
 
+// How much of a transcript the notes are written from. It was 120,000
+// characters, which is about two hours of talk: a longer meeting lost its
+// ending from the notes without a word said. This is about seven hours,
+// roughly 100k tokens, inside every model the notes run on.
+export const TRANSCRIPT_CHARS = 400_000;
+
 export const NO_DASH_RULE =
   "Never use an em dash or an en dash. Not to join clauses, not as an aside, not before a list. Use a comma, a semicolon, a colon or a full stop instead. Hyphens inside compound words (tier-one, endo-first, one-on-one) are fine.";
 
@@ -147,7 +153,7 @@ function firstText(res: { content: { type: string; text?: string }[] }): string 
 }
 
 export async function captureFromTranscript(input: CaptureInput): Promise<CaptureOutput> {
-  const transcript = String(input.transcript || "").slice(0, 120000);
+  const transcript = String(input.transcript || "").slice(0, TRANSCRIPT_CHARS);
   const hint = String(input.hint || "").slice(0, 2000);
   // The writer's own notes, and whether they want them treated as the
   // priority signal rather than as one more piece of context.
@@ -438,7 +444,7 @@ Rules for a bullet:
               const missing = hints.get(a);
               return `- ${a}${missing ? ` (the notes never mention: ${missing.join(", ")})` : ""}`;
             })
-            .join("\n")}${transcript.trim() ? `\n\nTranscript:\n${transcript.slice(0, 120000)}` : ""}`,
+            .join("\n")}${transcript.trim() ? `\n\nTranscript:\n${transcript.slice(0, TRANSCRIPT_CHARS)}` : ""}`,
         },
       ],
     });
@@ -566,7 +572,7 @@ export async function groundFigures(notesHtml: string, source: string): Promise<
           role: "user",
           content: `Sentences:\n${flagged
             .map((x) => `[${x.i}] ${x.part.trim()} (not in the transcript: ${x.figs.join(", ")})`)
-            .join("\n")}\n\nTranscript:\n${source.slice(0, 120000)}`,
+            .join("\n")}\n\nTranscript:\n${source.slice(0, TRANSCRIPT_CHARS)}`,
         },
       ],
     });

@@ -5,6 +5,7 @@ import { anthropic, QUICK_MODEL, WRITER_MODEL } from "@/lib/anthropic";
 import {
   CaptureRefusal,
   NO_DASH_RULE,
+  TRANSCRIPT_CHARS,
   captureFromTranscript,
   stripDashes,
 } from "@/lib/meetingprep/captureAi";
@@ -499,7 +500,7 @@ Be direct and specific to THEIR answer, never generic. No markdown headings, no 
     }
 
     if (action === "debrief") {
-      const transcript = String(body?.transcript || "").slice(0, 60000);
+      const transcript = String(body?.transcript || "").slice(0, TRANSCRIPT_CHARS);
       const context = String(body?.context || "").slice(0, 10000);
       if (!transcript.trim())
         return NextResponse.json({ error: "No transcript provided" }, { status: 400 });
