@@ -386,6 +386,16 @@ export function OmniChat() {
         scope,
         note: setWorking,
       });
+      // The action wrote to the table. If the page behind this panel is
+      // holding that record in state, it has just gone stale — the change is
+      // invisible, and its next autosave of the same column would put the old
+      // copy back. Tell it to read itself again.
+      try {
+        await scope.reload?.();
+      } catch {
+        // A refresh that fails is a stale screen, not a lost write. The
+        // action already succeeded and saying otherwise would be wrong.
+      }
       setTurns((prev) => [
         ...prev.map((t, i) =>
           i === turnIndex

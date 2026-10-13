@@ -202,6 +202,28 @@ export function useMpMeeting(id: string, userId: string | null) {
     }
   }, [id]);
 
+  /**
+   * Read the row back, for when something outside this page changed it.
+   *
+   * The chat writes straight to the table — it has to, because it also runs
+   * on pages that are not open — and this page loads once and then keeps the
+   * meeting in React state. Without this, anything the chat adds is invisible
+   * until a reload, and worse: an autosave of a column the chat just wrote
+   * would put the stale copy back over it.
+   *
+   * Pending edits go out FIRST. Reading over the top of them would throw away
+   * whatever the writer typed in the seconds before they asked.
+   */
+  const reload = useCallback(async () => {
+    await flush();
+    if (deletedRef.current) return;
+    const { data } = await supabase.from("mp_meetings").select("*").eq("id", id).maybeSingle();
+    const row = (data as MpMeeting) || null;
+    if (!row) return;
+    setMeeting(row);
+    if (userId) setCached(`mtg:${userId}:${id}`, { _t: Date.now(), row });
+  }, [flush, id, userId]);
+
   // Deleting from the meeting itself, rather than only from the list. A
   // recording that turned out to be the wrong meeting, or one you did not
   // mean to keep, is discovered on this page — the recorder opens straight to
@@ -254,7 +276,7 @@ export function useMpMeeting(id: string, userId: string | null) {
     };
   }, [flush]);
 
-  return { meeting, loading, save, flush, saveState, remove };
+  return { meeting, loading, save, flush, reload, saveState, remove };
 }
 
 export function useMpSettings(userId: string | null) {

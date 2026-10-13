@@ -191,10 +191,26 @@ export const ACTIONS: ActionDef[] = [
     },
   },
   {
+    id: "meetingprep.question.add",
+    apps: ["meeting-prep"],
+    subject: "meeting",
+    when: "Add a question the writer will ASK in the meeting, to their question bank and running order. This is the one for \"add a question\", \"write me a question about X\", \"add that to my questions\".",
+    params: {
+      "meetingId?": "leave empty for the meeting on screen",
+      question: "the question, word for word, as it would be said out loud",
+      "followUp?": "the probe to use if the first answer is thin",
+      "category?": "which group it belongs in, matching one already in the bank where there is one",
+      "forWhom?": "who to put it to, when that matters",
+    },
+  },
+  {
     id: "meetingprep.grill.add",
     apps: ["meeting-prep"],
     subject: "meeting",
-    when: "Add a question they should be ready for, with the answer you'd give.",
+    // Named apart from question.add on purpose. These are the two opposite
+    // directions a question can point, they were one verb, and "add a
+    // question" was landing in the practice drill where nobody looked for it.
+    when: "Add a question the writer should be READY FOR — one somebody else will ask THEM — to the practice drill, with the answer they'd give. Not for questions they plan to ask.",
     params: {
       "meetingId?": "leave empty for the meeting on screen",
       question: "",

@@ -195,7 +195,7 @@ export default function MeetingPage() {
   const router = useRouter();
   const confirm = useConfirm();
   const { userId } = useUserId();
-  const { meeting, loading, save, flush, saveState, remove } = useMpMeeting(id, userId);
+  const { meeting, loading, save, flush, reload, saveState, remove } = useMpMeeting(id, userId);
   const { settings, save: saveSettings } = useMpSettings(userId);
   // Set when the writer changes the subject, so the offer to rename the
   // meeting appears once, in response to what they did.
@@ -228,6 +228,11 @@ export default function MeetingPage() {
           app: "meeting-prep",
           subject: { kind: "meeting", id: meeting.id, label: meeting.title || "this meeting" },
           context: meetingContext(meeting),
+          // The chat writes to the row behind this page's back, so the page
+          // reads itself again afterwards. Without it, a question added from
+          // the chat is invisible until a reload, and the next autosave of
+          // the same column would overwrite it.
+          reload,
         }
       : null,
   );

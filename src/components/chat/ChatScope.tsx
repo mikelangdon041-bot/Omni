@@ -80,6 +80,7 @@ function useRegister(value: ChatScopeValue | null, isBase: boolean) {
         !!value.onEdit,
         value.editLabel,
         value.editBusy,
+        !!value.reload,
       ])
     : "";
 
@@ -96,6 +97,7 @@ function useRegister(value: ChatScopeValue | null, isBase: boolean) {
       // Always call through to whatever the page's latest render produced, so a
       // stale closure can't refine an out-of-date draft.
       onEdit: v.onEdit ? (i: string) => live.current?.onEdit?.(i) : undefined,
+      reload: v.reload ? () => live.current?.reload?.() : undefined,
     });
     return () => set(null);
   }, [fingerprint, set]);

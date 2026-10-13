@@ -322,6 +322,76 @@ export async function runAction(
       return { message: `Added ${name} to the meeting.`, href: `/meeting-prep/${id}` };
     }
 
+    case "meetingprep.question.add": {
+      const id = need(subjectId(p, "meetingId", env), "meeting");
+      const { data } = await supabase
+        .from("mp_meetings")
+        .select("questions")
+        .eq("id", id)
+        .maybeSingle();
+      const bank = (data?.questions || {}) as {
+        items?: {
+          category?: string;
+          picked?: boolean;
+          order?: number;
+          deleted?: boolean;
+        }[];
+      };
+      const items = Array.isArray(bank.items) ? bank.items : [];
+      const question = need(str(p.question, 500), "question");
+      const live = items.filter((q) => !q.deleted);
+      // Straight into the running order, at the end. A question added by
+      // asking for it is one they want; leaving it unpicked would file it
+      // among the suggestions, which is where they went looking for the last
+      // one and did not find it.
+      const maxOrder = live.reduce(
+        (n, q) => (q.picked && typeof q.order === "number" ? Math.max(n, q.order) : n),
+        -1,
+      );
+      const { error } = await supabase
+        .from("mp_meetings")
+        .update({
+          questions: {
+            ...bank,
+            items: [
+              ...items,
+              {
+                id: `q${Date.now()}`,
+                text: question,
+                // Its own group unless it was told one that already exists,
+                // so a stray name cannot scatter the bank into singletons.
+                category:
+                  str(p.category, 60) &&
+                  live.some(
+                    (q) =>
+                      (q.category || "").toLowerCase() ===
+                      str(p.category, 60).toLowerCase(),
+                  )
+                    ? str(p.category, 60)
+                    : "Mine",
+                why: "",
+                followUp: str(p.followUp, 500),
+                forWhom: str(p.forWhom, 120),
+                rank: 0,
+                picked: true,
+                backup: false,
+                asked: false,
+                order: maxOrder + 1,
+                // Theirs, because they asked for it: a rewrite of the bank
+                // must not quietly throw it away.
+                source: "user",
+              },
+            ],
+          },
+        })
+        .eq("id", id);
+      if (error) throw new Error(error.message);
+      return {
+        message: "Added it to your questions, at the end of your list.",
+        href: `/meeting-prep/${id}`,
+      };
+    }
+
     case "meetingprep.grill.add": {
       const id = need(subjectId(p, "meetingId", env), "meeting");
       const { data } = await supabase

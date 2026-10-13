@@ -49,6 +49,16 @@ export interface ChatScopeValue {
   editLabel?: string;
   /** True while the page is mid-edit, so the button can't be pressed twice. */
   editBusy?: boolean;
+  /**
+   * Read the record back after the chat has written to it.
+   *
+   * Actions write straight to the table, because the chat also runs on pages
+   * that are not showing the thing it is changing. When the page IS open and
+   * holding the record in state, that write is invisible to it — and if the
+   * page later autosaves the same column, it puts its stale copy back over
+   * the top. A page that keeps a record in state should pass this.
+   */
+  reload?: () => Promise<void> | void;
 }
 
 /** A thing the assistant offered to do, as it comes back from the model. */
