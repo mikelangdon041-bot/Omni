@@ -320,14 +320,39 @@ $("signin").addEventListener("submit", async (e) => {
 
 $("record").addEventListener("click", () => invoke("toggle_recording"));
 
-$("cancel-recording").addEventListener("click", () => {
-  // No confirm() on Stop — losing that would cost a whole meeting — but this
-  // button's entire purpose is throwing the recording away, so it gets one:
-  // opening the window mid-meeting to check on it is exactly the moment a
-  // stray click here would otherwise cost the meeting for real.
-  if (window.confirm("Discard this recording? It cannot be recovered.")) {
-    void invoke("cancel_recording");
-  }
+/** Two clicks to throw a recording away, both inside this window. The first
+    turns the button into the question; the second, within a few seconds,
+    means it. window.confirm() was used here and never came back true inside
+    the recorder's webview, so "Delete it" silently did nothing. */
+function armed(button, question, act) {
+  const label = button.textContent;
+  let timer = null;
+  button.addEventListener("click", () => {
+    if (button.dataset.armed) {
+      clearTimeout(timer);
+      delete button.dataset.armed;
+      button.textContent = label;
+      button.classList.remove("danger");
+      act();
+      return;
+    }
+    button.dataset.armed = "1";
+    button.textContent = question;
+    button.classList.add("danger");
+    timer = setTimeout(() => {
+      delete button.dataset.armed;
+      button.textContent = label;
+      button.classList.remove("danger");
+    }, 4000);
+  });
+}
+
+// No confirm on Stop — losing that would cost a whole meeting — but this
+// button's entire purpose is throwing the recording away, so it asks: opening
+// the window mid-meeting to check on it is exactly the moment a stray click
+// here would otherwise cost the meeting for real.
+armed($("cancel-recording"), "Click again to discard it for good", () => {
+  void invoke("cancel_recording");
 });
 
 $("meeting-title").addEventListener("input", () => {
@@ -433,13 +458,13 @@ $("recover-send").addEventListener("click", () => {
   if (orphan) void invoke("recover", { path: orphan.path }).catch(() => {});
 });
 
-$("recover-discard").addEventListener("click", () => {
+// The recording is the only copy, so this asks once before it goes.
+armed($("recover-discard"), "Delete for good?", () => {
   const orphan = (status.orphans || [])[0];
-  // No confirm: the recording is the only copy, so this button says "Delete
-  // it" and means it, but it is deliberately the quieter of the two.
-  if (orphan && window.confirm("Delete this recording? It cannot be recovered.")) {
-    void invoke("discard_orphan", { path: orphan.path });
-  }
+  if (!orphan) return;
+  invoke("discard_orphan", { path: orphan.path }).catch((e) => {
+    $("recovered-note").textContent = `Could not delete it: ${e}`;
+  });
 });
 $("open-meeting").addEventListener("click", () => invoke("open_url", { url: status.last_meeting }));
 $("settings-open").addEventListener("click", openSettings);

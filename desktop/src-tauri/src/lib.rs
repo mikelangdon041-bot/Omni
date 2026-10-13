@@ -1196,7 +1196,7 @@ async fn recover(app: AppHandle, path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn discard_orphan(app: AppHandle, path: String) {
+fn discard_orphan(app: AppHandle, path: String) -> Result<(), String> {
     let file = std::path::PathBuf::from(&path);
     // Only ever inside our own recordings folder, so a bad path from the
     // window cannot be turned into deleting something else.
@@ -1205,11 +1205,18 @@ fn discard_orphan(app: AppHandle, path: String) {
         .app_local_data_dir()
         .unwrap_or_else(|_| std::env::temp_dir())
         .join("recordings");
-    if file.starts_with(&dir) {
-        forget_recording(&file);
+    if !file.starts_with(&dir) {
+        return Err("that file is not one of the recorder's recordings".into());
     }
+    forget_recording(&file);
     let orphans = find_orphans(&app, Stubs::Prune);
     set_status(&app, move |s| s.orphans = orphans);
+    // Said out loud rather than swallowed: a delete that quietly failed left
+    // the same card on screen, which reads as the button doing nothing.
+    if file.exists() {
+        return Err("Windows would not remove the file. Close anything that has it open and try again.".into());
+    }
+    Ok(())
 }
 
 #[tauri::command]

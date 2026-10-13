@@ -196,6 +196,13 @@ button {
   width: 100%;
 }
 
+/* The second click of a delete: the button has become the question. */
+.ghost.danger,
+.ghost.danger:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
 .link {
   display: block;
   width: 100%;
