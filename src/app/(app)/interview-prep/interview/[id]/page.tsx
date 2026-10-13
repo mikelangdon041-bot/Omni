@@ -93,7 +93,7 @@ export default function InterviewWorkspacePage() {
 
   return (
     <>
-      <BackButton />
+      <BackButton fallback="/interview-prep" />
       <Header
         interview={interview}
         update={update}

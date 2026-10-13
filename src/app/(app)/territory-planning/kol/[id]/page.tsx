@@ -71,7 +71,7 @@ export default function KOLDetailPage() {
 
   return (
     <>
-      <BackButton />
+      <BackButton fallback="/territory-planning" />
 
       <Header kol={kol} update={update} suggestions={suggestions} />
 

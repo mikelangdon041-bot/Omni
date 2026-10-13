@@ -103,7 +103,7 @@ export default function CandidateDetailPage() {
 
   return (
     <>
-      <BackButton />
+      <BackButton fallback="/interview-prep" />
 
       <Header candidate={candidate} update={updateAndLog} canEdit={canEdit} />
 
