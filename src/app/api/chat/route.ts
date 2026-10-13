@@ -10,6 +10,7 @@ import {
   buildComposeSystem,
 } from "@/lib/chat/prompt";
 import { crossAppLookup } from "@/lib/chat/lookup";
+import { parseReply } from "@/lib/chat/parse";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -117,7 +118,11 @@ export async function POST(req: Request) {
       for (let round = 0; round < 2; round++) {
         const res = await anthropic().messages.create({
           model: WRITER_MODEL,
-          max_tokens: 4000,
+          // A question that pulls numbers together answers at length, and the
+          // whole answer has to fit inside one JSON object. At 4000 an answer
+          // like that stopped mid-string, and the half-written JSON reached
+          // the person as "Unterminated string in JSON at position 834".
+          max_tokens: 12000,
           output_config: { format: { type: "json_schema", schema: ASK_SCHEMA } },
           system: buildAskSystem({ app, context, subject, canEdit, editLabel, lookups }),
           messages,
@@ -127,8 +132,19 @@ export async function POST(req: Request) {
             { error: "The model declined that one — try rephrasing." },
             { status: 502 },
           );
+        // Say it ran long, in words. Parsing a half-finished object throws a
+        // SyntaxError with a character offset in it, which tells the person
+        // nothing they can act on and reads like the app broke.
+        if (res.stop_reason === "max_tokens")
+          return NextResponse.json(
+            {
+              error:
+                "That answer ran longer than I can give in one go — ask for a piece of it at a time.",
+            },
+            { status: 502 },
+          );
 
-        const parsed = JSON.parse(firstText(res) || "{}");
+        const parsed = parseReply(firstText(res));
         const raw: { id?: unknown; label?: unknown; paramsJson?: unknown }[] = Array.isArray(
           parsed.actions,
         )
@@ -191,8 +207,19 @@ export async function POST(req: Request) {
           { error: "The model declined that one — try rephrasing." },
           { status: 502 },
         );
+      // Same guard as the ask path: a cut-off object must not reach the
+      // person as a character offset.
+      if (res.stop_reason === "max_tokens")
+        return NextResponse.json(
+          { error: "That ran longer than I can hand over in one go — try a shorter brief." },
+          { status: 502 },
+        );
 
-      const parsed = JSON.parse(firstText(res) || "{}");
+      const parsed = parseReply(firstText(res)) as {
+        id?: unknown;
+        summary?: unknown;
+        paramsJson?: unknown;
+      };
       const id = String(parsed.id || "");
       const allowed = new Set(actionsFor(target).map((d) => d.id));
       if (!id || !allowed.has(id))

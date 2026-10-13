@@ -67,8 +67,31 @@ export function meetingContext(m: MpMeeting): string {
     .filter((s) => s.trim().length > 20);
   const grill = (m.grill || []).map((g) => `  Q: ${g.question}`);
 
+  // The question bank, which this left out entirely. Asked about their own
+  // questions while looking straight at them, the chat said it could not see
+  // the screen, because nothing had ever put them in front of it. The list
+  // they carry in comes first and in order, since that is the one they mean
+  // by "my questions"; the rest of the bank follows as the pool it is.
+  const live = (m.questions?.items || []).filter((q) => !q.deleted);
+  const carried = live
+    .filter((q) => q.picked)
+    .sort((a, b) => a.order - b.order)
+    .map(
+      (q, i) =>
+        `  ${i + 1}. ${q.text}${q.backup ? " [held as a backup]" : ""}${
+          q.forWhom ? ` [for ${q.forWhom}]` : ""
+        }${q.followUp ? `\n     probe: ${q.followUp}` : ""}`,
+    );
+  const pool = live
+    .filter((q) => !q.picked)
+    .map((q) => `  (${q.category}) ${q.text}`);
+
   return [
     `Meeting: ${m.title || "(untitled)"}`,
+    // The subject in the writer's own words, which beats the meeting's name
+    // wherever the two point different ways. Everything else in the app
+    // treats it as decisive and this was the one place that never saw it.
+    m.topic && `THE SUBJECT OF THIS SESSION, in their own words: ${m.topic}`,
     `Type: ${meetingTypeLabel(m.meeting_type)}`,
     m.date && `When: ${new Date(m.date).toLocaleString()}`,
     m.duration_min && `Duration: ${m.duration_min} minutes`,
@@ -81,7 +104,22 @@ export function meetingContext(m: MpMeeting): string {
     (m.documents || []).length &&
       `Documents attached: ${(m.documents || []).map((d) => d.name).join(", ")}`,
     sections.length ? `The brief so far:\n${sections.join("\n")}` : "No brief generated yet.",
-    grill.length && `Questions they're being drilled on:\n${grill.join("\n")}`,
+    carried.length
+      ? `THE QUESTIONS THEY ARE CARRYING IN, in the order they will ask them. This is what they mean by "my questions" or "my list":\n${carried
+          .join("\n")
+          .slice(0, 8000)}`
+      : "",
+    pool.length
+      ? `Other questions in the bank, written but not picked:\n${pool.join("\n").slice(0, 6000)}`
+      : "",
+    m.questions?.guidance &&
+      `Their standing instruction on how their questions must be written: ${m.questions.guidance}`,
+    // What the brief was built from. Without it the chat answers about the
+    // subject from memory while the app has fresher material sitting on the
+    // same record.
+    m.brief?.research?.notes &&
+      `What was looked up about the subject for this meeting:\n${m.brief.research.notes.slice(0, 6000)}`,
+    grill.length && `Questions they're being drilled on (the Practice tab, questions put TO them):\n${grill.join("\n")}`,
     m.debrief?.summary && line("Debrief", m.debrief.summary, 1500),
   ]
     .filter(Boolean)

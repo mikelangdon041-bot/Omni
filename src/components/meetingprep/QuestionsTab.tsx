@@ -145,6 +145,9 @@ export function QuestionsTab({
   // time a session where everything went wrong, which is not the number
   // anyone is standing there trying to work out.
   const pace = m.questions?.paceMin || 3;
+  // Moderating means asking one question and getting several answers, so the
+  // cost of a question is the answers it draws, not one answer.
+  const voices = m.questions?.voicesPerQ || (m.meeting_type === "panel" ? 2 : 1);
   const askingCount = useMemo(() => picked.filter((q) => !q.backup).length, [picked]);
   const backupCount = picked.length - askingCount;
 
@@ -817,8 +820,10 @@ export function QuestionsTab({
               asking={askingCount}
               backups={backupCount}
               pace={pace}
+              voices={voices}
               slot={m.duration_min}
               onPace={(n) => save({ questions: { ...m.questions, paceMin: n } })}
+              onVoices={(n) => save({ questions: { ...m.questions, voicesPerQ: n } })}
               onUseAsSlot={(mins) => save({ duration_min: mins })}
             />
           ) : (
@@ -1325,19 +1330,25 @@ function RunTime({
   asking,
   backups,
   pace,
+  voices,
   slot,
   onPace,
+  onVoices,
   onUseAsSlot,
 }: {
   asking: number;
   backups: number;
   pace: number;
+  /** People who answer a typical question. On a panel this is never one. */
+  voices: number;
   /** The session length off Setup, when the writer has given one. */
   slot?: number | null;
   onPace: (minutes: number) => void;
+  onVoices: (n: number) => void;
   onUseAsSlot: (minutes: number) => void;
 }) {
-  const total = asking * pace;
+  const perQuestion = pace * voices;
+  const total = asking * perQuestion;
   const over = Boolean(slot && total > slot);
   return (
     <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 text-xs">
@@ -1345,20 +1356,39 @@ function RunTime({
         about {total} min{slot ? ` of your ${slot}` : ""}
         {over ? ` — ${total - slot!} over` : ""}
       </span>
+      {/* The sum, in the open. A moderator told "about 33 min" for eleven
+          questions is being quoted a one-to-one meeting's arithmetic, and
+          cannot tell that from the number alone. */}
+      <span className="text-muted">
+        {asking} × {pace}
+        {voices > 1 ? ` × ${voices}` : ""}
+      </span>
       {backups > 0 && (
         <span className="text-muted" title="Backups are not in the total">
-          +{backups * pace} held back
+          +{backups * perQuestion} held back
         </span>
       )}
       <select
         value={pace}
         onChange={(e) => onPace(Number(e.target.value))}
-        title="How long you expect an answer to run"
+        title="How long you expect one answer to run"
         className="rounded-md border border-border bg-surface px-1.5 py-0.5 text-xs text-muted outline-none focus:border-[var(--accent)]"
       >
         {[1, 2, 3, 4, 5].map((n) => (
           <option key={n} value={n}>
             {n} min an answer
+          </option>
+        ))}
+      </select>
+      <select
+        value={voices}
+        onChange={(e) => onVoices(Number(e.target.value))}
+        title="How many people answer a typical question"
+        className="rounded-md border border-border bg-surface px-1.5 py-0.5 text-xs text-muted outline-none focus:border-[var(--accent)]"
+      >
+        {[1, 2, 3, 4, 5].map((n) => (
+          <option key={n} value={n}>
+            {n === 1 ? "one answers each" : `${n} answer each`}
           </option>
         ))}
       </select>

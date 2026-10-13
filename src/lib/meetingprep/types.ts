@@ -183,6 +183,11 @@ export interface QuestionBank {
   // of four and a one to one are not the same meeting, and the writer is the
   // one who knows which they are walking into.
   paceMin?: number;
+  // How many people answer a typical question. One, across a table. On a
+  // panel it is never one, and pretending otherwise told a moderator with
+  // eleven questions that they had half an hour of material when they had
+  // closer to an hour of it.
+  voicesPerQ?: number;
 }
 
 // One piece of advice from a read-through of the whole prep pack. The point
