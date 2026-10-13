@@ -116,7 +116,10 @@ async function main() {
   // questionRefs check
   const qNotes = notes.filter((n) => n.target === 'questions');
   for (const n of qNotes) {
-    console.log('  [questions] ' + n.title + ' -> refs ' + JSON.stringify(n.questionRefs) + ' action ' + (n.action || '(none)'));
+    console.log('  [questions] ' + n.title);
+    console.log('      bin/act: ' + JSON.stringify(n.questionRefs) + '  keep: ' + (n.keepRef || '-') + '  action: ' + (n.action || '(none)'));
+    if (n.keepRef && n.questionRefs.includes(n.keepRef)) problems.push('keepRef is also on the chopping block: ' + n.title);
+    if (n.action === 'bin' && !n.keepRef) problems.push('bins questions without saying what is kept: ' + n.title);
     if (!n.questionRefs.length) problems.push('a questions note named no questions: ' + n.title);
     if (n.action && !n.questionRefs.length) problems.push('an action with nothing to act on: ' + n.title);
   }

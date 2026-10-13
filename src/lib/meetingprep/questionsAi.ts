@@ -7,7 +7,7 @@
 // more, grouped, with a follow-up probe under each, written to be read off a
 // card while standing up.
 
-import { anthropic, WRITER_MODEL } from "@/lib/anthropic";
+import { anthropic, CHECK_MODEL, WRITER_MODEL } from "@/lib/anthropic";
 import { DOMAIN_RULE, SEAT_RULE, meetingContext, type MeetingPayload } from "./briefAi";
 import { allowedNames, namedSource } from "./spokenSources";
 
@@ -245,6 +245,7 @@ export async function writeVariants({
   kolBlock = "",
   research = "",
   question,
+  others = [],
   guidance = "",
   standing = "",
 }: {
@@ -252,18 +253,29 @@ export async function writeVariants({
   kolBlock?: string;
   research?: string;
   question: { text: string; why?: string; followUp?: string; category?: string };
+  /**
+   * The rest of the bank. Without it "combine this with the next one" is a
+   * sentence the model cannot act on, because it has never been shown the
+   * next one — it was handed a single question in isolation.
+   */
+  others?: string[];
   /** What the writer wants different about this one, in their words. */
   guidance?: string;
   /** Their standing instruction about how every question must be written. */
   standing?: string;
 }): Promise<QuestionVariant[]> {
   const res = await anthropic().messages.create({
-    model: WRITER_MODEL,
+    // Three short rewrites of a sentence the writer already likes. The heavy
+    // model was spending the better part of a minute on it while they sat
+    // watching a progress bar, and the work does not need it.
+    model: CHECK_MODEL,
     max_tokens: 2000,
     output_config: { format: { type: "json_schema", schema: VARIANTS_SCHEMA } },
     system: `You are rewriting one question for someone who is going to ask it out loud. They like it. They do not like how it lands.
 
 Give exactly three versions of THIS question. Not three new questions: three ways of asking the same thing, far enough apart that choosing between them is a real choice. One might be blunter, one might come at it sideways, one might put a number or a scenario in front of it. Never three rewordings of the same sentence.
+
+The writer may keep more than one of your three, so make each one able to stand on its own in a running order next to the others, rather than three mutually exclusive takes on one slot.
 
 ${SEAT_RULE}
 
@@ -285,6 +297,13 @@ Plain prose. No markdown, no quotation marks around the question. Never an em da
         role: "user",
         content: `${meetingContext(meeting, kolBlock)}${
           research ? `\n\nThe research this meeting was prepared from:\n${research.slice(0, 8000)}` : ""
+        }${
+          others.length
+            ? `\n\nThe rest of the bank, for reference only. You are rewriting ONE question, not these. They are here so that an instruction like "combine this with the one about measurement" or "make sure it does not overlap the others" is something you can act on rather than guess at:\n${others
+                .map((o, i) => `${i + 1}. ${o}`)
+                .join("\n")
+                .slice(0, 6000)}`
+            : ""
         }\n\nThe question to rework${question.category ? `, filed under "${question.category}"` : ""}:\n${question.text}${
           question.why ? `\nWhy it was picked: ${question.why}` : ""
         }${question.followUp ? `\nIts current probe: ${question.followUp}` : ""}`,

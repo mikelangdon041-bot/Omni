@@ -168,15 +168,44 @@ export function ReviewPanel({
                   the reviewer had in mind; now the note shows them. */}
               {questionText && (n.questionIds?.length ?? 0) > 0 && (
                 <ul className="mt-1.5 space-y-1 border-l-2 border-[var(--accent)]/25 pl-2.5">
+                  {/* The one that survives goes first and says so. Shown only
+                      what it wants to take away, nobody can judge the call. */}
+                  {n.keepId && questionText(n.keepId) && (
+                    <li className="text-xs text-ink/80">
+                      <span className="mr-1 rounded bg-emerald-100 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-800">
+                        Keep
+                      </span>
+                      {questionText(n.keepId)}
+                    </li>
+                  )}
                   {n.questionIds!.map((id) => {
                     const text = questionText(id);
                     return text ? (
                       <li key={id} className="text-xs text-ink/80">
+                        {n.action === "bin" && (
+                          <span className="mr-1 rounded bg-red-100 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-800">
+                            Bin
+                          </span>
+                        )}
+                        {n.action === "rewrite" && (
+                          <span className="mr-1 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+                            Rewrite
+                          </span>
+                        )}
                         {text}
                       </li>
                     ) : null;
                   })}
                 </ul>
+              )}
+              {/* A note from before the reviewer named its questions. It will
+                  never grow them, so say what to do instead of showing a note
+                  the writer cannot act on. */}
+              {scope === "questions" && !(n.questionIds?.length ?? 0) && (
+                <p className="mt-1 text-xs text-muted">
+                  Written before notes named their questions — run Check it over again to
+                  see which ones this means.
+                </p>
               )}
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                 <span className="rounded-full bg-surface px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted">

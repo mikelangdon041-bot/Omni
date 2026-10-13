@@ -120,6 +120,8 @@ export function QuestionsTab({
   // Writing every missing probe at once, and how many are home.
   const [fillingAll, setFillingAll] = useState(false);
   const [filledCount, setFilledCount] = useState(0);
+  // The standing instructions, shut until asked for.
+  const [showStanding, setShowStanding] = useState(false);
   // The read-through is one pass over the whole pack, run from any tab. This
   // one shows what it found about the questions, which is where the advice
   // about their order and their overlaps was always meant to be read.
@@ -741,8 +743,34 @@ export function QuestionsTab({
         onClear={review.clear}
       />
 
-      {(guidance || coverage) && (
+      {/* Standing instructions, folded away. They are set once and then in
+          force for good, so a banner quoting them back on every visit is a
+          paragraph of the writer's own words between them and their list.
+          One line says they are on; opening it is for when you want to
+          change one. */}
+      {(guidance || coverage) && !showStanding && (
+        <button
+          onClick={() => setShowStanding(true)}
+          className="flex w-full items-center gap-1.5 rounded-lg px-1 py-0.5 text-left text-[11px] text-muted transition hover:text-ink"
+        >
+          <Wand2 size={12} className="shrink-0 text-[var(--accent)]" />
+          <span className="min-w-0 flex-1 truncate">
+            {[guidance && "how they're written", coverage && "what to cover"]
+              .filter(Boolean)
+              .join(" · ")}{" "}
+            set
+          </span>
+          <span className="shrink-0 underline-offset-2 hover:underline">show</span>
+        </button>
+      )}
+      {(guidance || coverage) && showStanding && (
         <div className="space-y-1.5 rounded-lg border border-border bg-canvas/50 px-3 py-2 text-xs text-muted">
+          <button
+            onClick={() => setShowStanding(false)}
+            className="float-right shrink-0 underline-offset-2 hover:underline"
+          >
+            hide
+          </button>
           {guidance && (
             <p className="flex items-start gap-1.5">
               <Wand2 size={13} className="mt-0.5 shrink-0 text-[var(--accent)]" />
@@ -1183,6 +1211,31 @@ export function QuestionsTab({
           setReworkId(null);
           toast("success", "Swapped in");
         }}
+        onAdd={(text, followUp) => {
+          const from = live.find((x) => x.id === reworkId);
+          const maxOrder = picked.length ? Math.max(...picked.map((p) => p.order)) : -1;
+          setItems([
+            ...items,
+            {
+              id: newId(),
+              text,
+              category: from?.category || "Mine",
+              why: from?.why || "",
+              followUp,
+              forWhom: from?.forWhom || "",
+              rank: 0,
+              // Straight into the list: they said they wanted this one, so
+              // making them go and find it in the suggestions is a step for
+              // nothing.
+              picked: true,
+              backup: false,
+              asked: false,
+              order: maxOrder + 1,
+              source: "ai",
+            },
+          ]);
+          toast("success", "Added to your list");
+        }}
         fetchVariants={async (q, instruction) => {
           const res = await fetch("/api/meeting/ai", {
             method: "POST",
@@ -1199,6 +1252,9 @@ export function QuestionsTab({
                 followUp: q.followUp,
                 category: q.category,
               },
+              // The rest of the bank, so "combine this with the next one" is
+              // an instruction it can follow rather than guess at.
+              others: live.filter((x) => x.id !== q.id).map((x) => x.text),
               guidance: instruction,
               standing: guidance,
             }),
@@ -1455,6 +1511,7 @@ function ReworkModal({
   standing,
   onClose,
   onApply,
+  onAdd,
   fetchVariants,
 }: {
   q: QuestionItem | null;
@@ -1462,10 +1519,13 @@ function ReworkModal({
   standing: string;
   onClose: () => void;
   onApply: (text: string, followUp: string) => void;
+  /** Keep a version as well as, rather than instead of, what is there. */
+  onAdd: (text: string, followUp: string) => void;
   fetchVariants: (q: QuestionItem, instruction: string) => Promise<QuestionVariant[]>;
 }) {
   const [instruction, setInstruction] = useState("");
   const [options, setOptions] = useState<QuestionVariant[]>([]);
+  const [added, setAdded] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const pct = useProgress(busy, 20000);
@@ -1478,6 +1538,7 @@ function ReworkModal({
       const got = await fetchVariants(q, instruction.trim());
       if (!got.length) throw new Error("Nothing usable came back — try saying it differently.");
       setOptions(got);
+      setAdded([]);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1513,13 +1574,16 @@ function ReworkModal({
           {error && <p className="mt-2 text-sm text-status-error">{error}</p>}
 
           {options.length > 0 && !busy && (
-            <ul className="mt-4 space-y-2">
-              {options.map((v, i) => (
-                <li key={i}>
-                  <button
-                    type="button"
-                    onClick={() => onApply(v.text, v.followUp || q.followUp)}
-                    className="w-full rounded-xl border border-border bg-surface p-3 text-left transition hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]/20"
+            <>
+              {/* Two different things you can want from a version you like:
+                  this one INSTEAD of what you had, or this one AS WELL. Only
+                  the first existed, so liking two of the three meant picking
+                  one and retyping the other. */}
+              <ul className="mt-4 space-y-2">
+                {options.map((v, i) => (
+                  <li
+                    key={i}
+                    className="rounded-xl border border-border bg-surface p-3 transition hover:border-[var(--accent)]/60"
                   >
                     <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--accent)]">
                       {v.angle}
@@ -1530,10 +1594,44 @@ function ReworkModal({
                         Probe: {v.followUp}
                       </span>
                     )}
-                  </button>
-                </li>
-              ))}
-            </ul>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => onApply(v.text, v.followUp || q.followUp)}
+                      >
+                        Use instead
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={added.includes(i)}
+                        onClick={() => {
+                          onAdd(v.text, v.followUp || "");
+                          setAdded((a) => [...a, i]);
+                        }}
+                      >
+                        {added.includes(i) ? (
+                          <>
+                            <Check size={13} /> Added
+                          </>
+                        ) : (
+                          <>
+                            <Plus size={13} /> Keep this too
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              {added.length > 0 && (
+                <p className="mt-2 text-xs text-muted">
+                  {added.length} added to your list. The original is still here until you
+                  swap it or close.
+                </p>
+              )}
+            </>
           )}
 
           <div className="mt-4 flex items-center justify-end gap-2">

@@ -198,6 +198,8 @@ export interface ReviewNote {
    * once a question has been added above it.
    */
   questionIds?: string[];
+  /** The one being kept, when the note is a choice between questions. */
+  keepId?: string;
   /** What can simply be done to those questions, where that is safe. */
   action?: "rewrite" | "bin";
   /** The advice itself, one line, written as something to do. */

@@ -29,6 +29,13 @@ export interface WrittenNote {
    * reviewer had in mind.
    */
   questionRefs: number[];
+  /**
+   * The one being KEPT, when the note is about choosing between questions.
+   * Without it a "bin these two" note shows the writer only what it wants to
+   * take away, and they cannot judge the call without seeing what survives
+   * it. 0 when there is nothing being kept.
+   */
+  keepRef: number;
   /** What to do to those questions, when it is something safe to do. */
   action?: "rewrite" | "bin";
 }
@@ -48,6 +55,7 @@ const REVIEW_SCHEMA = {
           fix: { type: "string" as const },
           severity: { type: "string" as const, enum: ["high", "medium", "low"] },
           questionRefs: { type: "array" as const, items: { type: "number" as const } },
+          keepRef: { type: "number" as const },
           action: { type: "string" as const, enum: ["rewrite", "bin", ""] },
         },
         required: [
@@ -58,6 +66,7 @@ const REVIEW_SCHEMA = {
           "fix",
           "severity",
           "questionRefs",
+          "keepRef",
           "action",
         ],
         additionalProperties: false,
@@ -139,6 +148,8 @@ Fields:
 - fix: the same advice rewritten as an instruction addressed to whoever will rewrite that section, specific enough to act on without the rest of this note. This gets handed over verbatim, so no "consider" and no "maybe" — say what to do.
 - severity: "high" if the meeting goes materially worse without it, "medium" if it is a real improvement, "low" if it is a tidy-up.
 - questionRefs: the numbers of the exact questions this note is about, from the numbered bank below. REQUIRED on every note about the questions, and the note is worthless without it: "cut the duplicates down to one" leaves the writer hunting their own list for the pair you meant. Name them. Empty array for a note that is not about specific questions.
+- keepRef: when the note is choosing between questions, the number of the one that SURVIVES. The writer cannot judge "bin these two" without seeing what it is being cut down to, and they will not take your word for it against their own list. Never put the same number in both keepRef and questionRefs. In detail, say what the kept one does that the others do not. 0 when nothing is being kept.
+- Never group questions that are not actually the same into one note. If three questions each overlap a little but ask different things, that is three notes or none, not one note that bins two of them. The writer knows their own bank and will not act on a note that lumps together things they can see are different.
 - action: what should happen to those questions, when it is something that can simply be done.
   - "bin" when the questions themselves should go: duplicates, a question that asks what another already asks, one that no longer fits the subject. List ONLY the ones to remove in questionRefs, never the one that is being kept. Say in the detail which one you are keeping and why. Use it only when your fix is to be rid of the question outright — if the fix says to move it, re-file it, or keep it for somewhere else in the running order, the action is "", because the button would otherwise promise something your own note does not say.
   - "rewrite" when the questions should stay but be asked better, and your fix says how.
@@ -183,12 +194,18 @@ The sections that exist, by key: ${sectionKeys.length ? sectionKeys.join(", ") :
           ),
         ]
       : [];
+    // The keeper is never also on the chopping block; if the model says both,
+    // the safe reading is that it is being kept.
+    const rawKeep = Number(n?.keepRef);
+    const keepRef =
+      Number.isInteger(rawKeep) && rawKeep >= 1 && rawKeep <= questionCount ? rawKeep : 0;
+    const refs = questionRefs.filter((r) => r !== keepRef);
     const rawAction = String(n?.action || "").trim();
     // An action is only ever offered on questions it actually named. Without
     // the numbers there is nothing to do it to, and a button that cannot say
     // what it will change is a button nobody should press.
     const action =
-      target === "questions" && questionRefs.length && (rawAction === "rewrite" || rawAction === "bin")
+      target === "questions" && refs.length && (rawAction === "rewrite" || rawAction === "bin")
         ? (rawAction as "rewrite" | "bin")
         : undefined;
     out.push({
@@ -198,7 +215,8 @@ The sections that exist, by key: ${sectionKeys.length ? sectionKeys.join(", ") :
       targetLabel: String(n?.targetLabel || "").trim() || "This pack",
       fix,
       severity,
-      questionRefs,
+      questionRefs: refs,
+      keepRef,
       action,
     });
   }

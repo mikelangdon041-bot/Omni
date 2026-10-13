@@ -21,6 +21,7 @@ import {
   MessageCircle,
   Paperclip,
   Search,
+  Square,
   Send,
   Sparkles,
   Wand2,
@@ -88,6 +89,12 @@ export function OmniChat() {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  // The request in flight, so the writer can call it off. Without this the
+  // only way out of an answer you have changed your mind about was to close
+  // the chat, which throws the whole conversation away with it.
+  const inFlight = useRef<AbortController | null>(null);
+  // Only the thinking is stoppable; an action mid-write is not.
+  const [canStop, setCanStop] = useState(false);
   const [working, setWorking] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState<Pending[]>([]);
@@ -287,11 +294,15 @@ export function OmniChat() {
     ];
     setTurns(next);
     setBusy(true);
+    const ctrl = new AbortController();
+    inFlight.current = ctrl;
+    setCanStop(true);
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
+        signal: ctrl.signal,
         body: JSON.stringify({
           action: "ask",
           app: scope.app,
@@ -335,10 +346,30 @@ export function OmniChat() {
         },
       ]);
     } catch (e) {
-      setError((e as Error).message);
+      // Stopping it yourself is not an error, and saying so in red makes it
+      // look like something went wrong.
+      if ((e as Error).name !== "AbortError") setError((e as Error).message);
     } finally {
+      setCanStop(false);
+      inFlight.current = null;
       setBusy(false);
     }
+  }
+
+  /**
+   * Call off the answer it is writing.
+   *
+   * Only ever the thinking. Running an action is a write — to a task list, a
+   * meeting, a note — and stopping one halfway through leaves the writer
+   * guessing which half landed. Those are short anyway; it is the long think
+   * you change your mind during.
+   */
+  function stop() {
+    inFlight.current?.abort();
+    inFlight.current = null;
+    setCanStop(false);
+    setBusy(false);
+    setWorking("");
   }
 
   async function run(turnIndex: number, actionIndex: number) {
@@ -454,9 +485,8 @@ export function OmniChat() {
         {turns.length === 0 && (
           <div className="space-y-2">
             <p className="text-[11px] leading-snug text-muted">
-              I can see this page, and I can look up what your other apps know.
-              Ask me anything about it, or tell me what you want done and I&apos;ll
-              offer to do it. Nothing happens until you press the button.
+              I can see this page. Ask, or say what you want done — nothing
+              happens until you press the button.
             </p>
             <div className="flex flex-wrap gap-1.5">
               {examples.map((q) => (
@@ -641,14 +671,29 @@ export function OmniChat() {
             placeholder={pending.length ? "Add a question, or just send it…" : "Ask, or say what you want done…"}
             className="max-h-42 min-h-8 flex-1 resize-none overflow-y-auto rounded-lg border border-border bg-canvas px-2.5 py-1.5 text-sm leading-relaxed outline-none transition focus:border-[var(--accent)]"
           />
-          <button
-            type="button"
-            disabled={busy || reading || (!draft.trim() && !pending.length)}
-            onClick={() => void ask(draft)}
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-gradient-to-r from-[var(--grad-from)] to-[var(--grad-to)] text-white transition disabled:opacity-40"
-          >
-            <Send size={14} />
-          </button>
+          {/* While it is thinking, the same button stops it. An answer you
+              have already decided against is a wait with nothing at the end
+              of it, and there was no way out of it but to close the chat. */}
+          {busy && canStop ? (
+            <button
+              type="button"
+              title="Stop"
+              aria-label="Stop"
+              onClick={stop}
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-border bg-surface text-muted transition hover:border-red-300 hover:text-red-600"
+            >
+              <Square size={12} className="fill-current" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={busy || reading || (!draft.trim() && !pending.length)}
+              onClick={() => void ask(draft)}
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-gradient-to-r from-[var(--grad-from)] to-[var(--grad-to)] text-white transition disabled:opacity-40"
+            >
+              <Send size={14} />
+            </button>
+          )}
         </div>
       </div>
     </section>

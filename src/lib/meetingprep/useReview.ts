@@ -101,7 +101,10 @@ export function useReview({
       if (!res.ok) throw new Error(json.error || "Could not review it");
       const fresh: ReviewNote[] = (json.notes || []).map(
         (
-          n: Omit<ReviewNote, "id" | "done" | "dismissed"> & { questionRefs?: number[] },
+          n: Omit<ReviewNote, "id" | "done" | "dismissed"> & {
+            questionRefs?: number[];
+            keepRef?: number;
+          },
           i: number,
         ) => {
           // Resolve the reviewer's numbers to ids now, while the list it was
@@ -114,6 +117,7 @@ export function useReview({
           return {
             ...n,
             questionIds,
+            keepId: n.keepRef ? asked[n.keepRef - 1]?.id : undefined,
             // An action with nothing left to act on is a button that does
             // nothing, so it goes with the ids.
             action: questionIds.length ? n.action : undefined,
