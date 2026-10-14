@@ -21,6 +21,7 @@ import {
   MessageCircle,
   Paperclip,
   Search,
+  History,
   Square,
   Send,
   Sparkles,
@@ -31,6 +32,7 @@ import { RichTextView } from "@/components/ui/RichText";
 import { useUserId } from "@/lib/writer/hooks";
 import { runAction } from "@/lib/chat/run";
 import type { ActionOutcome, ChatTurn, ProposedAction } from "@/lib/chat/types";
+import { deleteChat, listChats, saveChat, type SavedChat } from "@/lib/chat/history";
 import { useResolvedScope } from "./ChatScope";
 
 interface Pending {
@@ -95,6 +97,14 @@ export function OmniChat() {
   const inFlight = useRef<AbortController | null>(null);
   // Only the thinking is stoppable; an action mid-write is not.
   const [canStop, setCanStop] = useState(false);
+  // Keeping a conversation. `asking` is the question on the way out, `fromId`
+  // is the saved thread this one was reopened from — saving again updates it
+  // rather than leaving three copies of a conversation that grew twice.
+  const [asking, setAsking] = useState(false);
+  const [fromId, setFromId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [history, setHistory] = useState<SavedChat[] | null>(null);
   const [working, setWorking] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState<Pending[]>([]);
@@ -224,6 +234,69 @@ export function OmniChat() {
     setTurns([]);
     setPending([]);
     setDraft("");
+    setError("");
+    setAsking(false);
+    setFromId(null);
+    setShowHistory(false);
+  }
+
+  /** Where this conversation belongs: the app, and what it was about. */
+  const chatKey = {
+    app: scope.app,
+    subjectKind: scope.subject?.kind || "",
+    subjectId: scope.subject?.id || "",
+  };
+
+  // Walking to a different meeting unties this conversation from the thread
+  // it was reopened from. Without this, saving here would quietly overwrite
+  // the kept chat belonging to the record they just left.
+  //
+  // Adjusted during render rather than in an effect: this is state that has
+  // to be right for the paint that follows the move, and an effect would let
+  // one render go out still holding the old thread's id.
+  const keyId = `${chatKey.app}|${chatKey.subjectKind}|${chatKey.subjectId}`;
+  const [lastKey, setLastKey] = useState(keyId);
+  if (lastKey !== keyId) {
+    setLastKey(keyId);
+    setFromId(null);
+    setHistory(null);
+    setShowHistory(false);
+  }
+
+  /** Keep it, then go. */
+  async function keepAndClose() {
+    if (!userId) return close();
+    setSaving(true);
+    try {
+      await saveChat(userId, chatKey, turns, fromId || undefined);
+      close();
+    } catch (e) {
+      // Not saved means not closed. Closing anyway would throw away the thing
+      // they just asked to keep, which is the one outcome worse than the
+      // error itself.
+      setError((e as Error).message);
+      setAsking(false);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function openHistory() {
+    setShowHistory(true);
+    if (!userId) return;
+    try {
+      setHistory(await listChats(userId, chatKey));
+    } catch (e) {
+      setError((e as Error).message);
+      setHistory([]);
+    }
+  }
+
+  /** Put a kept conversation back on screen, to carry on or to read. */
+  function reopen(c: SavedChat) {
+    setTurns(c.turns);
+    setFromId(c.id);
+    setShowHistory(false);
     setError("");
   }
 
@@ -482,14 +555,114 @@ export function OmniChat() {
         </button>
         <button
           type="button"
-          title={turns.length ? "Close and clear this conversation" : "Close"}
+          title="Chats you've kept about this"
+          aria-label="Chats you've kept"
+          onClick={() => (showHistory ? setShowHistory(false) : void openHistory())}
+          className="grid h-8 w-8 place-items-center rounded-lg text-muted transition hover:bg-surface hover:text-ink"
+        >
+          <History size={16} />
+        </button>
+        <button
+          type="button"
+          title={turns.length ? "Close this conversation" : "Close"}
           aria-label="Close"
-          onClick={close}
+          // Closing with something in it asks whether to keep it, rather than
+          // binning it on the way out. Saving is a decision, never automatic.
+          onClick={() => (turns.length ? setAsking(true) : close())}
           className="grid h-8 w-8 place-items-center rounded-lg text-muted transition hover:bg-surface hover:text-red-600"
         >
           <X size={17} />
         </button>
       </div>
+
+      {/* On the way out: keep it, or don't. The X used to decide for them. */}
+      {asking && (
+        <div className="border-b border-border bg-canvas px-3.5 py-2.5">
+          <p className="text-xs font-medium text-ink">Keep this chat?</p>
+          <p className="mt-0.5 text-[11px] leading-snug text-muted">
+            Yours only — it stays with {scope.subject?.label || "this app"} and nobody
+            you share that with can see it.
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void keepAndClose()}
+              className="rounded-md bg-[var(--accent)] px-2.5 py-1 text-xs font-semibold text-white transition disabled:opacity-50"
+            >
+              {saving ? "Keeping…" : "Keep it"}
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={close}
+              className="rounded-md px-2 py-1 text-xs font-medium text-muted transition hover:text-red-600"
+            >
+              Discard
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => setAsking(false)}
+              className="rounded-md px-2 py-1 text-xs font-medium text-muted transition hover:text-ink"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showHistory && (
+        <div className="max-h-64 overflow-y-auto border-b border-border bg-canvas px-3.5 py-2.5">
+          <p className="text-xs font-medium text-ink">
+            Kept about {scope.subject?.label || "this app"}
+          </p>
+          {history === null ? (
+            <p className="mt-1.5 text-[11px] text-muted">Looking…</p>
+          ) : history.length === 0 ? (
+            <p className="mt-1.5 text-[11px] leading-snug text-muted">
+              Nothing kept yet. When you close a chat it asks whether to keep it.
+            </p>
+          ) : (
+            <ul className="mt-1.5 space-y-1">
+              {history.map((c) => (
+                <li key={c.id} className="group/c flex items-start gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => reopen(c)}
+                    className="min-w-0 flex-1 rounded-md px-1.5 py-1 text-left transition hover:bg-surface"
+                  >
+                    <span className="block truncate text-[11px] font-medium text-ink">
+                      {c.title}
+                    </span>
+                    <span className="block text-[10px] text-muted">
+                      {new Date(c.updatedAt).toLocaleDateString()} ·{" "}
+                      {c.turns.filter((t) => t.role === "user").length} asked
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    title="Delete this chat"
+                    aria-label="Delete this chat"
+                    onClick={async () => {
+                      try {
+                        await deleteChat(c.id);
+                        setHistory((h) => (h || []).filter((x) => x.id !== c.id));
+                        if (fromId === c.id) setFromId(null);
+                      } catch (e) {
+                        setError((e as Error).message);
+                      }
+                    }}
+                    className="mt-1 shrink-0 rounded p-0.5 text-muted opacity-0 transition hover:text-red-600 group-hover/c:opacity-100 max-sm:opacity-100"
+                  >
+                    <X size={12} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       <div className="flex-1 space-y-3 overflow-y-auto px-3.5 py-3">
         {turns.length === 0 && (
