@@ -62,7 +62,12 @@ function payloadOf(m: MpMeeting) {
     background: m.background,
     concerns: m.concerns,
     priorTranscript: m.prior_transcript,
-    documents: (m.documents || []).map((d) => ({ name: d.name, note: d.note, text: d.text })),
+    documents: (m.documents || []).map((d) => ({
+      name: d.name,
+      note: d.note,
+      text: d.text,
+      purpose: d.purpose,
+    })),
   };
 }
 

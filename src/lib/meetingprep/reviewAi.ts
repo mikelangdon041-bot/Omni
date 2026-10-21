@@ -38,7 +38,22 @@ export interface WrittenNote {
   keepRef: number;
   /** What to do to those questions, when it is something safe to do. */
   action?: "rewrite" | "bin";
+  /**
+   * The exact lines in the brief the note is about, word for word. "Cut the
+   * editing note left inside a question" told the writer a line existed and
+   * left them to find it. Only quotes that really are in the pack survive.
+   */
+  quotes: string[];
 }
+
+// Same text, ignoring the spacing, case and quote marks that a copy can
+// change without changing what it says.
+const flat = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/[\u2018\u2019\u201c\u201d"']/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 
 const REVIEW_SCHEMA = {
   type: "object" as const,
@@ -57,6 +72,7 @@ const REVIEW_SCHEMA = {
           questionRefs: { type: "array" as const, items: { type: "number" as const } },
           keepRef: { type: "number" as const },
           action: { type: "string" as const, enum: ["rewrite", "bin", ""] },
+          quotes: { type: "array" as const, items: { type: "string" as const } },
         },
         required: [
           "title",
@@ -68,6 +84,7 @@ const REVIEW_SCHEMA = {
           "questionRefs",
           "keepRef",
           "action",
+          "quotes",
         ],
         additionalProperties: false,
       },
@@ -154,6 +171,7 @@ Fields:
   - "bin" when the questions themselves should go: duplicates, a question that asks what another already asks, one that no longer fits the subject. List ONLY the ones to remove in questionRefs, never the one that is being kept. Say in the detail which one you are keeping and why. Use it only when your fix is to be rid of the question outright — if the fix says to move it, re-file it, or keep it for somewhere else in the running order, the action is "", because the button would otherwise promise something your own note does not say.
   - "rewrite" when the questions should stay but be asked better, and your fix says how.
   - "" for everything else, including anything about the ORDER they are asked in. Order is the writer's to arrange, and a note that reshuffles their list out from under them is worse than one that tells them where to drag it.
+- quotes: the exact words in the brief this note is about, so the writer can see what you mean without hunting for it. Copy each one character for character from THE BRIEF AS IT STANDS: the whole sentence or bullet, under 40 words, at most 3. REQUIRED whenever the note is about something specific that is written there: a line, a claim, a duplicated point, the opening of a box, a question inside a brief box. A quote that is not word for word in the brief is thrown away, so never paraphrase. Questions from the numbered bank go in questionRefs, not here. [] only for a note about something missing.
 
 Plain prose. No markdown, no bold, no emoji. Never an em dash or en dash.
 
@@ -208,8 +226,14 @@ The sections that exist, by key: ${sectionKeys.length ? sectionKeys.join(", ") :
       target === "questions" && refs.length && (rawAction === "rewrite" || rawAction === "bin")
         ? (rawAction as "rewrite" | "bin")
         : undefined;
+    const pack = flat(`${briefText}\n${questionsText}`);
+    const quotes = (Array.isArray(n?.quotes) ? (n.quotes as unknown[]) : [])
+      .map((q) => String(q || "").trim().replace(/^["\u201c]|["\u201d]$/g, ""))
+      .filter((q) => q.length >= 8 && pack.includes(flat(q)))
+      .slice(0, 3);
     out.push({
       title,
+      quotes,
       detail: String(n?.detail || "").trim(),
       target,
       targetLabel: String(n?.targetLabel || "").trim() || "This pack",

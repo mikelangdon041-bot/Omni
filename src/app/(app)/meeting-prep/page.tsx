@@ -27,7 +27,20 @@ import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { useConfirm } from "@/components/ui/Feedback";
-import { CreateFolderModal, FolderPairSelect } from "@/components/meetingprep/FolderPicker";
+import {
+  CreateFolderModal,
+  FolderPairSelect,
+  RevealFiling,
+} from "@/components/meetingprep/FolderPicker";
+
+// A recording that finished with nowhere to go: the one unfiled meeting that
+// is worth flagging, because the recorder put it there and nobody chose it.
+function isUnfiledRecording(m: MpMeeting): boolean {
+  return Boolean(
+    needsFiling(m) &&
+      ((m.debrief?.transcript || "").trim() || (m.debrief?.notesHtml || "").trim()),
+  );
+}
 import {
   useMpFolders,
   useMpMeetings,
@@ -475,21 +488,31 @@ function MeetingList({
                     className="mt-2 flex flex-wrap items-center gap-1.5"
                     onClick={(e) => e.stopPropagation()}
                   >
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                        needsFiling(m) ? "bg-amber-50 text-amber-700" : "bg-canvas text-muted"
-                      }`}
+                    {/* Flagged only for a recording with nowhere to go. A
+                        meeting being prepped has nothing to file yet, so it
+                        gets a quiet "File it" and no badge. */}
+                    {(filedAs(m) || isUnfiledRecording(m)) && (
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                          needsFiling(m) ? "bg-amber-50 text-amber-700" : "bg-canvas text-muted"
+                        }`}
+                      >
+                        {filedAs(m) || "Uncategorized"}
+                      </span>
+                    )}
+                    <RevealFiling
+                      filed={Boolean(m.person_folder_id || m.topic_folder_id) || isUnfiledRecording(m)}
+                      className="text-[10px]"
                     >
-                      {filedAs(m) || (m.filing_reviewed ? "Not filed" : "Uncategorized")}
-                    </span>
-                    <FolderPairSelect
-                      folders={folders}
-                      personFolderId={m.person_folder_id}
-                      topicFolderId={m.topic_folder_id}
-                      onChange={(kind, folder) => onMoveFolder(m, kind, folder)}
-                      onRequestCreate={(kind) => onRequestCreateFolder(kind, m)}
-                      className="rounded-md border border-transparent bg-transparent px-1 py-0.5 text-[10px] text-muted outline-none transition hover:border-border focus:border-[var(--accent)]"
-                    />
+                      <FolderPairSelect
+                        folders={folders}
+                        personFolderId={m.person_folder_id}
+                        topicFolderId={m.topic_folder_id}
+                        onChange={(kind, folder) => onMoveFolder(m, kind, folder)}
+                        onRequestCreate={(kind) => onRequestCreateFolder(kind, m)}
+                        className="rounded-md border border-transparent bg-transparent px-1 py-0.5 text-[10px] text-muted outline-none transition hover:border-border focus:border-[var(--accent)]"
+                      />
+                    </RevealFiling>
                   </div>
                 </div>
               </div>

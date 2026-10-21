@@ -17,14 +17,29 @@ export interface MeetingPayload {
   durationMin?: number | null;
   format?: string;
   location?: string;
-  attendees?: { name?: string; role?: string; org?: string; notes?: string }[];
+  attendees?: {
+    name?: string;
+    role?: string;
+    org?: string;
+    notes?: string;
+    profile?: { text?: string };
+  }[];
   explain?: string;
   objectives?: string;
   background?: string;
   concerns?: string;
   priorTranscript?: string;
-  documents?: { name?: string; note?: string; text?: string }[];
+  documents?: { name?: string; note?: string; text?: string; purpose?: string }[];
 }
+
+// What a piece of material is, said the way the writer picked it.
+const PURPOSE_NAMES: Record<string, string> = {
+  agenda: "Agenda / attendee list",
+  background: "Background reading",
+  figures: "Material to pull figures from",
+  from_them: "Something the other side sent",
+  other: "Supporting document",
+};
 
 export interface BriefSectionSpec {
   key: string;
@@ -48,7 +63,9 @@ export function meetingContext(m: MeetingPayload, kolBlock: string): string {
     .filter((a) => (a.name || "").trim())
     .map(
       (a) =>
-        `- ${a.name}${a.role ? `, ${a.role}` : ""}${a.org ? ` (${a.org})` : ""}${a.notes ? ` — ${a.notes}` : ""}`,
+        `- ${a.name}${a.role ? `, ${a.role}` : ""}${a.org ? ` (${a.org})` : ""}${a.notes ? ` — ${a.notes}` : ""}${
+          a.profile?.text ? `\n  Looked up on the web: ${a.profile.text}` : ""
+        }`,
     )
     .join("\n");
   // Styled Unicode off a flyer is a different string to a model than the
@@ -80,7 +97,7 @@ export function meetingContext(m: MeetingPayload, kolBlock: string): string {
       .slice(0, 8)
       .map(
         (d) =>
-          `Supporting document "${d.name || "untitled"}"${
+          `${PURPOSE_NAMES[d.purpose || ""] || "Supporting document"} "${d.name || "untitled"}"${
             d.note ? ` — the writer says about it: "${d.note}"` : ""
           }:\n${String(d.text).slice(0, 15000)}`,
       ),

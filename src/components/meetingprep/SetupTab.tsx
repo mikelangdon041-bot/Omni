@@ -5,11 +5,9 @@
 // top — "Explain" — and everything else folded away in collapsible
 // IntakeSection panels until you want to fine-tune it.
 
-import { useState } from "react";
 import {
   ArrowRight,
   CalendarClock,
-  FileText,
   ListChecks,
   MessageCircle,
   Mic,
@@ -22,18 +20,18 @@ import {
 import { Button } from "@/components/ui/Button";
 import { Input, Select } from "@/components/ui/Input";
 import { RichText } from "@/components/ui/RichText";
-import { useToast } from "@/components/ui/Feedback";
 import { TranscriptCapture } from "@/components/studio/TranscriptCapture";
 import { IntakeSection } from "@/components/writer/IntakeSection";
 import { htmlToPlain } from "@/lib/writer/types";
 import { KolLink } from "./KolLink";
 import { ConferencePeopleButton } from "./ConferencePeople";
+import { MaterialList, PersonLookup } from "./MaterialList";
+import type { GetMeeting } from "@/lib/meetingprep/material";
 import {
   MEETING_TYPES,
   type Attendee,
   type MeetingFormat,
   type MeetingType,
-  type MpDocument,
   type MpMeeting,
 } from "@/lib/meetingprep/types";
 import { ReviewPanel } from "@/components/meetingprep/ReviewPanel";
@@ -76,8 +74,13 @@ export function SetupTab({
   onViewBrief,
   focusExplain = false,
   progress = 0,
+  getMeeting,
+  openMaterial,
 }: {
   m: MpMeeting;
+  /** The meeting as it is now, for work that saves after an await. */
+  getMeeting: GetMeeting;
+  openMaterial: () => void;
   save: (p: Partial<MpMeeting>) => void;
   userId: string | null;
   busy: string | null;
@@ -92,8 +95,6 @@ export function SetupTab({
   /** A brand-new meeting: start with the caret in Explain. */
   focusExplain?: boolean;
 }) {
-  const toast = useToast();
-  const [uploadingDoc, setUploadingDoc] = useState(false);
 
   // Read-only here: Setup is where you answer what the read-through found
   // missing, and the answer is you typing it, not the app guessing it.
@@ -102,7 +103,7 @@ export function SetupTab({
   const attendees: Attendee[] = m.attendees?.length
     ? m.attendees
     : [{ name: "", role: "", org: "", notes: "" }];
-  const documents: MpDocument[] = m.documents || [];
+  const documents = m.documents || [];
 
   const setAttendee = (i: number, partial: Partial<Attendee>) => {
     const next = attendees.map((a, j) => (j === i ? { ...a, ...partial } : a));
@@ -116,36 +117,6 @@ export function SetupTab({
     );
     save({ attendees: [...real, a] });
   };
-
-  async function uploadDoc(file: File | null) {
-    if (!file) return;
-    setUploadingDoc(true);
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      const res = await fetch("/api/meeting/extract", {
-        method: "POST",
-        credentials: "same-origin",
-        body: form,
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json.error || "Could not read that document");
-      save({
-        documents: [
-          ...documents,
-          { id: `d${Date.now()}`, name: file.name, note: "", text: json.text || "" },
-        ],
-      });
-      toast("success", `"${file.name}" attached — tell me what to look for in it.`);
-    } catch (e) {
-      toast("error", (e as Error).message);
-    } finally {
-      setUploadingDoc(false);
-    }
-  }
-
-  const setDoc = (id: string, partial: Partial<MpDocument>) =>
-    save({ documents: documents.map((d) => (d.id === id ? { ...d, ...partial } : d)) });
 
   const specificsFilled = [m.objectives, m.background, m.concerns].filter((v) =>
     htmlToPlain(v).trim(),
@@ -164,6 +135,7 @@ export function SetupTab({
             notes={review.notes}
             at={review.at}
             scope="setup"
+            questionText={(id) => m.questions?.items?.find((q) => q.id === id)?.text}
             busy={Boolean(busy)}
             onToggleDone={(n) => review.patchNote(n.id, { done: !n.done })}
             onDismiss={(n) => review.patchNote(n.id, { dismissed: true })}
@@ -331,6 +303,7 @@ export function SetupTab({
                 </button>
               )}
             </div>
+            <PersonLookup name={a.name} profile={a.profile} getMeeting={getMeeting} save={save} />
           </div>
         ))}
         <Button
@@ -391,58 +364,14 @@ export function SetupTab({
         </div>
       </IntakeSection>
 
-      {/* Supporting documents, with a per-document relevance note. */}
+      {/* Material, each piece with the writer's reason for adding it. */}
       <IntakeSection
         icon={Paperclip}
-        title="Supporting documents"
+        title="Material: agendas, links, documents"
         tint="bg-amber-100 text-amber-600"
         badge={documents.length ? `${documents.length} attached` : undefined}
       >
-        <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted transition hover:text-ink">
-          <FileText size={14} />
-          {uploadingDoc ? "Reading document…" : "Upload PDF / Word / text"}
-          <input
-            type="file"
-            accept=".pdf,.doc,.docx,.txt,.md,text/plain"
-            className="hidden"
-            disabled={uploadingDoc}
-            onChange={(e) => {
-              void uploadDoc(e.target.files?.[0] || null);
-              e.target.value = "";
-            }}
-          />
-        </label>
-        <p className="text-xs text-muted">
-          Attach agendas, slide decks, reports, emails — then tell me what to
-          look for in each one and I&apos;ll work it into the brief.
-        </p>
-        {documents.length > 0 && (
-          <ul className="space-y-2">
-            {documents.map((d) => (
-              <li key={d.id} className="rounded-lg border border-border bg-canvas/40 p-3">
-                <div className="mb-2 flex items-center gap-2">
-                  <FileText size={15} className="shrink-0 text-[var(--accent)]" />
-                  <p className="min-w-0 flex-1 truncate text-sm font-medium">{d.name}</p>
-                  <span className="shrink-0 text-[10px] text-muted">
-                    {d.text.length.toLocaleString()} chars
-                  </span>
-                  <button
-                    className="shrink-0 rounded p-1 text-muted hover:text-red-600"
-                    aria-label="Remove document"
-                    onClick={() => save({ documents: documents.filter((x) => x.id !== d.id) })}
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-                <Input
-                  value={d.note}
-                  onChange={(e) => setDoc(d.id, { note: e.target.value })}
-                  placeholder='What should I look for in this? How is it relevant? e.g. "Pull the Q2 numbers from page 3 for the talking points"'
-                />
-              </li>
-            ))}
-          </ul>
-        )}
+        <MaterialList m={m} save={save} getMeeting={getMeeting} onAdd={openMaterial} />
       </IntakeSection>
 
       <IntakeSection

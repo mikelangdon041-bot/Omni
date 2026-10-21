@@ -349,6 +349,7 @@ export function BriefTab({
         at={reviewAt}
         scope="brief"
         busy={!!busy}
+        questionText={(id) => m.questions?.items?.find((q) => q.id === id)?.text}
         onFix={(n) => {
           patchNote(n.id, { done: true });
           const key = n.target.startsWith("section:") ? n.target.slice(8) : "";

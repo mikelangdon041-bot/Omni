@@ -12,7 +12,7 @@
 // backup, asked and order — so generating more questions only ever appends,
 // and never disturbs a list someone has arranged.
 
-import { useMemo, useState } from "react";
+import { createContext, useContext, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -46,6 +46,12 @@ import { ProgressBar, useProgress } from "@/components/ui/Progress";
 import { useToast } from "@/components/ui/Feedback";
 import { htmlToPlain } from "@/lib/writer/types";
 import type { SaveState } from "@/lib/meetingprep/hooks";
+import { matchSource, withReading } from "@/lib/meetingprep/reading";
+import type { ReadingSource } from "@/lib/meetingprep/types";
+
+// The reading list, for the source line under a question to link into.
+// Context rather than a prop: that line sits several components deep.
+const ReadingSources = createContext<ReadingSource[]>([]);
 import type { QuestionVariant } from "@/lib/meetingprep/questionsAi";
 import {
   QUESTIONS_ENGINE,
@@ -75,7 +81,12 @@ function payloadOf(m: MpMeeting) {
     background: m.background,
     concerns: m.concerns,
     priorTranscript: m.prior_transcript,
-    documents: (m.documents || []).map((d) => ({ name: d.name, note: d.note, text: d.text })),
+    documents: (m.documents || []).map((d) => ({
+      name: d.name,
+      note: d.note,
+      text: d.text,
+      purpose: d.purpose,
+    })),
   };
 }
 
@@ -269,7 +280,7 @@ export function QuestionsTab({
         kolId: m.kol_id || "",
         // Notes about a subject this meeting is no longer on are not
         // backing for anything, so they are not offered as any.
-        research: researchStale ? "" : m.brief?.research?.notes || "",
+        research: withReading(researchStale ? "" : m.brief?.research?.notes || "", m),
         question: { text: q.text, category: q.category },
         standing: guidance,
       }),
@@ -514,7 +525,7 @@ export function QuestionsTab({
           action: "questions",
           meeting: payloadOf(m),
           kolId: m.kol_id || "",
-          research,
+          research: withReading(research, m),
           briefText,
           existing: kept.map((q) => q.text),
           categories: opts.onlyCategory
@@ -643,6 +654,7 @@ export function QuestionsTab({
   return (
     // The bottom padding is for the floating Ask button, which used to sit
     // on top of the bin and make it unclickable.
+    <ReadingSources.Provider value={m.reading?.sources || []}>
     <div className="space-y-4 pb-24">
       {/* Behind, and the only two reasons it can be. Worth a banner rather
           than a quiet button: a bank written about the wrong subject looks
@@ -1250,7 +1262,7 @@ export function QuestionsTab({
               action: "variants",
               meeting: payloadOf(m),
               kolId: m.kol_id || "",
-              research: m.brief?.research?.notes || "",
+              research: withReading(m.brief?.research?.notes || "", m),
               question: {
                 text: q.text,
                 why: q.why,
@@ -1300,6 +1312,7 @@ export function QuestionsTab({
         }}
       />
     </div>
+    </ReadingSources.Provider>
   );
 }
 
@@ -1445,8 +1458,33 @@ function ProbeLine({
           {busy ? "Writing the probe…" : "Write the probe"}
         </button>
       )}
-      {q.sourceNote && <p className="mt-1 text-xs text-muted">Source: {q.sourceNote}</p>}
+      {q.sourceNote && <SourceLine note={q.sourceNote} />}
     </>
+  );
+}
+
+/** "Source: ..." and, when it is on the reading list, the piece itself. */
+function SourceLine({ note }: { note: string }) {
+  const sources = useContext(ReadingSources);
+  const hit = useMemo(() => matchSource(note, sources), [note, sources]);
+  return (
+    <p className="mt-1 text-xs text-muted">
+      Source: {note}
+      {hit?.url && (
+        <>
+          {" "}
+          <a
+            href={hit.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-medium text-[var(--accent)] hover:underline"
+            title={hit.title}
+          >
+            Read it
+          </a>
+        </>
+      )}
+    </p>
   );
 }
 

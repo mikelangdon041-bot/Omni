@@ -1,10 +1,10 @@
 "use client";
 
-// One meeting: Setup -> Brief -> Questions -> Practice -> Debrief.
+// One meeting: Setup -> Brief -> Reading -> Questions -> Practice -> Debrief.
 // Brief generation lives here (not in the Brief tab) so it keeps running in
 // the background while the user moves between tabs.
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Check, CloudUpload, Pencil, Target, Trash2 } from "lucide-react";
 import { BackButton } from "@/components/BackButton";
@@ -18,7 +18,9 @@ import { BriefTab } from "@/components/meetingprep/BriefTab";
 import { QuestionsTab } from "@/components/meetingprep/QuestionsTab";
 import { GrillTab } from "@/components/meetingprep/GrillTab";
 import { DebriefTab } from "@/components/meetingprep/DebriefTab";
-import { FolderPicker } from "@/components/meetingprep/FolderPicker";
+import { ReadingTab } from "@/components/meetingprep/ReadingTab";
+import { AddMaterialModal } from "@/components/meetingprep/AddMaterial";
+import { FolderPicker, RevealFiling } from "@/components/meetingprep/FolderPicker";
 import {
   useMpMeeting,
   useMpSettings,
@@ -30,6 +32,7 @@ import {
   meetingTypeLabel,
   plainLetters,
   type BriefSection,
+  type MaterialPurpose,
   type MpMeeting,
 } from "@/lib/meetingprep/types";
 import { Button } from "@/components/ui/Button";
@@ -38,7 +41,7 @@ import { usePersistedState } from "@/lib/usePersistedState";
 // Plain names. "Grill me" was cute and told you nothing about what the tab
 // does; "Practice" does. The stored per-meeting tab falls back to Setup when
 // a name changes, which is the right behaviour for a rename.
-const TABS = ["Setup", "Brief", "Questions", "Practice", "Debrief"] as const;
+const TABS = ["Setup", "Brief", "Reading", "Questions", "Practice", "Debrief"] as const;
 type Tab = (typeof TABS)[number];
 
 // The subject line of the session, pinned above the tabs. Click it to change
@@ -197,6 +200,23 @@ export default function MeetingPage() {
   const { userId } = useUserId();
   const { meeting, loading, save, flush, reload, saveState, remove } = useMpMeeting(id, userId);
   const { settings, save: saveSettings } = useMpSettings(userId);
+  // The meeting as it is right now, for work that saves after a long await
+  // (a search, a document read): a copy taken when it started would put back
+  // whatever the writer changed while it ran. Updated on every save as well as
+  // on render, so work that saves and then reads straight away sees its own save.
+  const latest = useRef<MpMeeting | null>(null);
+  useEffect(() => {
+    latest.current = meeting;
+  }, [meeting]);
+  const getMeeting = useCallback(() => latest.current, []);
+  const saveLatest = useCallback(
+    (p: Partial<MpMeeting>) => {
+      if (latest.current) latest.current = { ...latest.current, ...p };
+      save(p);
+    },
+    [save],
+  );
+  const [material, setMaterial] = useState<{ open: boolean; purpose?: MaterialPurpose }>({ open: false });
   // Set when the writer changes the subject, so the offer to rename the
   // meeting appears once, in response to what they did.
   const [offerRename, setOfferRename] = useState(false);
@@ -340,12 +360,14 @@ export default function MeetingPage() {
           {/* Visible on every tab, not just Setup — moving a meeting to a
               different person or topic (or filing an uncategorized one) is
               something you reach for from wherever you happen to be. */}
-          <FolderPicker
-            userId={userId}
-            personFolderId={meeting.person_folder_id}
-            topicFolderId={meeting.topic_folder_id}
-            onChange={(kind, folder) => save(folderMovePatch(kind, folder))}
-          />
+          <RevealFiling filed={Boolean(meeting.person_folder_id || meeting.topic_folder_id)}>
+            <FolderPicker
+              userId={userId}
+              personFolderId={meeting.person_folder_id}
+              topicFolderId={meeting.topic_folder_id}
+              onChange={(kind, folder) => save(folderMovePatch(kind, folder))}
+            />
+          </RevealFiling>
           {/* Autosave indicator — everything on every tab saves as you type. */}
           <p
             className="flex items-center gap-1 text-[11px] font-medium text-muted"
@@ -422,7 +444,7 @@ export default function MeetingPage() {
       {tab === "Setup" && (
         <SetupTab
           m={meeting}
-          save={save}
+          save={saveLatest}
           userId={userId}
           busy={generator.busy}
           briefStale={generator.briefStale}
@@ -438,6 +460,8 @@ export default function MeetingPage() {
           onViewBrief={() => setTab("Brief")}
           focusExplain={isNew}
           progress={generator.progress}
+          getMeeting={getMeeting}
+          openMaterial={() => setMaterial({ open: true })}
         />
       )}
       {tab === "Brief" && (
@@ -459,11 +483,27 @@ export default function MeetingPage() {
           sectionOrder={settings?.section_order}
         />
       )}
+      {tab === "Reading" && (
+        <ReadingTab
+          m={meeting}
+          save={saveLatest}
+          getMeeting={getMeeting}
+          onAddSource={() => setMaterial({ open: true, purpose: "background" })}
+        />
+      )}
       {tab === "Questions" && (
         <QuestionsTab m={meeting} save={save} flush={flush} saveState={saveState} />
       )}
       {tab === "Practice" && <GrillTab m={meeting} save={save} flush={flush} />}
       {tab === "Debrief" && <DebriefTab m={meeting} save={save} userId={userId} />}
+
+      <AddMaterialModal
+        open={material.open}
+        purpose={material.purpose}
+        onClose={() => setMaterial({ open: false })}
+        getMeeting={getMeeting}
+        save={saveLatest}
+      />
 
       <DiffPreviewModal
         open={!!preview}

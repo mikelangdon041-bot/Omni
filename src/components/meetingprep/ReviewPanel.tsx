@@ -198,13 +198,14 @@ export function ReviewPanel({
                   })}
                 </ul>
               )}
-              {/* A note from before the reviewer named its questions. It will
-                  never grow them, so say what to do instead of showing a note
-                  the writer cannot act on. */}
-              {scope === "questions" && !(n.questionIds?.length ?? 0) && (
+              <Quotes n={n} />
+              {/* A note from before notes said exactly what they meant. It will
+                  never grow its quotes, so say what to do instead of leaving
+                  the writer to hunt for it. */}
+              {n.quotes === undefined && !(n.questionIds?.length ?? 0) && (
                 <p className="mt-1 text-xs text-muted">
-                  Written before notes named their questions — run Check it over again to
-                  see which ones this means.
+                  This note is from an older check that didn&apos;t quote what it meant. Run the
+                  check again to see the exact questions and lines.
                 </p>
               )}
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
@@ -277,6 +278,8 @@ export function ReviewPanel({
                   {elsewhere.map((n) => (
                     <li key={n.id}>
                       <span className="font-medium text-ink">{n.targetLabel}</span> — {n.title}
+                      <QuestionList n={n} questionText={questionText} />
+                      <Quotes n={n} />
                     </li>
                   ))}
                 </ul>
@@ -286,5 +289,44 @@ export function ReviewPanel({
         </div>
       )}
     </section>
+  );
+}
+
+/** The lines in the brief a note is about, word for word. */
+function Quotes({ n }: { n: ReviewNote }) {
+  if (!n.quotes?.length) return null;
+  return (
+    <ul className="mt-1.5 space-y-1 border-l-2 border-[var(--accent)]/25 pl-2.5">
+      {n.quotes.map((q, i) => (
+        <li key={i} className="text-xs italic text-ink/80">
+          &ldquo;{q}&rdquo;
+          <span className="not-italic text-muted"> in {n.targetLabel}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** The questions a note names, for the folded list of notes from other tabs. */
+function QuestionList({
+  n,
+  questionText,
+}: {
+  n: ReviewNote;
+  questionText?: (id: string) => string | undefined;
+}) {
+  if (!questionText) return null;
+  const ids = [...(n.keepId ? [n.keepId] : []), ...(n.questionIds || [])];
+  const rows = ids.map((id) => ({ id, text: questionText(id) })).filter((r) => r.text);
+  if (!rows.length) return null;
+  return (
+    <ul className="mt-1 space-y-0.5 border-l-2 border-border pl-2.5">
+      {rows.map((r) => (
+        <li key={r.id} className="text-ink/80">
+          {r.id === n.keepId ? "Keep: " : ""}
+          {r.text}
+        </li>
+      ))}
+    </ul>
   );
 }

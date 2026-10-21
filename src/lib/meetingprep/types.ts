@@ -20,6 +20,18 @@ export interface Attendee {
   role: string;
   org: string;
   notes: string;
+  /**
+   * Who they are, looked up on the web: current role, what they work on, what
+   * they have said in public. Written by the app and kept apart from `notes`,
+   * which is the writer's own and never touched.
+   */
+  profile?: PersonProfile;
+}
+
+export interface PersonProfile {
+  text: string;
+  sources: { title: string; url: string }[];
+  at: string;
 }
 
 export interface BriefSection {
@@ -93,13 +105,155 @@ export interface Brief {
   review?: Review;
 }
 
-// A supporting document uploaded to the meeting, with the user's note on what
-// the AI should look for in it / why it's relevant.
+// Why the writer is handing something over. It decides what is done with it:
+// an agenda is read for who is speaking and when, background becomes an entry
+// on the reading list, and so on. Asked for every time, because the same PDF
+// is a different job depending on what they want out of it.
+export type MaterialPurpose = "agenda" | "background" | "figures" | "from_them" | "other";
+
+export const MATERIAL_PURPOSES: {
+  key: MaterialPurpose;
+  label: string;
+  /** What happens to it, said to the writer before they add it. */
+  does: string;
+  /** Example of the line they write about what they want out of it. */
+  placeholder: string;
+}[] = [
+  {
+    key: "agenda",
+    label: "Agenda / who's attending",
+    does: "I'll pull out the people and the session details for you to add.",
+    placeholder: 'e.g. "The programme for day 2. My session is the 2pm panel; I need the other panelists."',
+  },
+  {
+    key: "background",
+    label: "Background to read",
+    does: "It goes on your reading list, summarised, and the brief draws on it.",
+    placeholder: 'e.g. "The white paper the panel is built around. What does it argue?"',
+  },
+  {
+    key: "figures",
+    label: "Pull figures from it",
+    does: "I'll lift the numbers and findings out so you can quote them.",
+    placeholder: 'e.g. "The Q2 uptake numbers on page 3, for the talking points"',
+  },
+  {
+    key: "from_them",
+    label: "What they sent me",
+    does: "Read as their side: what they want, what they are asking, what is open.",
+    placeholder: 'e.g. "Their email asking for the meeting. What are they really after?"',
+  },
+  {
+    key: "other",
+    label: "Something else",
+    does: "Used the way you describe.",
+    placeholder: "What is it, and what do you want out of it?",
+  },
+];
+
+export function materialPurposeLabel(p: MaterialPurpose | undefined): string {
+  return MATERIAL_PURPOSES.find((x) => x.key === p)?.label || "Supporting document";
+}
+
+// What reading an agenda (or anything else) turned up that belongs in Setup.
+// Offered, never applied: who is on a panel is the writer's to confirm.
+export interface MaterialFindings {
+  people: { name: string; role: string; org: string; notes: string }[];
+  session: {
+    topic: string;
+    durationMin: number;
+    date: string;
+    location: string;
+  };
+  /** Dealt with: added, applied, or waved off. */
+  done?: boolean;
+}
+
+// A supporting document added to the meeting, with the writer's note on why
+// it is here and what they want out of it.
 export interface MpDocument {
   id: string;
   name: string;
   note: string;
   text: string; // extracted plain text
+  /** Older documents predate this; they read as plain supporting documents. */
+  purpose?: MaterialPurpose;
+  /** Where it came from, when it was a link. */
+  url?: string;
+  findings?: MaterialFindings;
+}
+
+// One thing worth reading before the meeting.
+export interface ReadingSource {
+  id: string;
+  title: string;
+  outlet: string;
+  /** As the source dates itself: "2025", "March 2026". Empty when unknown. */
+  date: string;
+  /** Only ever a link the search actually returned, or the writer gave. */
+  url: string;
+  /** "found" by the search, or "yours": material the writer added. */
+  kind: "found" | "yours";
+  /** For "yours", the document it was read from. */
+  docId?: string;
+  /** What it is and what it argues, two or three sentences. */
+  summary: string;
+  /** The figures and positions in it, each one line, as stated. */
+  findings: string[];
+  /** Why it is worth the writer's time for THIS meeting. */
+  why: string;
+  priority: "must" | "skim";
+}
+
+// Something about the subject that is not settled. A panel needs the sides
+// and who holds them; a one to one needs where the person across the table is
+// likely to sit; an internal meeting needs what is still undecided. Same
+// shape, framed by meeting type (see unsettledHeading).
+export interface ReadingPoint {
+  id: string;
+  point: string;
+  sides: { position: string; who: string }[];
+}
+
+// A source the writer said was not what they wanted, and why. Kept so no
+// later search brings it back, and so the reason steers the next one.
+export interface RejectedSource {
+  title: string;
+  url: string;
+  reason: string;
+}
+
+export interface Reading {
+  overview?: string;
+  sources?: ReadingSource[];
+  unsettled?: ReadingPoint[];
+  /** What the writer wants from sources, obeyed by every later search. */
+  steer?: string;
+  rejected?: RejectedSource[];
+  at?: string;
+  /** Setup it was built from, so a changed subject can say it is stale. */
+  fingerprint?: string;
+}
+
+// The unsettled-points section, named for the seat the writer is in. The
+// question underneath is the same for every meeting (what about this subject
+// is not settled?), but a moderator wants the sides of the argument and a
+// one to one wants where the person across the table sits.
+export function unsettledHeading(t: MeetingType): { title: string; hint: string } {
+  if (t === "panel" || t === "congress" || t === "advisory_board" || t === "presentation")
+    return {
+      title: "Where people disagree",
+      hint: "The live arguments on this subject, and who stands where. The sharpest questions come from here.",
+    };
+  if (t === "kol_1on1" || t === "first_meeting" || t === "difficult")
+    return {
+      title: "Where they're likely to stand",
+      hint: "The open questions on this subject, and where the people you are meeting are likely to sit on each.",
+    };
+  return {
+    title: "Still unsettled",
+    hint: "What is not decided yet, and the positions on each.",
+  };
 }
 
 // A brainstormed idea/angle the AI suggested; `added` = already in the brief.
@@ -207,6 +361,11 @@ export interface ReviewNote {
   keepId?: string;
   /** What can simply be done to those questions, where that is safe. */
   action?: "rewrite" | "bin";
+  /**
+   * The exact lines in the brief this note is about, checked to be word for
+   * word in the pack. Absent on notes written before they were asked for.
+   */
+  quotes?: string[];
   /** The advice itself, one line, written as something to do. */
   title: string;
   /** Why it matters and what good looks like. */
@@ -420,6 +579,7 @@ export interface MpMeeting {
   documents: MpDocument[];
   ideas: IdeaSuggestion[];
   brief: Brief;
+  reading: Reading;
   questions: QuestionBank;
   grill: GrillItem[];
   debrief: Debrief;
@@ -499,7 +659,12 @@ export function plainLetters(s: string): string {
 export function meetingContextText(m: MpMeeting): string {
   const att = (m.attendees || [])
     .filter((a) => a.name.trim())
-    .map((a) => `- ${[a.name, a.role, a.org].filter(Boolean).join(", ")}${a.notes ? ` — ${a.notes}` : ""}`)
+    .map(
+      (a) =>
+        `- ${[a.name, a.role, a.org].filter(Boolean).join(", ")}${a.notes ? ` — ${a.notes}` : ""}${
+          a.profile?.text ? `\n  Looked up: ${a.profile.text}` : ""
+        }`,
+    )
     .join("\n");
   return [
     m.title && `Meeting: ${m.title}`,
@@ -517,7 +682,7 @@ export function meetingContextText(m: MpMeeting): string {
       .filter((d) => (d.text || "").trim())
       .map(
         (d) =>
-          `Supporting document "${d.name}"${d.note ? ` (why it matters: ${d.note})` : ""}:\n${d.text.slice(0, 6000)}`,
+          `${materialPurposeLabel(d.purpose)} "${d.name}"${d.note ? ` (why it matters: ${d.note})` : ""}:\n${d.text.slice(0, 6000)}`,
       ),
   ]
     .filter(Boolean)

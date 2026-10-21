@@ -58,7 +58,12 @@ export async function runAutofill(m: MpMeeting): Promise<AutofillResult> {
         background: m.background,
         concerns: m.concerns,
         priorTranscript: m.prior_transcript,
-        documents: documents.map((d) => ({ name: d.name, note: d.note, text: d.text })),
+        documents: documents.map((d) => ({
+          name: d.name,
+          note: d.note,
+          text: d.text,
+          purpose: d.purpose,
+        })),
       },
     }),
   });

@@ -308,3 +308,32 @@ export function FolderPicker({
     </>
   );
 }
+
+/**
+ * Filing, offered rather than shown. A meeting being prepped usually has no
+ * person or topic folder and doesn't need one, and two empty selects at the
+ * top of every one made filing look like a step in prep. Until it is filed,
+ * this is a small "File it"; once it is (or once they click), the pickers.
+ */
+export function RevealFiling({
+  filed,
+  children,
+  className = "",
+}: {
+  filed: boolean;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  if (filed || open) return <>{children}</>;
+  return (
+    <button
+      type="button"
+      onClick={() => setOpen(true)}
+      className={`inline-flex items-center gap-1 text-muted transition hover:text-ink ${className || "text-xs"}`}
+      title="File it under a person or a topic"
+    >
+      <FolderPlus size={12} /> File it
+    </button>
+  );
+}

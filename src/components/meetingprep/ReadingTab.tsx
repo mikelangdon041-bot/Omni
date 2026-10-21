@@ -1,0 +1,504 @@
+"use client";
+
+// Reading: what to read before the meeting, and what each piece actually says.
+//
+// The brief's research is notes for another prompt to write from, with the
+// links taken out. This is for the writer: the subject in brief, real pieces
+// they can open with the figures and positions in each pulled out, and what
+// about the subject is still unsettled. They steer it: find more (with a
+// reason), turn a source down (with a reason, which every later search
+// obeys), or add their own.
+
+import { useRef, useState } from "react";
+import {
+  BookOpen,
+  ExternalLink,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Scale,
+  Search,
+  ThumbsDown,
+  Trash2,
+  UserRound,
+} from "lucide-react";
+import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
+import { useToast } from "@/components/ui/Feedback";
+import {
+  setupFingerprint,
+  unsettledHeading,
+  type MpMeeting,
+  type Reading,
+  type ReadingSource,
+} from "@/lib/meetingprep/types";
+import {
+  meetingPayload,
+  newId,
+  removeMaterial,
+  type GetMeeting,
+  type SaveMeeting,
+} from "@/lib/meetingprep/material";
+
+type Found = Omit<ReadingSource, "id" | "kind" | "docId">;
+interface ReadingResponse {
+  overview: string;
+  sources: Found[];
+  unsettled: { point: string; sides: { position: string; who: string }[] }[];
+}
+
+const REASONS = ["Too old", "Too general", "Not credible enough", "Off topic", "Already know it"];
+
+export function ReadingTab({
+  m,
+  save,
+  getMeeting,
+  onAddSource,
+}: {
+  m: MpMeeting;
+  save: SaveMeeting;
+  getMeeting: GetMeeting;
+  onAddSource: () => void;
+}) {
+  const toast = useToast();
+  const reading: Reading = m.reading || {};
+  const sources = reading.sources || [];
+  const frame = unsettledHeading(m.meeting_type);
+  const [busy, setBusy] = useState<"" | "build" | "more" | string>("");
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [ask, setAsk] = useState("");
+  const [steerOpen, setSteerOpen] = useState(false);
+  const busyRef = useRef(false);
+
+  const stale = Boolean(reading.at && reading.fingerprint && reading.fingerprint !== setupFingerprint(m));
+  const built = Boolean(reading.at);
+
+  async function call(body: Record<string, unknown>): Promise<ReadingResponse> {
+    const now = getMeeting() || m;
+    const r: Reading = now.reading || {};
+    const res = await fetch("/api/meeting/ai", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({
+        action: "reading",
+        meeting: meetingPayload(now),
+        kolId: now.kol_id || "",
+        frame,
+        steer: r.steer || "",
+        existing: (r.sources || []).map((s) => ({ title: s.title, url: s.url })),
+        rejected: r.rejected || [],
+        ...body,
+      }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json.error || "The search failed");
+    return json as ReadingResponse;
+  }
+
+  const stamp = (s: Found): ReadingSource => ({ ...s, id: newId("r"), kind: "found" });
+
+  async function build() {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy("build");
+    try {
+      // A rebuild replaces what the search found, never what the writer
+      // added or the sources they turned down.
+      const out = await call({ existing: [], more: false });
+      const now = getMeeting() || m;
+      const r: Reading = now.reading || {};
+      const yours = (r.sources || []).filter((s) => s.kind === "yours");
+      if (!out.sources.length && !out.overview)
+        throw new Error("The search came back empty. Try again in a minute.");
+      save({
+        reading: {
+          ...r,
+          overview: out.overview,
+          sources: [...yours, ...out.sources.map(stamp)],
+          unsettled: out.unsettled.map((u) => ({ ...u, id: newId("u") })),
+          at: new Date().toISOString(),
+          fingerprint: setupFingerprint(now),
+        },
+      });
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      busyRef.current = false;
+      setBusy("");
+    }
+  }
+
+  async function findMore(request: string, count = 4, replacing?: string) {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(replacing || "more");
+    try {
+      const out = await call({ more: true, ask: request, count });
+      const now = getMeeting() || m;
+      const r: Reading = now.reading || {};
+      if (!out.sources.length) {
+        toast("info", "Nothing new turned up for that. Try putting it another way.");
+        return;
+      }
+      save({ reading: { ...r, sources: [...(r.sources || []), ...out.sources.map(stamp)] } });
+      toast("success", `Added ${out.sources.length} ${out.sources.length === 1 ? "source" : "sources"}.`);
+      setAsk("");
+      setMoreOpen(false);
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      busyRef.current = false;
+      setBusy("");
+    }
+  }
+
+  function reject(s: ReadingSource, reason: string, replace: boolean) {
+    const now = getMeeting() || m;
+    const r: Reading = now.reading || {};
+    save({
+      reading: {
+        ...r,
+        sources: (r.sources || []).filter((x) => x.id !== s.id),
+        rejected: [...(r.rejected || []), { title: s.title, url: s.url, reason }],
+      },
+    });
+    if (replace)
+      void findMore(
+        `A replacement for "${s.title}", which the writer turned down: "${reason || "not useful"}".`,
+        1,
+        s.id,
+      );
+  }
+
+  function setSteer(steer: string) {
+    const now = getMeeting() || m;
+    save({ reading: { ...(now.reading || {}), steer } });
+  }
+
+  const must = sources.filter((s) => s.priority === "must");
+  const skim = sources.filter((s) => s.priority !== "must");
+
+  if (!built && !sources.length)
+    return (
+      <div className="mx-auto max-w-xl space-y-4 rounded-xl border border-border bg-surface p-6 text-center shadow-sm">
+        <BookOpen size={26} className="mx-auto text-[var(--accent)]" />
+        <div>
+          <h2 className="text-base font-semibold">What to read before this meeting</h2>
+          <p className="mt-1 text-sm text-muted">
+            The subject in brief, the pieces worth reading with the figures and opinions in each
+            pulled out, and {frame.title.toLowerCase()}. Built from a web search on{" "}
+            {m.topic ? <span className="font-medium text-ink">{m.topic}</span> : "what this meeting is about"}.
+          </p>
+        </div>
+        <SteerBox value={reading.steer || ""} onChange={setSteer} open />
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <Button onClick={() => void build()} disabled={Boolean(busy)}>
+            {busy ? <Loader2 size={15} className="animate-spin" /> : <Search size={15} />}
+            {busy ? "Searching… about a minute" : "Build the reading list"}
+          </Button>
+          <Button variant="secondary" onClick={onAddSource}>
+            <Plus size={15} /> Add your own
+          </Button>
+        </div>
+      </div>
+    );
+
+  return (
+    <div className="space-y-5">
+      {stale && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p className="min-w-0 flex-1">
+            The meeting has changed since this was built. Rebuild it to match? Your own sources and the
+            ones you turned down are kept.
+          </p>
+          <Button size="sm" onClick={() => void build()} disabled={Boolean(busy)}>
+            Rebuild
+          </Button>
+        </div>
+      )}
+
+      {/* One row of controls. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" onClick={() => setMoreOpen((v) => !v)} disabled={Boolean(busy)}>
+          {busy === "more" ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+          {busy === "more" ? "Searching…" : "Find more"}
+        </Button>
+        <Button size="sm" variant="secondary" onClick={onAddSource}>
+          <Plus size={14} /> Add a source
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => void build()} disabled={Boolean(busy)}>
+          {busy === "build" ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+          {busy === "build" ? "Rebuilding… about a minute" : "Rebuild"}
+        </Button>
+        <button
+          type="button"
+          onClick={() => setSteerOpen((v) => !v)}
+          className="ml-auto max-w-full truncate text-xs text-muted hover:text-ink"
+          title={reading.steer || ""}
+        >
+          {reading.steer ? (
+            <>
+              Sources you want: <span className="text-ink">{reading.steer}</span>
+            </>
+          ) : (
+            "Say what sources you want"
+          )}
+        </button>
+      </div>
+
+      {busy && busy !== "build" && busy !== "more" && (
+        <p className="flex items-center gap-1.5 text-xs text-muted">
+          <Loader2 size={12} className="animate-spin" /> Finding a replacement…
+        </p>
+      )}
+
+      {steerOpen && <SteerBox value={reading.steer || ""} onChange={setSteer} open />}
+
+      {moreOpen && (
+        <form
+          className="flex flex-wrap gap-2 rounded-xl border border-border bg-surface p-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void findMore(ask);
+          }}
+        >
+          <Input
+            autoFocus
+            value={ask}
+            onChange={(e) => setAsk(e.target.value)}
+            placeholder='Anything in particular? e.g. "hard outcome data", "what payers think", "the case against"'
+            className="min-w-64 flex-1"
+          />
+          <Button type="submit" disabled={Boolean(busy)}>
+            {busy === "more" ? <Loader2 size={15} className="animate-spin" /> : <Search size={15} />}
+            Search
+          </Button>
+        </form>
+      )}
+
+      {reading.overview && (
+        <section className="rounded-xl border border-border bg-surface p-4 shadow-sm">
+          <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold">
+            <BookOpen size={15} className="text-[var(--accent)]" /> The topic in brief
+          </h2>
+          <div className="space-y-2 text-sm leading-relaxed text-ink">
+            {reading.overview.split(/\n{2,}/).map((p, i) => (
+              <p key={i}>{p}</p>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {must.length > 0 && (
+        <SourceGroup
+          title="Read before you go"
+          items={must}
+          busy={busy}
+          onReject={reject}
+          onRemove={(s) => (s.docId ? removeMaterial(s.docId, getMeeting, save) : reject(s, "", false))}
+        />
+      )}
+      {skim.length > 0 && (
+        <SourceGroup
+          title="Worth a skim"
+          items={skim}
+          busy={busy}
+          onReject={reject}
+          onRemove={(s) => reject(s, "", false)}
+        />
+      )}
+
+      {(reading.unsettled || []).length > 0 && (
+        <section className="rounded-xl border border-border bg-surface p-4 shadow-sm">
+          <h2 className="flex items-center gap-2 text-sm font-semibold">
+            <Scale size={15} className="text-[var(--accent)]" /> {frame.title}
+          </h2>
+          <p className="mb-3 text-xs text-muted">{frame.hint}</p>
+          <ul className="space-y-4">
+            {(reading.unsettled || []).map((u) => (
+              <li key={u.id}>
+                <p className="text-sm font-medium">{u.point}</p>
+                <ul className="mt-1.5 space-y-1.5 border-l-2 border-border pl-3">
+                  {u.sides.map((s, i) => (
+                    <li key={i} className="text-sm">
+                      {s.position}
+                      {s.who && (
+                        <span className="mt-0.5 flex items-center gap-1 text-xs text-muted">
+                          <UserRound size={11} /> {s.who}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {reading.at && (
+        <p className="text-[11px] text-muted">
+          Searched {new Date(reading.at).toLocaleDateString()}. Links are only ones the search actually
+          returned.
+          {(reading.rejected || []).length > 0 &&
+            ` ${reading.rejected!.length} turned down, and kept out of every search.`}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function SteerBox({ value, onChange, open }: { value: string; onChange: (v: string) => void; open: boolean }) {
+  const [draft, setDraft] = useState(value);
+  if (!open) return null;
+  return (
+    <div className="text-left">
+      <Input
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => draft.trim() !== value && onChange(draft.trim())}
+        placeholder='What sources do you want? e.g. "peer-reviewed and survey data, not consultancy blogs"'
+      />
+      <p className="mt-1 text-[11px] text-muted">Every search for this meeting follows this. Optional.</p>
+    </div>
+  );
+}
+
+function SourceGroup({
+  title,
+  items,
+  busy,
+  onReject,
+  onRemove,
+}: {
+  title: string;
+  items: ReadingSource[];
+  busy: string;
+  onReject: (s: ReadingSource, reason: string, replace: boolean) => void;
+  onRemove: (s: ReadingSource) => void;
+}) {
+  return (
+    <section>
+      <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">{title}</h2>
+      <ul className="space-y-3">
+        {items.map((s) => (
+          <SourceCard key={s.id} s={s} busy={busy} onReject={onReject} onRemove={onRemove} />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function SourceCard({
+  s,
+  busy,
+  onReject,
+  onRemove,
+}: {
+  s: ReadingSource;
+  busy: string;
+  onReject: (s: ReadingSource, reason: string, replace: boolean) => void;
+  onRemove: (s: ReadingSource) => void;
+}) {
+  const [rejecting, setRejecting] = useState(false);
+  const [reason, setReason] = useState("");
+  const meta = [s.outlet, s.date].filter(Boolean).join(" · ");
+
+  return (
+    <li className="rounded-xl border border-border bg-surface p-4 shadow-sm">
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          {s.url ? (
+            <a
+              href={s.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group inline-flex items-start gap-1 text-sm font-semibold text-ink hover:text-[var(--accent)]"
+            >
+              <span>{s.title}</span>
+              <ExternalLink size={12} className="mt-1 shrink-0 text-muted group-hover:text-[var(--accent)]" />
+            </a>
+          ) : (
+            <p className="text-sm font-semibold">{s.title}</p>
+          )}
+          <p className="mt-0.5 text-xs text-muted">
+            {meta}
+            {s.kind === "yours" && (
+              <span className="ml-1.5 rounded bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--accent)]">
+                You added this
+              </span>
+            )}
+          </p>
+        </div>
+        {s.kind === "yours" ? (
+          <button
+            type="button"
+            onClick={() => onRemove(s)}
+            className="shrink-0 rounded p-1 text-muted hover:text-red-600"
+            title="Remove it"
+            aria-label="Remove it"
+          >
+            <Trash2 size={14} />
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setRejecting((v) => !v)}
+            className="flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-xs text-muted hover:text-ink"
+          >
+            <ThumbsDown size={13} /> Not useful
+          </button>
+        )}
+      </div>
+
+      {s.summary && <p className="mt-2 text-sm leading-relaxed">{s.summary}</p>}
+      {s.findings.length > 0 && (
+        <div className="mt-2">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">What it says</p>
+          <ul className="mt-1 list-disc space-y-1 pl-5 text-sm">
+            {s.findings.map((f, i) => (
+              <li key={i}>{f}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {s.why && <p className="mt-2 text-xs italic text-muted">Why read it: {s.why}</p>}
+
+      {busy === s.id && (
+        <p className="mt-2 flex items-center gap-1.5 text-xs text-muted">
+          <Loader2 size={12} className="animate-spin" /> Finding a replacement…
+        </p>
+      )}
+
+      {rejecting && (
+        <div className="mt-3 space-y-2 rounded-lg bg-canvas p-3">
+          <p className="text-xs font-medium">What&apos;s wrong with it? Later searches will avoid the same thing.</p>
+          <div className="flex flex-wrap gap-1.5">
+            {REASONS.map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setReason(r)}
+                className={`rounded-full border px-2.5 py-0.5 text-xs ${
+                  reason === r ? "border-[var(--accent)] text-[var(--accent)]" : "border-border text-muted hover:text-ink"
+                }`}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+          <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Or say it in your words" />
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="ghost" onClick={() => onReject(s, reason.trim(), false)}>
+              Just remove it
+            </Button>
+            <Button size="sm" onClick={() => onReject(s, reason.trim(), true)} disabled={Boolean(busy)}>
+              Replace it
+            </Button>
+          </div>
+        </div>
+      )}
+    </li>
+  );
+}

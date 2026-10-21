@@ -23,6 +23,7 @@ import {
 import { MEETING_TYPES } from "@/lib/meetingprep/types";
 import { fillOutQuestion, writeQuestions, writeVariants } from "@/lib/meetingprep/questionsAi";
 import { reviewPrep } from "@/lib/meetingprep/reviewAi";
+import { buildReading, digestMaterial, lookupPerson } from "@/lib/meetingprep/readingAi";
 
 export const runtime = "nodejs";
 // A whole brief now writes out the words for every step, plus any boxes the
@@ -54,6 +55,12 @@ export const maxDuration = 300;
 //                                              → { title, notes, actions:[], smallTalk }
 //   recap_email { notes, actions:[], title?, when?, sender?, recipients:[],
 //              guidance?, previous? }          → { subject, body }
+//   reading  { meeting, kolId?, frame:{title,hint}, steer?, ask?, existing:[],
+//              rejected:[], more?, count? }   → { overview, sources:[], unsettled:[] }
+//   material { meeting, doc:{name,text,purpose,note,url?} }
+//                                              → { title, summary, findings:[], people:[], session }
+//   person   { person:{name,role,org,notes}, subject }
+//                                              → { text, sources:[{title,url}] }
 
 function firstText(res: { content: { type: string; text?: string }[] }): string {
   const block = res.content.find((b) => b.type === "text");
@@ -249,6 +256,77 @@ export async function POST(req: Request) {
       const kolBlock = await kolBlockFor(supabase, String(body?.kolId || ""));
       const notes = await researchMeeting(meeting, kolBlock);
       return NextResponse.json({ notes });
+    }
+
+    // The Reading tab. A search of its own, separate from the brief's: the
+    // brief wants notes to write from, this wants pieces to read, with the
+    // links kept and what each one says pulled out.
+    if (action === "reading") {
+      const meeting: MeetingPayload = body?.meeting || {};
+      const kolBlock = await kolBlockFor(supabase, String(body?.kolId || ""));
+      const list = (v: unknown) => (Array.isArray(v) ? v : []).slice(0, 60);
+      const out = await buildReading({
+        meeting,
+        kolBlock,
+        frame: {
+          title: String(body?.frame?.title || "Still unsettled"),
+          hint: String(body?.frame?.hint || ""),
+        },
+        steer: String(body?.steer || "").slice(0, 2000),
+        ask: String(body?.ask || "").slice(0, 1000),
+        existing: list(body?.existing).map((s: { title?: unknown; url?: unknown }) => ({
+          title: String(s?.title || ""),
+          url: String(s?.url || ""),
+        })),
+        rejected: list(body?.rejected).map(
+          (s: { title?: unknown; url?: unknown; reason?: unknown }) => ({
+            title: String(s?.title || ""),
+            url: String(s?.url || ""),
+            reason: String(s?.reason || ""),
+          }),
+        ),
+        more: Boolean(body?.more),
+        count: Number(body?.count) || 6,
+      });
+      return NextResponse.json(out);
+    }
+
+    if (action === "material") {
+      const meeting: MeetingPayload = body?.meeting || {};
+      const d = body?.doc || {};
+      const note = String(d.note || "").trim();
+      if (!note)
+        return NextResponse.json(
+          { error: "Say what this is and what you want out of it first." },
+          { status: 400 },
+        );
+      const out = await digestMaterial({
+        meeting,
+        doc: {
+          name: String(d.name || "Material"),
+          text: String(d.text || ""),
+          purpose: String(d.purpose || "other"),
+          note: note.slice(0, 2000),
+          url: String(d.url || ""),
+        },
+      });
+      return NextResponse.json(out);
+    }
+
+    if (action === "person") {
+      const p = body?.person || {};
+      if (!String(p.name || "").trim())
+        return NextResponse.json({ error: "No name to look up" }, { status: 400 });
+      const out = await lookupPerson({
+        person: {
+          name: String(p.name),
+          role: String(p.role || ""),
+          org: String(p.org || ""),
+          notes: String(p.notes || "").slice(0, 500),
+        },
+        subject: String(body?.subject || "").slice(0, 500),
+      });
+      return NextResponse.json(out);
     }
 
     // The question bank: a long ranked list to pick from, not the four or
