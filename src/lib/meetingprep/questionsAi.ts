@@ -642,12 +642,15 @@ export async function writeSetups({
   research = "",
   questions,
   standing = "",
+  force = false,
 }: {
   meeting: MeetingPayload;
   kolBlock?: string;
   research?: string;
   questions: { text: string; category?: string; why?: string }[];
   standing?: string;
+  /** The writer asked for these by name: every one gets a setup. */
+  force?: boolean;
 }): Promise<string[]> {
   if (!questions.length) return [];
   const res = await anthropic().messages.create({
@@ -662,6 +665,7 @@ ${SETUP_RULE}
 
 Write each setup so it leads straight into that exact question as worded, and so that the setups across the list do not repeat each other: if two questions stand on the same argument, lay it out properly before the first one and refer back to it briefly ("Coming back to that gap between...") before the second.
 
+${force ? `\nThe writer has asked for a setup on every question below by name, including ones you would normally leave bare. Write one for each: the shortest setup that makes the question land, one or two sentences where that is all it needs. Never return "".\n` : ""}
 Draw the substance from the research and reading list below first; where they say nothing on a question, use what you know of the subject, but never invent a figure. A number in a setup must come from the material below.
 ${standing.trim() ? `\nThe writer's standing instruction on how their questions are written. It applies to the setups too and outranks every rule above:\n${standing.trim()}\n` : ""}
 Return one entry per question, with "index" exactly as given. Plain prose, no markdown, no quotation marks. Never an em dash or en dash.`,

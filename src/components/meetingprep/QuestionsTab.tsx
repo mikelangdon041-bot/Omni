@@ -168,13 +168,17 @@ export function QuestionsTab({
   const missingProbes = useMemo(() => live.filter((q) => !q.followUp).length, [live]);
 
   // Questions that have never been given a setup. "" means one was asked for
-  // and the question is better bare, so it is not missing. Your own list
-  // first, since those are the ones being said; the whole bank when nothing
-  // is picked yet.
+  // and the question was judged better bare, so it is not missing (and has
+  // its own "Add a setup" for when the writer disagrees). Your list first,
+  // since those are the ones being said; then the rest of the bank, so the
+  // button does not just stop at the list and leave twenty questions bare.
   const setupTargets = useMemo(() => {
-    const pool = picked.length ? picked : live;
-    return pool.filter((q) => q.setup === undefined).slice(0, 40);
+    const list = picked.filter((q) => q.setup === undefined);
+    if (list.length) return { where: "your list" as const, qs: list.slice(0, 40) };
+    const bank = live.filter((q) => !q.picked && q.setup === undefined);
+    return { where: "the bank" as const, qs: bank.slice(0, 40) };
   }, [picked, live]);
+  const [settingUpId, setSettingUpId] = useState<string | null>(null);
   const [settingUp, setSettingUp] = useState(false);
 
 
@@ -426,10 +430,11 @@ export function QuestionsTab({
    * The background in front of questions already in the bank, in one call.
    * Only the setup changes: the call has no way to hand back a question.
    */
-  async function addSetups() {
-    const targets = setupTargets;
+  async function addSetups(only?: QuestionItem) {
+    const targets = only ? [only] : setupTargets.qs;
     if (!targets.length) return;
-    setSettingUp(true);
+    if (only) setSettingUpId(only.id);
+    else setSettingUp(true);
     try {
       const res = await fetch("/api/meeting/ai", {
         method: "POST",
@@ -442,6 +447,9 @@ export function QuestionsTab({
           research: withReading(researchStale ? "" : m.brief?.research?.notes || "", m),
           questions: targets.map((q) => ({ text: q.text, category: q.category, why: q.why })),
           standing: guidance,
+          // Asked for this one by name: it gets a setup even if it would
+          // have been left bare.
+          force: Boolean(only),
         }),
       });
       const json = await res.json().catch(() => ({}));
@@ -451,17 +459,24 @@ export function QuestionsTab({
       setItems(items.map((x) => (byId.has(x.id) ? { ...x, setup: byId.get(x.id) } : x)));
       const n = [...byId.values()].filter(Boolean).length;
       toast(
-        "success",
-        n
-          ? `Background added to ${n} question${n === 1 ? "" : "s"}${
-              n < targets.length ? `; ${targets.length - n} land better without one` : ""
-            }.`
-          : "None of these needed a setup.",
+        n || !only ? "success" : "error",
+        only
+          ? n
+            ? "Setup written."
+            : "Couldn't write one for that question. Try again."
+          : n
+            ? `Setups written for ${n} question${n === 1 ? "" : "s"}${
+                n < targets.length
+                  ? `. ${targets.length - n} work better as a plain question; use "Add a setup" on any you want one for anyway`
+                  : ""
+              }.`
+            : "None of these needed a setup.",
       );
     } catch (e) {
       toast("error", (e as Error).message);
     } finally {
       setSettingUp(false);
+      setSettingUpId(null);
     }
   }
 
@@ -748,18 +763,21 @@ export function QuestionsTab({
         </Button>
         {/* Only while there is something to do, so it takes itself off the
             bar once every question has a probe. */}
-        {setupTargets.length > 0 && (
+        {/* Only for questions written before setups existed, or typed by
+            you. New questions arrive with theirs, so this takes itself off
+            the bar once everything has been through it. */}
+        {setupTargets.qs.length > 0 && (
           <Button
             size="sm"
             variant="secondary"
             disabled={settingUp || busy}
             onClick={() => void addSetups()}
-            title="Write the background you say before each question, from your reading. Your questions stay as they are."
+            title="A setup is the two to four sentences you say before a question: the argument or finding it stands on, from your reading. Your questions are not changed."
           >
             <BookOpen size={14} className={settingUp ? "animate-pulse" : ""} />
             {settingUp
-              ? "Writing the background…"
-              : `Add the background to ${setupTargets.length === 1 ? "1 question" : `${setupTargets.length} questions`}`}
+              ? "Writing setups…"
+              : `Write setups for ${setupTargets.qs.length === 1 ? "1 question" : `${setupTargets.qs.length} questions`} in ${setupTargets.where}`}
           </Button>
         )}
         {missingProbes > 0 && (
@@ -820,6 +838,8 @@ export function QuestionsTab({
         at={review.at}
         scope="questions"
         busy={busy}
+        onRerun={() => void review.runReview()}
+        rerunning={review.reviewing}
         questionText={(id) => items.find((q) => q.id === id)?.text}
         onFix={(n) => void applyQuestionNote(n)}
         onToggleDone={(n) => review.patchNote(n.id, { done: !n.done })}
@@ -985,7 +1005,7 @@ export function QuestionsTab({
                           choice — the chip below says it is a backup, and
                           that is the whole job. Nothing in this list is
                           less readable than anything else in it. */}
-                      <SpokenQuestion q={q} />
+                      <SpokenQuestion q={q} busy={settingUpId === q.id} onAddSetup={() => void addSetups(q)} />
                       {/* Your list is one running order, not groups: the
                           order you ask them in is the whole point of it. But
                           which group a question came out of is worth knowing
@@ -1150,7 +1170,7 @@ export function QuestionsTab({
                         />
                       ) : (
                         <>
-                          <SpokenQuestion q={q} />
+                          <SpokenQuestion q={q} busy={settingUpId === q.id} onAddSetup={() => void addSetups(q)} />
                           <p className="mt-0.5 text-xs text-muted">
                             {q.why}
                             {q.forWhom ? ` · For: ${q.forWhom}` : ""}
@@ -1538,11 +1558,32 @@ function ProbeLine({
  * the darker line, because it is the part that must not be lost when reading
  * at speed; the setup is the run-up to it.
  */
-function SpokenQuestion({ q }: { q: QuestionItem }) {
+function SpokenQuestion({
+  q,
+  busy = false,
+  onAddSetup,
+}: {
+  q: QuestionItem;
+  busy?: boolean;
+  onAddSetup?: () => void;
+}) {
   return (
     <>
       {q.setup && <p className="mb-1 text-sm leading-relaxed text-ink/70">{q.setup}</p>}
       <p className={`text-sm text-ink ${q.setup ? "font-medium" : ""}`}>{q.text}</p>
+      {/* Left bare on purpose ("") is a judgement, and the writer may not
+          share it. One click overrules it. */}
+      {q.setup === "" && onAddSetup && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onAddSetup}
+          className="mt-0.5 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium text-[var(--accent)] transition hover:bg-[var(--accent-soft)] disabled:opacity-60"
+        >
+          <BookOpen size={12} className={busy ? "animate-pulse" : ""} />
+          {busy ? "Writing the setup…" : "Add a setup"}
+        </button>
+      )}
     </>
   );
 }

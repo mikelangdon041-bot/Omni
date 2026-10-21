@@ -135,6 +135,8 @@ export function SetupTab({
             notes={review.notes}
             at={review.at}
             scope="setup"
+            onRerun={() => void review.runReview()}
+            rerunning={review.reviewing}
             questionText={(id) => m.questions?.items?.find((q) => q.id === id)?.text}
             busy={Boolean(busy)}
             onToggleDone={(n) => review.patchNote(n.id, { done: !n.done })}

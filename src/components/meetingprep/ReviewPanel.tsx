@@ -29,6 +29,8 @@ export function ReviewPanel({
   onDismiss,
   onClear,
   questionText,
+  onRerun,
+  rerunning = false,
 }: {
   notes: ReviewNote[];
   at?: string;
@@ -43,6 +45,9 @@ export function ReviewPanel({
   onToggleDone: (n: ReviewNote) => void;
   onDismiss: (n: ReviewNote) => void;
   onClear: () => void;
+  /** Runs the check again, offered when these notes are from an older one. */
+  onRerun?: () => void;
+  rerunning?: boolean;
 }) {
   const [showDone, setShowDone] = useState(false);
   const [showOther, setShowOther] = useState(false);
@@ -61,6 +66,10 @@ export function ReviewPanel({
   const canFix = (n: ReviewNote) =>
     Boolean(onFix) && (scope !== "questions" || Boolean(n.action));
   const fixable = open.filter(canFix);
+  // Written before notes quoted what they meant. Saying so was not enough:
+  // the writer was left holding two notes that named nothing, with the fix a
+  // button on some other part of the page.
+  const outdated = open.some((n) => n.quotes === undefined);
 
   // Nothing for this tab at all: say where the advice is rather than nothing,
   // or the button looks like it did nothing.
@@ -147,6 +156,19 @@ export function ReviewPanel({
           <X size={14} />
         </button>
       </div>
+      {outdated && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-[var(--accent)]/20 bg-amber-50/70 px-3 py-2 text-xs text-amber-900">
+          <span className="min-w-0 flex-1">
+            These notes are from an older check that didn&apos;t show which questions or lines it
+            meant. Check again to see them.
+          </span>
+          {onRerun && (
+            <Button size="sm" disabled={rerunning || busy} onClick={onRerun}>
+              {rerunning ? "Checking…" : "Check again"}
+            </Button>
+          )}
+        </div>
+      )}
       <ul className="divide-y divide-[var(--accent)]/15">
         {open.map((n) => (
           <li key={n.id} className="flex items-start gap-2.5 p-3">
@@ -202,12 +224,7 @@ export function ReviewPanel({
               {/* A note from before notes said exactly what they meant. It will
                   never grow its quotes, so say what to do instead of leaving
                   the writer to hunt for it. */}
-              {n.quotes === undefined && !(n.questionIds?.length ?? 0) && (
-                <p className="mt-1 text-xs text-muted">
-                  This note is from an older check that didn&apos;t quote what it meant. Run the
-                  check again to see the exact questions and lines.
-                </p>
-              )}
+
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                 <span className="rounded-full bg-surface px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
                   {n.targetLabel}

@@ -349,6 +349,8 @@ export function BriefTab({
         at={reviewAt}
         scope="brief"
         busy={!!busy}
+        onRerun={() => void runReview()}
+        rerunning={reviewing}
         questionText={(id) => m.questions?.items?.find((q) => q.id === id)?.text}
         onFix={(n) => {
           patchNote(n.id, { done: true });

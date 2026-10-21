@@ -425,6 +425,7 @@ export async function POST(req: Request) {
           why: String(q?.why || "").slice(0, 300),
         })),
         standing: String(body?.standing || "").slice(0, 2000),
+        force: Boolean(body?.force),
       });
       return NextResponse.json({ setups });
     }
