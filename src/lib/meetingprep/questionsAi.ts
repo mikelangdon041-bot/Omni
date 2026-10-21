@@ -54,6 +54,33 @@ const QUESTIONS_SCHEMA = {
 // was in the system prompt and their correction was not.
 const SPOKEN_SOURCING_RULE = `Where the material came from belongs in "why", never in the question itself. The writer is going to say this out loud, and "McKinsey says whoever masters the evidence wins, are you there?" is a line off a conference slide, not a question a person asks. Take the finding, drop the name, ask the thing underneath it. Put the source in "why" (e.g. "from the McKinsey 2025 line on evidence mastery") so the writer knows where it came from and can cite it themselves if they choose to. Never name a consultancy, report, survey, study or author in "text" unless the writer has explicitly asked for citations in the question.`;
 
+// Every setup is said on its own. The writer reorders the list, holds some
+// back, skips some in the room, so "that same survey found" is a sentence
+// with nothing in front of it as often as not. The batch prompt used to ask
+// for exactly that ("refer back to it briefly"), and it broke the moment two
+// questions were asked out of order.
+const STANDALONE_RULE = `Each setup must make complete sense on its own, said cold, in any order, with every other question skipped. The writer reorders, holds back and skips questions in the room. So never refer to another question or setup, never "that same survey", "the same study", "as I said", "coming back to", "earlier", "again", "also", "another finding". If two questions stand on the same finding, each setup states it in full, in different words.`;
+
+// Words that only make sense if something else was said first.
+const LEANS_ON =
+  /\b(?:that same|this same|those same|the same (?:survey|study|report|paper|data|research|finding|findings|group|people|respondents|numbers?)|as (?:I|we) (?:said|mentioned|noted|discussed)|(?:I|we) (?:just )?mentioned|(?:said|mentioned|noted) earlier|earlier question|coming back to|come back to|going back to|as before|once again|another finding from|the other finding|building on that|on that same)\b/i;
+
+/**
+ * The phrase in a setup that needs something said before it, or null.
+ *
+ * Only the opening sentence is read. A setup that leans on another question
+ * gives itself away at the start ("Coming back to AI", "That same survey
+ * found"); later in a setup, "those same leaders" points at people it named a
+ * sentence earlier, which is fine. "I keep coming back to" is the speaker's
+ * own preoccupation, not a reference, and is let through.
+ */
+export function leansOnAnother(setup: string): string | null {
+  const first = (String(setup || "").trim().match(/^[^.!?]*[.!?]?/) || [""])[0]
+    .replace(/\b(?:I|we) keep coming back to\b/gi, "");
+  const hit = first.match(LEANS_ON);
+  return hit ? hit[0] : null;
+}
+
 // How the writer wants to ask: the way Ezra Klein interviews. The bank used to
 // be one-breath questions with no preamble, which threw away the thing that
 // makes a question land in front of an audience: the room hearing what the
@@ -73,6 +100,7 @@ What it never does:
 - Never answers its own question, or tells the guest what they think.
 - Never more than four sentences. Someone has to say it out loud without losing the room.
 - Never names a consultancy, analyst house, report, survey, study or author. The same rule as the question: the finding, not the brand. "One large global survey of MSLs found" is fine; a company's name is not.
+- Never leans on another question. ${STANDALONE_RULE}
 - Never a setup for its own sake. An opener, a quick follow-up, a question whose substance is already in the question, or one that lands harder bare gets setup "". Klein does not preface every question, and a bank where every question has a paragraph in front of it is one nobody can get through.`;
 
 /**
@@ -604,6 +632,14 @@ ${instructionBlock(guidance.trim(), coverage.trim(), focus.trim())}`,
     guidance.trim(),
     housesIn(research),
   );
+  // A batch is written as one sequence, so its setups lean on each other
+  // exactly the way a list of separate questions cannot.
+  const leaning = clean.filter((q) => leansOnAnother(q.setup));
+  if (leaning.length) {
+    const redone = await writeSetups({ meeting, kolBlock, research, questions: leaning, standing: guidance.trim(), force: true });
+    const byText = new Map(leaning.map((q, i) => [q.text, redone[i] || ""]));
+    for (const q of clean) if (byText.has(q.text)) q.setup = byText.get(q.text) || "";
+  }
   return clean.sort((a, b) => a.rank - b.rank);
 }
 
@@ -643,6 +679,7 @@ export async function writeSetups({
   questions,
   standing = "",
   force = false,
+  repairing = false,
 }: {
   meeting: MeetingPayload;
   kolBlock?: string;
@@ -651,6 +688,8 @@ export async function writeSetups({
   standing?: string;
   /** The writer asked for these by name: every one gets a setup. */
   force?: boolean;
+  /** Already a repair: never recurse into another one. */
+  repairing?: boolean;
 }): Promise<string[]> {
   if (!questions.length) return [];
   const res = await anthropic().messages.create({
@@ -663,7 +702,7 @@ ${SEAT_RULE}
 
 ${SETUP_RULE}
 
-Write each setup so it leads straight into that exact question as worded, and so that the setups across the list do not repeat each other: if two questions stand on the same argument, lay it out properly before the first one and refer back to it briefly ("Coming back to that gap between...") before the second.
+Write each setup so it leads straight into that exact question as worded. ${STANDALONE_RULE}
 
 ${force ? `\nThe writer has asked for a setup on every question below by name, including ones you would normally leave bare. Write one for each: the shortest setup that makes the question land, one or two sentences where that is all it needs. Never return "".\n` : ""}
 Draw the substance from the research and reading list below first; where they say nothing on a question, use what you know of the subject, but never invent a figure. A number in a setup must come from the material below.
@@ -701,6 +740,31 @@ Return one entry per question, with "index" exactly as given. Plain prose, no ma
       continue;
     }
     out[i] = setup;
+  }
+
+  // Asked not to, a setup can still open "that same survey found". Those go
+  // back once, one at a time so none of them can lean on its neighbour, with
+  // the phrase quoted; anything still leaning goes bare. A question with no
+  // setup is fine; one that starts mid-thought is not.
+  const leaning = repairing ? [] : out.map((x, i) => ({ i, hit: leansOnAnother(x) })).filter((r) => r.hit);
+  if (leaning.length) {
+    console.warn(`[setups] ${leaning.length} leaned on another question, rewriting: ${leaning.map((r) => r.hit).join(", ")}`);
+    const fixed = await Promise.all(
+      leaning.map((r) =>
+        writeSetups({
+          meeting,
+          kolBlock,
+          research,
+          questions: [questions[r.i]],
+          standing: `${standing}\nA previous setup for this question said "${r.hit}", which only works if another question was asked first. This one is said on its own: state the finding in full.`.trim(),
+          force: true,
+          repairing: true,
+        }).then((x) => x[0] || ""),
+      ),
+    );
+    leaning.forEach((r, k) => {
+      out[r.i] = fixed[k] && !leansOnAnother(fixed[k]) ? fixed[k] : "";
+    });
   }
   return out;
 }

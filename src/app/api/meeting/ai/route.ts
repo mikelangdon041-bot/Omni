@@ -281,10 +281,13 @@ export async function POST(req: Request) {
         },
         steer: String(body?.steer || "").slice(0, 2000),
         ask: String(body?.ask || "").slice(0, 1000),
-        existing: list(body?.existing).map((s: { title?: unknown; url?: unknown }) => ({
-          title: String(s?.title || ""),
-          url: String(s?.url || ""),
-        })),
+        existing: list(body?.existing).map(
+          (s: { title?: unknown; url?: unknown; outlet?: unknown }) => ({
+            title: String(s?.title || ""),
+            url: String(s?.url || ""),
+            outlet: String(s?.outlet || ""),
+          }),
+        ),
         rejected: list(body?.rejected).map(
           (s: { title?: unknown; url?: unknown; reason?: unknown }) => ({
             title: String(s?.title || ""),

@@ -64,6 +64,29 @@ function normUrl(u: string): string {
   }
 }
 
+// Repositories and link services: one host, many unrelated publishers.
+const REPOSITORIES = /(^|\.)(ncbi\.nlm\.nih\.gov|pubmed\.gov|doi\.org|europepmc\.org|researchgate\.net|semanticscholar\.org|sciencedirect\.com|springer\.com|wiley\.com|tandfonline\.com|sagepub\.com|frontiersin\.org|mdpi\.com|bmj\.com|nature\.com|jamanetwork\.com|linkedin\.com|medium\.com|youtube\.com|scholar\.google\.com)$/;
+
+/** Who a piece is really from: its named outlet, and its site unless shared. */
+function publisherKeys(outlet: string, url: string): string[] {
+  const keys: string[] = [];
+  const name = outlet
+    .toLowerCase()
+    .replace(/\(.*?\)/g, " ")
+    .replace(/\b(via|the|inc|llc|ltd)\b/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  // "PMC" or "PubMed" names the shelf, not who wrote it.
+  if (name && !/^(pmc|pubmed|pubmed central|ncbi|doi|google scholar)$/.test(name)) keys.push(`o:${name}`);
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, "").toLowerCase();
+    if (host && !REPOSITORIES.test(host)) keys.push(`h:${host}`);
+  } catch {
+    // no site to key on
+  }
+  return keys;
+}
+
 // The text after the last tool block: everything before it is the model
 // working out loud between searches.
 function finalText(content: Block[]): string {
@@ -189,7 +212,9 @@ const READING_SCHEMA = {
 const SOURCE_RULES = `What makes a good source here:
 - A real, specific piece someone can open and read: a paper, a report, a survey, a guideline, a serious article, a talk or interview with a named person. Not a vendor landing page, a listicle, a press-release echo of something you could cite directly, or a search page.
 - Recent where the subject moves; the canonical piece where it does not.
-- Varied: not five pieces from one outlet or one kind of author. Where the field has camps, the reading list covers more than one.
+- Every piece from a DIFFERENT publisher or organisation. Never two from the same society, firm, journal, website or author, and never two papers written up from the same study, survey or dataset (a "companion paper" counts as the same source). The list is a range of voices, not one voice twice.
+- A mix of kinds: peer-reviewed research, industry or survey data, a practitioner's or trade-press view, and at least one piece that is critical of or argues against the prevailing view. A list that agrees with itself is half a list.
+- Where the field has camps, the reading list covers more than one.
 - Tied to THIS meeting's subject, not the broad field around it.
 
 For each source:
@@ -227,7 +252,7 @@ export async function buildReading({
   steer?: string;
   /** What they want from this particular search. */
   ask?: string;
-  existing?: { title: string; url: string }[];
+  existing?: { title: string; url: string; outlet?: string }[];
   rejected?: { title: string; url: string; reason: string }[];
   more?: boolean;
   count?: number;
@@ -244,7 +269,7 @@ ${
     ? `This is a request for MORE sources. Return up to ${n} new ones that are not already on the list. Return "" for overview and [] for unsettled.`
     : `Return:
 - overview: the subject in brief, for someone who knows the general field but not this corner of it. Two or three short paragraphs separated by a blank line: what the subject is, why it matters right now, and the terms practitioners use. Concrete, current, no throat-clearing.
-- sources: ${n} sources, "must" ones first.
+- sources: ${n + 2} sources, "must" ones first, every one from a different publisher.
 - unsettled: the section headed "${frame.title}". ${frame.hint} 2-4 points. Each point is one line naming what is unsettled; each side is a position stated in a sentence and who holds it (a named person, organisation or camp from the sources; for the people in the meeting, say "likely" and why). Only genuinely contested or undecided things. If nothing about this subject is genuinely unsettled, return [].`
 }
 
@@ -268,7 +293,10 @@ Finish with the JSON object and nothing after it: {"overview": string, "sources"
     .filter(Boolean)
     .join("\n\n");
 
-  const { res, links } = await searchTurn(system, question, more ? 4 : 6, 12000);
+  // Eight searches for a full list: holding it to one piece per publisher
+  // needs a wider net than six, and it still lands well inside the route's
+  // ceiling with the plain search tool.
+  const { res, links } = await searchTurn(system, question, more ? 4 : 8, 12000);
   if (res.stop_reason === "refusal") return { overview: "", sources: [], unsettled: [] };
   const parsed = await asJson<Partial<ReadingOut>>(
     finalText(res.content as unknown as Block[]),
@@ -277,6 +305,12 @@ Finish with the JSON object and nothing after it: {"overview": string, "sources"
   );
 
   const taken = new Set([...existing, ...rejected].map((s) => normUrl(s.url)).filter(Boolean));
+  // One piece per publisher, checked here rather than trusted to the prompt:
+  // the first list for the writer's panel had two from the same society and
+  // two companion papers from one survey. Keyed on the outlet as named and on
+  // the site, except the big repositories, where one host carries papers
+  // from hundreds of unrelated journals.
+  const publishers = new Set(existing.flatMap((s) => publisherKeys(s.outlet || "", s.url)));
   const sources: FoundSource[] = [];
   for (const raw of Array.isArray(parsed?.sources) ? parsed!.sources : []) {
     const url = String(raw?.url || "").trim();
@@ -284,6 +318,9 @@ Finish with the JSON object and nothing after it: {"overview": string, "sources"
     // The whole point of the list is that you can open it. A link the search
     // never returned was written from memory and may not exist.
     if (!url || !links.has(key) || taken.has(key)) continue;
+    const keys = publisherKeys(String(raw.outlet || ""), url);
+    if (keys.some((k) => publishers.has(k))) continue;
+    keys.forEach((k) => publishers.add(k));
     taken.add(key);
     sources.push({
       title: String(raw.title || links.get(key) || "").trim() || url,

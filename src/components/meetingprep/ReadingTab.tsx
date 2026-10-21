@@ -87,7 +87,7 @@ export function ReadingTab({
         kolId: now.kol_id || "",
         frame,
         steer: r.steer || "",
-        existing: (r.sources || []).map((s) => ({ title: s.title, url: s.url })),
+        existing: (r.sources || []).map((s) => ({ title: s.title, url: s.url, outlet: s.outlet })),
         rejected: r.rejected || [],
         ...body,
       }),
