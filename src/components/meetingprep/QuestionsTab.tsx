@@ -35,6 +35,7 @@ import {
   Undo2,
   Wand2,
   X,
+  BookOpen,
 } from "lucide-react";
 import { AskMode } from "@/components/meetingprep/AskMode";
 import { ReviewPanel } from "@/components/meetingprep/ReviewPanel";
@@ -165,6 +166,16 @@ export function QuestionsTab({
   // Questions that went in without a probe. In practice these are the ones
   // the writer typed: everything the model writes comes with one.
   const missingProbes = useMemo(() => live.filter((q) => !q.followUp).length, [live]);
+
+  // Questions that have never been given a setup. "" means one was asked for
+  // and the question is better bare, so it is not missing. Your own list
+  // first, since those are the ones being said; the whole bank when nothing
+  // is picked yet.
+  const setupTargets = useMemo(() => {
+    const pool = picked.length ? picked : live;
+    return pool.filter((q) => q.setup === undefined).slice(0, 40);
+  }, [picked, live]);
+  const [settingUp, setSettingUp] = useState(false);
 
 
   // Categories in the order the model's strongest question in each appears,
@@ -411,6 +422,49 @@ export function QuestionsTab({
     );
   }
 
+  /**
+   * The background in front of questions already in the bank, in one call.
+   * Only the setup changes: the call has no way to hand back a question.
+   */
+  async function addSetups() {
+    const targets = setupTargets;
+    if (!targets.length) return;
+    setSettingUp(true);
+    try {
+      const res = await fetch("/api/meeting/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          action: "setups",
+          meeting: payloadOf(m),
+          kolId: m.kol_id || "",
+          research: withReading(researchStale ? "" : m.brief?.research?.notes || "", m),
+          questions: targets.map((q) => ({ text: q.text, category: q.category, why: q.why })),
+          standing: guidance,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "Could not write the background");
+      const setups: string[] = Array.isArray(json.setups) ? json.setups : [];
+      const byId = new Map(targets.map((q, i) => [q.id, String(setups[i] || "")]));
+      setItems(items.map((x) => (byId.has(x.id) ? { ...x, setup: byId.get(x.id) } : x)));
+      const n = [...byId.values()].filter(Boolean).length;
+      toast(
+        "success",
+        n
+          ? `Background added to ${n} question${n === 1 ? "" : "s"}${
+              n < targets.length ? `; ${targets.length - n} land better without one` : ""
+            }.`
+          : "None of these needed a setup.",
+      );
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setSettingUp(false);
+    }
+  }
+
   /** Move a picked question onto another's position. */
   function reorder(id: string, toIndex: number) {
     const list = [...picked];
@@ -553,6 +607,7 @@ export function QuestionsTab({
       const fresh: QuestionItem[] = (json.questions || []).map(
         (q: Omit<WrittenShape, "id">, i: number) => ({
           id: newId(),
+          setup: String(q.setup || ""),
           text: String(q.text || ""),
           why: String(q.why || ""),
           followUp: String(q.followUp || ""),
@@ -693,6 +748,20 @@ export function QuestionsTab({
         </Button>
         {/* Only while there is something to do, so it takes itself off the
             bar once every question has a probe. */}
+        {setupTargets.length > 0 && (
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={settingUp || busy}
+            onClick={() => void addSetups()}
+            title="Write the background you say before each question, from your reading. Your questions stay as they are."
+          >
+            <BookOpen size={14} className={settingUp ? "animate-pulse" : ""} />
+            {settingUp
+              ? "Writing the background…"
+              : `Add the background to ${setupTargets.length === 1 ? "1 question" : `${setupTargets.length} questions`}`}
+          </Button>
+        )}
         {missingProbes > 0 && (
           <Button
             size="sm"
@@ -916,7 +985,7 @@ export function QuestionsTab({
                           choice — the chip below says it is a backup, and
                           that is the whole job. Nothing in this list is
                           less readable than anything else in it. */}
-                      <p className="text-sm text-ink">{q.text}</p>
+                      <SpokenQuestion q={q} />
                       {/* Your list is one running order, not groups: the
                           order you ask them in is the whole point of it. But
                           which group a question came out of is worth knowing
@@ -1081,7 +1150,7 @@ export function QuestionsTab({
                         />
                       ) : (
                         <>
-                          <p className="text-sm text-ink">{q.text}</p>
+                          <SpokenQuestion q={q} />
                           <p className="mt-0.5 text-xs text-muted">
                             {q.why}
                             {q.forWhom ? ` · For: ${q.forWhom}` : ""}
@@ -1318,6 +1387,7 @@ export function QuestionsTab({
 
 interface WrittenShape {
   id: string;
+  setup?: string;
   text: string;
   category: string;
   why: string;
@@ -1459,6 +1529,20 @@ function ProbeLine({
         </button>
       )}
       {q.sourceNote && <SourceLine note={q.sourceNote} />}
+    </>
+  );
+}
+
+/**
+ * A question as it is said: the setup, then the question. The question is
+ * the darker line, because it is the part that must not be lost when reading
+ * at speed; the setup is the run-up to it.
+ */
+function SpokenQuestion({ q }: { q: QuestionItem }) {
+  return (
+    <>
+      {q.setup && <p className="mb-1 text-sm leading-relaxed text-ink/70">{q.setup}</p>}
+      <p className={`text-sm text-ink ${q.setup ? "font-medium" : ""}`}>{q.text}</p>
     </>
   );
 }
@@ -1893,6 +1977,13 @@ function QuestionEditor({
 }) {
   return (
     <div className="space-y-2.5 rounded-lg border border-[var(--accent)]/40 bg-canvas/50 p-2.5">
+      <Textarea
+        label="Setup, said before the question (optional)"
+        value={q.setup || ""}
+        onChange={(e) => onPatch({ setup: e.target.value })}
+        placeholder="The argument or finding the question stands on, in two to four sentences"
+        className="min-h-16"
+      />
       <Textarea
         label="The question"
         autoFocus

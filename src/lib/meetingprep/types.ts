@@ -269,6 +269,12 @@ export interface IdeaSuggestion {
 // regenerate adds to the list rather than replacing it.
 export interface QuestionItem {
   id: string;
+  /**
+   * Said before the question: two to four sentences laying out the argument,
+   * finding or tension it stands on, the way Ezra Klein sets a question up.
+   * Absent or "" when the question lands better bare.
+   */
+  setup?: string;
   text: string;
   category: string;
   /** At most a dozen words on what the question gets you. */

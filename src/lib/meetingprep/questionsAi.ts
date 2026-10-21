@@ -9,9 +9,11 @@
 
 import { anthropic, CHECK_MODEL, WRITER_MODEL } from "@/lib/anthropic";
 import { DOMAIN_RULE, SEAT_RULE, meetingContext, type MeetingPayload } from "./briefAi";
-import { allowedNames, namedSource } from "./spokenSources";
+import { allowedNames, housesIn, namedSource } from "./spokenSources";
 
 export interface WrittenQuestion {
+  /** Said before the question: the argument or finding it stands on. May be "". */
+  setup: string;
   text: string;
   category: string;
   why: string;
@@ -28,6 +30,7 @@ const QUESTIONS_SCHEMA = {
       items: {
         type: "object" as const,
         properties: {
+          setup: { type: "string" as const },
           text: { type: "string" as const },
           category: { type: "string" as const },
           why: { type: "string" as const },
@@ -35,7 +38,7 @@ const QUESTIONS_SCHEMA = {
           forWhom: { type: "string" as const },
           rank: { type: "number" as const },
         },
-        required: ["text", "category", "why", "followUp", "forWhom", "rank"],
+        required: ["setup", "text", "category", "why", "followUp", "forWhom", "rank"],
         additionalProperties: false,
       },
     },
@@ -50,6 +53,27 @@ const QUESTIONS_SCHEMA = {
 // and when the writer asked for that to stop, it could not, because that rule
 // was in the system prompt and their correction was not.
 const SPOKEN_SOURCING_RULE = `Where the material came from belongs in "why", never in the question itself. The writer is going to say this out loud, and "McKinsey says whoever masters the evidence wins, are you there?" is a line off a conference slide, not a question a person asks. Take the finding, drop the name, ask the thing underneath it. Put the source in "why" (e.g. "from the McKinsey 2025 line on evidence mastery") so the writer knows where it came from and can cite it themselves if they choose to. Never name a consultancy, report, survey, study or author in "text" unless the writer has explicitly asked for citations in the question.`;
+
+// How the writer wants to ask: the way Ezra Klein interviews. The bank used to
+// be one-breath questions with no preamble, which threw away the thing that
+// makes a question land in front of an audience: the room hearing what the
+// argument is before being asked where someone stands on it. The background
+// was sitting on the Reading tab and none of it reached the question.
+export const SETUP_RULE = `The writer asks questions the way Ezra Klein does in an interview. Before the question, a setup: two to four spoken sentences that put the substance on the table, so the person answering and the room both know exactly what is being asked about. Then the question itself, short and open.
+
+What a good setup does, in his manner:
+- Lays out the argument, the finding or the tension in plain words, specifically enough that someone new to the subject could follow it: what the long-running disagreement actually is, what the numbers say, where the gap between what people say and what they do sits.
+- Often states the strongest version of one side, or both sides, before asking which way the guest leans or what each side is missing. "One view is X, and it is a serious view because Y. The other is Z." Then: "Where do you come down?" or "What does the first camp get wrong?"
+- Ties it to the person answering where that is possible: their seat, their work, what someone in their role would have seen.
+- Uses a concrete figure or example in place of an abstraction. "Nine in ten organisations still measure field teams by how many meetings they log" rather than "metrics remain activity-based".
+- Sounds like a curious, prepared person thinking out loud, not a briefing read off a slide. First person is fine: "I keep coming back to", "Here is what I find hard about this".
+- Ends by handing over to the question; the question is the last thing said, and it is short.
+
+What it never does:
+- Never answers its own question, or tells the guest what they think.
+- Never more than four sentences. Someone has to say it out loud without losing the room.
+- Never names a consultancy, analyst house, report, survey, study or author. The same rule as the question: the finding, not the brand. "One large global survey of MSLs found" is fine; a company's name is not.
+- Never a setup for its own sake. An opener, a quick follow-up, a question whose substance is already in the question, or one that lands harder bare gets setup "". Klein does not preface every question, and a bank where every question has a paragraph in front of it is one nobody can get through.`;
 
 /**
  * The block carrying the writer's own instructions. It goes in the SYSTEM
@@ -92,11 +116,12 @@ const REPAIR_SCHEMA = {
         type: "object" as const,
         properties: {
           index: { type: "number" as const },
+          setup: { type: "string" as const },
           text: { type: "string" as const },
           why: { type: "string" as const },
           followUp: { type: "string" as const },
         },
-        required: ["index", "text", "why", "followUp"],
+        required: ["index", "setup", "text", "why", "followUp"],
         additionalProperties: false,
       },
     },
@@ -121,11 +146,12 @@ async function scrubNamedSources(
   questions: WrittenQuestion[],
   allow: string[],
   guidance: string,
+  houses: string[] = [],
 ): Promise<WrittenQuestion[]> {
   let out = [...questions];
   for (let round = 0; round < 2; round++) {
     const bad = out
-      .map((q, index) => ({ index, q, hit: namedSource(q.text, allow) }))
+      .map((q, index) => ({ index, q, hit: namedSource(`${q.setup} ${q.text}`, allow, houses) }))
       .filter((r) => r.hit);
     if (!bad.length) {
       if (round) console.warn(`[questions] name-drop repair fixed all ${round} round(s)`);
@@ -147,14 +173,16 @@ The rule: the question is said OUT LOUD, so the name of a consultancy, analyst h
 
 Each question below is quoted with the exact phrase that broke the rule. Rewrite that question so it does the same job in the conversation, just as strong and just as specific, with no source named. Do not make it vaguer to get around the rule: if the only thing the question had going for it was the citation, write a different question about the same thing. Keep it short enough to say in one breath.
 ${guidance ? `\nThe writer also said this about how their questions must be written, and it still applies:\n${guidance}\n` : ""}
-Return "index" exactly as given, the new "text", a "why" of at most 15 words that may name the source, and a "followUp" probe written word for word. Plain prose, no markdown, never an em dash or en dash.`,
+Some questions come with a "setup", the spoken lead-in said before the question. It is said out loud too, so the same rule applies to it: keep its substance, take the name out ("one large global survey found"). Return it rewritten the same way, or "" if it had none.
+
+Return "index" exactly as given, the new "setup", the new "text", a "why" of at most 15 words that may name the source, and a "followUp" probe written word for word. Plain prose, no markdown, never an em dash or en dash.`,
       messages: [
         {
           role: "user",
           content: bad
             .map(
               (r) =>
-                `index ${r.index}\nbroke the rule with: ${r.hit}\nquestion: ${r.q.text}\nwhy it was picked: ${r.q.why}\nits probe: ${r.q.followUp}`,
+                `index ${r.index}\nbroke the rule with: ${r.hit}\nsetup: ${r.q.setup || "(none)"}\nquestion: ${r.q.text}\nwhy it was picked: ${r.q.why}\nits probe: ${r.q.followUp}`,
             )
             .join("\n\n"),
         },
@@ -162,12 +190,13 @@ Return "index" exactly as given, the new "text", a "why" of at most 15 words tha
     });
     if (res.stop_reason === "refusal") break;
     const parsed = JSON.parse(firstText(res) || "{}");
-    const byIndex = new Map<number, { text: string; why: string; followUp: string }>();
+    const byIndex = new Map<number, { setup: string; text: string; why: string; followUp: string }>();
     for (const f of Array.isArray(parsed.fixes) ? parsed.fixes : []) {
       const i = Number(f?.index);
       const text = String(f?.text || "").trim();
       if (!Number.isInteger(i) || !text) continue;
       byIndex.set(i, {
+        setup: String(f?.setup || "").trim(),
         text,
         why: String(f?.why || "").trim(),
         followUp: String(f?.followUp || "").trim(),
@@ -179,23 +208,32 @@ Return "index" exactly as given, the new "text", a "why" of at most 15 words tha
       // Only take the replacement if it actually passes. A fix that names a
       // different source is not a fix.
       if (!fix) return q;
-      const still = namedSource(fix.text, allow);
+      const still = namedSource(`${fix.setup} ${fix.text}`, allow, houses);
       if (still) {
         console.warn(`[questions] the repair named "${still}" as well, keeping the original`);
         return q;
       }
-      return { ...q, text: fix.text, why: fix.why || q.why, followUp: fix.followUp || q.followUp };
+      return {
+        ...q,
+        setup: fix.setup,
+        text: fix.text,
+        why: fix.why || q.why,
+        followUp: fix.followUp || q.followUp,
+      };
     });
   }
   // Last resort, and the only one that cannot fail.
-  const dropped = out.filter((q) => namedSource(q.text, allow));
+  // A setup that will not come clean goes, and the question stays: the
+  // question was never the problem.
+  out = out.map((q) => (q.setup && namedSource(q.setup, allow, houses) && !namedSource(q.text, allow, houses) ? { ...q, setup: "" } : q));
+  const dropped = out.filter((q) => namedSource(q.text, allow, houses));
   if (dropped.length)
     console.warn(
       `[questions] dropped ${dropped.length} question(s) that would not come clean: ${dropped
         .map((q) => q.text.slice(0, 60))
         .join(" | ")}`,
     );
-  return out.filter((q) => !namedSource(q.text, allow));
+  return out.filter((q) => !namedSource(q.text, allow, houses));
 }
 
 function firstText(res: { content: { type: string; text?: string }[] }): string {
@@ -314,12 +352,13 @@ Plain prose. No markdown, no quotation marks around the question. Never an em da
 
   const parsed = JSON.parse(firstText(res) || "{}");
   const allow = allowedNames(meeting.attendees);
+  const houses = housesIn(research);
   const out: QuestionVariant[] = [];
   for (const v of Array.isArray(parsed.variants) ? parsed.variants : []) {
     const text = String(v?.text || "").trim();
     // The same guard every question goes through. An alternative that names a
     // source is not an alternative.
-    if (!text || namedSource(text, allow)) continue;
+    if (!text || namedSource(text, allow, houses)) continue;
     out.push({
       angle: String(v?.angle || "").trim() || "Another way",
       text,
@@ -406,13 +445,14 @@ Plain prose. No markdown, no quotation marks around the question. Never an em da
   }:\n${question.text}`;
 
   const allow = allowedNames(meeting.attendees);
+  const houses = housesIn(research);
   let out: FilledQuestion = { followUp: "", why: "", forWhom: "", sourceNote: "" };
 
   // Asking is not enough, so the probe is checked. It is said out loud, which
   // makes a named source in it the exact thing the writer has twice asked not
   // to be given; the offending phrase goes back quoted, once.
   for (let attempt = 0; attempt < 2; attempt++) {
-    const dirty = attempt ? namedSource(out.followUp, allow) : null;
+    const dirty = attempt ? namedSource(out.followUp, allow, houses) : null;
     const res = await anthropic().messages.create({
       model: WRITER_MODEL,
       max_tokens: 1200,
@@ -437,12 +477,12 @@ Plain prose. No markdown, no quotation marks around the question. Never an em da
       // its own memory, which is the one place a source may not come from.
       sourceNote: research.trim() ? String(parsed?.sourceNote || "").trim() : "",
     };
-    if (!namedSource(out.followUp, allow)) return out;
+    if (!namedSource(out.followUp, allow, houses)) return out;
   }
 
   // Asked twice and still naming someone. They get no probe rather than that
   // probe; the source still reaches them in sourceNote, where it belongs.
-  if (namedSource(out.followUp, allow)) {
+  if (namedSource(out.followUp, allow, houses)) {
     console.warn(`[questions] probe would not come clean, dropped it: ${out.followUp.slice(0, 60)}`);
     out = { ...out, followUp: "" };
   }
@@ -500,13 +540,16 @@ ${DOMAIN_RULE}
 
 ${SPOKEN_SOURCING_RULE}
 
+${SETUP_RULE}
+
 Every question:
-- is written word for word, exactly as it would be said out loud, short enough to say in one breath and to read off a card at a glance. No preamble, no stage directions, no "you might ask".
+- is written word for word, exactly as it would be said out loud. The question itself is short enough to say in one breath and to read off a card at a glance; the background it needs goes in "setup", never crammed into the question. No stage directions, no "you might ask".
 - serves the session's stated subject. Not the industry around it, not the meeting's title, that subject.
 - is one only someone who knows this subject could ask. A question that hands the meeting's own title back ("what does the future of X look like?") or that could be asked at any meeting in any industry ("what are your biggest challenges?") is filler. Name the specific change, number, trade-off or disagreement underneath it.
 - opens something up. Never a yes/no unless the yes/no is the point and the follow-up does the work.
 
 Fields:
+- setup: the spoken lead-in before the question, per the rules above, drawn from the research, the reading list and what you know of the subject. "" where the question does not need one. Most questions on the substance and the harder ground should have one; openers and quick ones usually should not.
 - text: the question itself.
 - category: which part of the conversation it belongs to. Name it the way you would say it to a colleague: plain, literal, two to four words, describing what the questions in it are about or when they get asked. "Opening questions", "How it works in practice", "The uncomfortable ones", "Measuring it", "To close on". Never a colon, never a label with a clever subtitle after it, never a word nobody would say out loud. When categories are given below, use those exact names; only invent a new one for a question that genuinely belongs nowhere in them, and never a near-synonym of one that exists. Otherwise invent 4 to 6 that fit this meeting's arc (one to open with, two or three on the substance, one on the harder ground, one to close with). Use identical wording for every question in a category.
 - why: at most 15 words on what it gets you — the reason to pick this one, plus where the material came from when it came from the research. Not a restatement of the question.
@@ -546,6 +589,7 @@ ${instructionBlock(guidance.trim(), coverage.trim(), focus.trim())}`,
     if (!text || seen.has(text.toLowerCase())) continue;
     seen.add(text.toLowerCase());
     out.push({
+      setup: String(q?.setup || "").trim(),
       text,
       category: String(q?.category || "").trim() || "Questions",
       why: String(q?.why || "").trim(),
@@ -558,6 +602,101 @@ ${instructionBlock(guidance.trim(), coverage.trim(), focus.trim())}`,
     out,
     allowedNames(meeting.attendees),
     guidance.trim(),
+    housesIn(research),
   );
   return clean.sort((a, b) => a.rank - b.rank);
+}
+
+const SETUPS_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    setups: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: {
+          index: { type: "number" as const },
+          setup: { type: "string" as const },
+        },
+        required: ["index", "setup"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["setups"],
+  additionalProperties: false,
+};
+
+/**
+ * The background for questions the writer already has, without touching
+ * them. Their bank was written before setups existed, and it is the bank they
+ * have curated: rewriting it to get the background in would cost them the
+ * wording they chose. This adds the lead-in and nothing else; there is no
+ * field to put a new question in.
+ *
+ * Returns one setup per question, in order; "" where it needs none.
+ */
+export async function writeSetups({
+  meeting,
+  kolBlock = "",
+  research = "",
+  questions,
+  standing = "",
+}: {
+  meeting: MeetingPayload;
+  kolBlock?: string;
+  research?: string;
+  questions: { text: string; category?: string; why?: string }[];
+  standing?: string;
+}): Promise<string[]> {
+  if (!questions.length) return [];
+  const res = await anthropic().messages.create({
+    model: WRITER_MODEL,
+    max_tokens: 8000,
+    output_config: { format: { type: "json_schema", schema: SETUPS_SCHEMA } },
+    system: `You are writing the spoken lead-in for questions the writer already has. The questions are theirs and are not yours to change: there is no field here for a new question. You only write what they say before each one.
+
+${SEAT_RULE}
+
+${SETUP_RULE}
+
+Write each setup so it leads straight into that exact question as worded, and so that the setups across the list do not repeat each other: if two questions stand on the same argument, lay it out properly before the first one and refer back to it briefly ("Coming back to that gap between...") before the second.
+
+Draw the substance from the research and reading list below first; where they say nothing on a question, use what you know of the subject, but never invent a figure. A number in a setup must come from the material below.
+${standing.trim() ? `\nThe writer's standing instruction on how their questions are written. It applies to the setups too and outranks every rule above:\n${standing.trim()}\n` : ""}
+Return one entry per question, with "index" exactly as given. Plain prose, no markdown, no quotation marks. Never an em dash or en dash.`,
+    messages: [
+      {
+        role: "user",
+        content: `${meetingContext(meeting, kolBlock) || "(minimal context)"}${
+          research.trim()
+            ? `\n\nThe research and reading list this meeting was prepared from:\n${research.slice(0, 24000)}`
+            : ""
+        }\n\nThe questions, in the order they will be asked:\n${questions
+          .map(
+            (q, i) =>
+              `index ${i}${q.category ? ` (${q.category})` : ""}: ${q.text}${q.why ? `\n  what it is for: ${q.why}` : ""}`,
+          )
+          .join("\n")}`,
+      },
+    ],
+  });
+  if (res.stop_reason === "refusal") return questions.map(() => "");
+  const parsed = JSON.parse(firstText(res) || "{}");
+  const allow = allowedNames(meeting.attendees);
+  const houses = housesIn(research);
+  const out = questions.map(() => "");
+  for (const r of Array.isArray(parsed.setups) ? parsed.setups : []) {
+    const i = Number(r?.index);
+    const setup = String(r?.setup || "").trim();
+    if (!Number.isInteger(i) || i < 0 || i >= out.length || !setup) continue;
+    // Said out loud, so the same check every question passes. A setup that
+    // names a source is left off rather than said.
+    if (namedSource(setup, allow, houses)) {
+      console.warn(`[setups] named a source, left it off: ${setup.slice(0, 60)}`);
+      continue;
+    }
+    out[i] = setup;
+  }
+  return out;
 }

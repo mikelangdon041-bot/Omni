@@ -1,6 +1,7 @@
 // The reading list, as the rest of Meeting Prep sees it.
 
 import { setupFingerprint, type MpMeeting, type ReadingSource } from "./types";
+import { housesLine, sourceNames } from "./spokenSources";
 
 /**
  * The research a question is written from, with the reading list added.
@@ -12,16 +13,32 @@ import { setupFingerprint, type MpMeeting, type ReadingSource } from "./types";
  */
 export function withReading(research: string, m: MpMeeting): string {
   const r = m.reading;
-  if (!r?.sources?.length || r.fingerprint !== setupFingerprint(m)) return research;
-  const found = r.sources.filter((s) => s.kind === "found");
-  if (!found.length) return research;
+  if (!r?.at || r.fingerprint !== setupFingerprint(m)) return research;
+  const found = (r.sources || []).filter((s) => s.kind === "found");
   const list = found
     .map(
       (s) =>
         `- ${s.title} (${[s.outlet, s.date].filter(Boolean).join(", ")}): ${s.findings.join("; ")}`,
     )
     .join("\n");
-  return `${research}\n\nOn the writer's reading list (cite these by outlet and year where they back a question):\n${list}`.trim();
+  // The overview and the open arguments are the background a question is
+  // set up with, so they travel with the sources rather than staying on the
+  // Reading tab.
+  const unsettled = (r.unsettled || [])
+    .map((u) => `- ${u.point}\n${u.sides.map((x) => `    ${x.position} (${x.who})`).join("\n")}`)
+    .join("\n");
+  return [
+    research,
+    r.overview && `The subject in brief, from the writer's reading:\n${r.overview}`,
+    unsettled && `What is unsettled about it:\n${unsettled}`,
+    list && `On the writer's reading list (cite these by outlet and year where they back a question):\n${list}`,
+    // Read back by the name check on everything said aloud, as well as by
+    // the model: see housesIn.
+    housesLine(sourceNames((r.sources || []).map((s) => s.outlet))),
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
 }
 
 const GENERIC = new Set(["the", "and", "of", "for", "in", "on", "a", "an", "journal", "report", "review", "news", "inc", "llc"]);

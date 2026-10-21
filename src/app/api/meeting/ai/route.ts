@@ -21,7 +21,12 @@ import {
   type MeetingPayload,
 } from "@/lib/meetingprep/briefAi";
 import { MEETING_TYPES } from "@/lib/meetingprep/types";
-import { fillOutQuestion, writeQuestions, writeVariants } from "@/lib/meetingprep/questionsAi";
+import {
+  fillOutQuestion,
+  writeQuestions,
+  writeSetups,
+  writeVariants,
+} from "@/lib/meetingprep/questionsAi";
 import { reviewPrep } from "@/lib/meetingprep/reviewAi";
 import { buildReading, digestMaterial, lookupPerson } from "@/lib/meetingprep/readingAi";
 
@@ -59,6 +64,8 @@ export const maxDuration = 300;
 //              rejected:[], more?, count? }   → { overview, sources:[], unsettled:[] }
 //   material { meeting, doc:{name,text,purpose,note,url?} }
 //                                              → { title, summary, findings:[], people:[], session }
+//   setups   { meeting, kolId?, research?, questions:[{text,category,why}], standing? }
+//                                              → { setups:[string] } (one per question, "" = none)
 //   person   { person:{name,role,org,notes}, subject }
 //                                              → { text, sources:[{title,url}] }
 
@@ -344,7 +351,9 @@ export async function POST(req: Request) {
         categories: Array.isArray(body?.categories)
           ? body.categories.map(String).slice(0, 20)
           : [],
-        count: Math.min(30, Math.max(6, Number(body?.count) || 20)),
+        // Down to three for a batch built on one source; the bank itself
+        // still asks for twenty.
+        count: Math.min(30, Math.max(3, Number(body?.count) || 20)),
         focus: String(body?.focus || "").slice(0, 500),
         guidance: String(body?.guidance || "").slice(0, 2000),
         coverage: String(body?.coverage || "").slice(0, 2000),
@@ -400,6 +409,26 @@ export async function POST(req: Request) {
     // in without, and backing from the research already on this meeting when
     // that research has any. Their question is not sent back and cannot
     // change — there is no field here to change it with.
+    // The spoken background for questions already in the bank. Adds the
+    // lead-in only; the questions come back exactly as they went in.
+    if (action === "setups") {
+      const meeting: MeetingPayload = body?.meeting || {};
+      const kolBlock = await kolBlockFor(supabase, String(body?.kolId || ""));
+      const qs = (Array.isArray(body?.questions) ? body.questions : []).slice(0, 60);
+      const setups = await writeSetups({
+        meeting,
+        kolBlock,
+        research: String(body?.research || "").slice(0, 24000),
+        questions: qs.map((q: { text?: unknown; category?: unknown; why?: unknown }) => ({
+          text: String(q?.text || "").slice(0, 1000),
+          category: String(q?.category || "").slice(0, 120),
+          why: String(q?.why || "").slice(0, 300),
+        })),
+        standing: String(body?.standing || "").slice(0, 2000),
+      });
+      return NextResponse.json({ setups });
+    }
+
     if (action === "probe") {
       const meeting: MeetingPayload = body?.meeting || {};
       const kolBlock = await kolBlockFor(supabase, String(body?.kolId || ""));

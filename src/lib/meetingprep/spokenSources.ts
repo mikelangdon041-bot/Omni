@@ -87,7 +87,15 @@ const NOT_A_NAME = new Set(
 
 // "X says", "X found", "X puts it" — an attribution dressed as a clause.
 const ATTRIBUTIVE =
-  /\b([A-Z][A-Za-z&.'’-]{1,}(?:\s+(?:&\s+)?[A-Z][A-Za-z&.'’-]{1,}){0,2})\s+(?:says|said|argues|argued|claims|claimed|reports|reported|reckons|finds|found|estimates|estimated|predicts|predicted|notes|noted|writes|wrote|calls|puts|talks about|talk about|describes|described|frames|framed|publishes|published|points out|pointed out|has a|have a)\b/g;
+  /\b([A-Z][A-Za-z&.'’-]{1,}(?:\s+(?:&\s+)?[A-Z][A-Za-z&.'’-]{1,}){0,2})\s+(?:says|said|argues|argued|claims|claimed|reports|reported|reckons|finds|found|estimates|estimated|predicts|predicted|notes|noted|writes|wrote|calls|puts|talks about|talk about|describes|described|frames|framed|publishes|published|points out|pointed out|has a|have a|makes the point|made the point|makes the case|made the case|warns|warned|shows|showed|suggests|suggested|concludes|concluded)\b/g;
+
+// "The Umbrex playbook", "the Acme framework": a house nobody listed, named
+// by the document it wrote. Got through in a spoken setup, because the firm
+// was on no list and nothing after its name was a verb of saying. A
+// capitalised name in front of the word for a piece of work is the name-drop,
+// whoever the house is.
+const NAMED_WORK =
+  /\b(?:[Tt]he|[Aa]n?|[Tt]heir|[Ii]ts)\s+(?:[a-z]+\s+){0,2}((?:[A-Z][A-Za-z&.'’-]+\s+){1,3})(?:playbook|report|framework|survey|study|paper|whitepaper|white paper|benchmark|index|analysis|model|toolkit)\b/g;
 
 // The flat-out citations.
 const CITATIONS: RegExp[] = [
@@ -106,13 +114,26 @@ const CITATIONS: RegExp[] = [
  * their organisations. Asking the person in front of you about their own
  * company's position is not a name-drop.
  */
-export function namedSource(text: string, allow: string[] = []): string | null {
+export function namedSource(text: string, allow: string[] = [], houses: string[] = []): string | null {
   const line = String(text || "");
   if (!line.trim()) return null;
   const lower = line.toLowerCase();
   const allowed = allow
     .map((a) => a.trim().toLowerCase())
     .filter((a) => a.length > 2);
+
+  // The publishers on this meeting's own reading list. Whoever they are, the
+  // writer is not going to say their name, and a list of famous houses can
+  // never know them all: "The Umbrex work makes the point" got past every
+  // pattern below, with Umbrex sitting on the reading list the whole time.
+  for (const h of houses) {
+    if (allowed.some((a) => a.includes(h.toLowerCase()) || h.toLowerCase().includes(a))) continue;
+    const esc = h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // Matched with its capitals, as a name is written: "MAPS" is caught and
+    // "maps onto" is not, and the outlet "Medical Affairs Specialist" does
+    // not eat a question that mentions a medical affairs specialist.
+    if (new RegExp(`\\b${esc}\\b`).test(line)) return h;
+  }
 
   for (const house of NAMED_HOUSES) {
     if (!lower.includes(house)) continue;
@@ -130,6 +151,14 @@ export function namedSource(text: string, allow: string[] = []): string | null {
     if (hit && !allowed.some((a) => hit[0].toLowerCase().includes(a))) return hit[0].trim();
   }
 
+  for (const hit of line.matchAll(NAMED_WORK)) {
+    const who = hit[1].trim();
+    const parts = who.toLowerCase().split(/\s+/);
+    if (parts.every((w) => NOT_A_NAME.has(w.replace(/[^a-z&.'’-]/g, "")))) continue;
+    if (allowed.some((a) => a.includes(parts[0]) || who.toLowerCase().includes(a))) continue;
+    return hit[0].trim();
+  }
+
   for (const hit of line.matchAll(ATTRIBUTIVE)) {
     const who = hit[1].trim();
     const parts = who.toLowerCase().split(/\s+/);
@@ -140,6 +169,45 @@ export function namedSource(text: string, allow: string[] = []): string | null {
   }
 
   return null;
+}
+
+/**
+ * The names to listen for, out of a reading list's outlets.
+ * "Medical Affairs Professional Society (MAPS)" gives both the name and the
+ * initials; "PMC (companion paper, same 2025 survey)" gives "PMC" and drops
+ * the description, which nobody would mistake for a name.
+ */
+export function sourceNames(outlets: string[]): string[] {
+  const out = new Set<string>();
+  for (const o of outlets) {
+    for (const raw of String(o || "").split(/[(),;/·]|\s+via\s+|\s+and\s+/)) {
+      const p = raw.trim().replace(/\.$/, "");
+      // A name starts with a capital and is more than a word fragment.
+      if (!/^[A-Z]/.test(p)) continue;
+      if (/^[A-Z0-9&]+$/.test(p) ? p.length < 3 : p.length < 4) continue;
+      out.add(p);
+    }
+  }
+  return [...out];
+}
+
+const HOUSES_LINE = "Never name these aloud, in a setup, question or probe: ";
+
+/** The line that carries the reading list's names to the question writer. */
+export function housesLine(names: string[]): string {
+  return names.length ? `${HOUSES_LINE}${names.join("; ")}` : "";
+}
+
+/** The names out of that line, wherever the research it is in has gone. */
+export function housesIn(research: string): string[] {
+  const i = research.lastIndexOf(HOUSES_LINE);
+  if (i < 0) return [];
+  return research
+    .slice(i + HOUSES_LINE.length)
+    .split("\n")[0]
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 /** Names from the room, which are never a name-drop. */

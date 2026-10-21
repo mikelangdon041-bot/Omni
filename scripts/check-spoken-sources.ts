@@ -11,7 +11,7 @@
 //
 //   npx -y tsx scripts/check-spoken-sources.ts
 
-import { allowedNames, namedSource } from "@/lib/meetingprep/spokenSources";
+import { allowedNames, namedSource, sourceNames } from "@/lib/meetingprep/spokenSources";
 
 // Real offenders. The first two came out of the writer's own bank, written
 // AFTER the prompt was fixed and their instruction was moved above it.
@@ -28,6 +28,11 @@ const MUST_CATCH = [
   // and the question used its initials.
   "ZS talks about a decision flywheel. Where is your line between mining insight and carrying it outward?",
   "BCG frames this as a last mile problem. Is it?",
+  // Spoken setups from a house that is on no list, named by its document or
+  // by a verb the first version did not know.
+  "The Umbrex playbook makes the point bluntly: counting advisory boards, none of it matters unless it moves trust. So let's force the prioritization.",
+  "Umbrex makes the point bluntly that counting visits means nothing.",
+  "There's a new Acme Insights framework doing the rounds that says belief shift is the outcome.",
 ];
 
 // Questions that must get through untouched.
@@ -46,6 +51,14 @@ const MUST_PASS = [
   "They survey the key accounts every quarter. What does that actually tell you?",
   "Is the real bottleneck money, people, or the authority to decide?",
   "The AstraZeneca Spain real world evidence work served patients and the company at once. Can one programme honestly do both?",
+  // Setups that carry a finding without a name, the way they are meant to.
+  "Here's what I keep running into with the word value. In one global survey of medical affairs professionals, value and impact weren't even the same thing to people.",
+  "In a 2023 report, field medical leaders said activity metrics were their main measured KPI, and yet they rated them only 6% important.",
+  "People have tried the Delphi method, rounds of expert consensus, to agree on what MSL metrics should even be.",
+  "The 2030 vision for this function is about moving from executing to actually shaping strategy.",
+  "A lot of the proposed answer to the measurement problem is a more mature framework, activity plus quality plus outcomes.",
+  "The data shows something odd: the internal work is rated above the external work.",
+  "One finding that complicates this whole panel is that respondents rate internal communication higher.",
 ];
 
 // A name from the room is not a name-drop: asking someone about their own
@@ -78,6 +91,21 @@ function main() {
     const hit = namedSource(line, ROOM);
     if (hit) problems.push(`FLAGGED SOMEONE IN THE ROOM ("${hit}"): ${line.slice(0, 60)}`);
     else console.log(`in the room   ${line.slice(0, 62)}…`);
+  }
+
+  // The reading list's own publishers, whoever they are. Umbrex is on no
+  // list of famous houses and got through a setup in the wrong word order.
+  const houses = sourceNames(["Umbrex", "Medical Affairs Professional Society (MAPS)", "Medical Affairs Specialist", "PMC (companion paper, same 2025 MSL Society survey)"]);
+  for (const [line, should] of [
+    ["The Umbrex work makes the point bluntly that counting is not enough.", true],
+    ["What MAPS calls the impact model, does it survive a budget meeting?", true],
+    ["Medical affairs maps onto commercial priorities more than anyone admits. Does it?", false],
+    ["As a medical affairs specialist, what would you cut first?", false],
+  ] as const) {
+    const hit = namedSource(line, [], houses);
+    if (Boolean(hit) !== should)
+      problems.push(`${should ? "MISSED reading-list name" : `FALSE POSITIVE on "${hit}"`}: ${line.slice(0, 60)}`);
+    else console.log(`${should ? `caught  [${hit}]` : "passed       "}  ${line.slice(0, 62)}…`);
   }
 
   // The allow list must not be a blanket amnesty: a vendor in the room does

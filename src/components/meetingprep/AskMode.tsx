@@ -156,8 +156,15 @@ export function AskMode({
               )}
             </div>
 
+            {/* Said first, so it reads first, a size down: the question is
+                the line that has to survive a glance. */}
+            {cur.setup && (
+              <p className={`mt-5 text-lg leading-relaxed text-ink/75 sm:text-xl ${cur.asked ? "opacity-40" : ""}`}>
+                {cur.setup}
+              </p>
+            )}
             <p
-              className={`mt-5 text-balance text-2xl font-semibold leading-tight tracking-tight text-ink sm:text-[2rem] ${
+              className={`${cur.setup ? "mt-3" : "mt-5"} text-balance text-2xl font-semibold leading-tight tracking-tight text-ink sm:text-[2rem] ${
                 cur.asked ? "opacity-40" : ""
               }`}
             >
@@ -309,6 +316,9 @@ function AskRow({
         {q.asked ? <Check size={15} /> : (n ?? <Star size={13} className="fill-current" />)}
       </button>
       <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
+        {q.setup && !q.asked && (
+          <span className="mb-0.5 block text-sm leading-snug text-muted">{q.setup}</span>
+        )}
         <span
           className={`block text-base leading-snug sm:text-lg ${
             q.asked ? "text-muted line-through" : "font-medium text-ink"

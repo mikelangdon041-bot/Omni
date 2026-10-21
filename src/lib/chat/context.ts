@@ -78,7 +78,7 @@ export function meetingContext(m: MpMeeting): string {
     .sort((a, b) => a.order - b.order)
     .map(
       (q, i) =>
-        `  ${i + 1}. ${q.text}${q.backup ? " [held as a backup]" : ""}${
+        `  ${i + 1}. ${q.setup ? `[setup: ${q.setup}] ` : ""}${q.text}${q.backup ? " [held as a backup]" : ""}${
           q.forWhom ? ` [for ${q.forWhom}]` : ""
         }${q.followUp ? `\n     probe: ${q.followUp}` : ""}`,
     );

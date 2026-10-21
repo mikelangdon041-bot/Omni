@@ -23,6 +23,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { SourceQuestions } from "./SourceQuestions";
 import { Input } from "@/components/ui/Input";
 import { useToast } from "@/components/ui/Feedback";
 import {
@@ -295,6 +296,8 @@ export function ReadingTab({
           title="Read before you go"
           items={must}
           busy={busy}
+          getMeeting={getMeeting}
+          save={save}
           onReject={reject}
           onRemove={(s) => (s.docId ? removeMaterial(s.docId, getMeeting, save) : reject(s, "", false))}
         />
@@ -304,6 +307,8 @@ export function ReadingTab({
           title="Worth a skim"
           items={skim}
           busy={busy}
+          getMeeting={getMeeting}
+          save={save}
           onReject={reject}
           onRemove={(s) => reject(s, "", false)}
         />
@@ -369,12 +374,16 @@ function SourceGroup({
   title,
   items,
   busy,
+  getMeeting,
+  save,
   onReject,
   onRemove,
 }: {
   title: string;
   items: ReadingSource[];
   busy: string;
+  getMeeting: GetMeeting;
+  save: SaveMeeting;
   onReject: (s: ReadingSource, reason: string, replace: boolean) => void;
   onRemove: (s: ReadingSource) => void;
 }) {
@@ -383,7 +392,15 @@ function SourceGroup({
       <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">{title}</h2>
       <ul className="space-y-3">
         {items.map((s) => (
-          <SourceCard key={s.id} s={s} busy={busy} onReject={onReject} onRemove={onRemove} />
+          <SourceCard
+            key={s.id}
+            s={s}
+            busy={busy}
+            getMeeting={getMeeting}
+            save={save}
+            onReject={onReject}
+            onRemove={onRemove}
+          />
         ))}
       </ul>
     </section>
@@ -393,11 +410,15 @@ function SourceGroup({
 function SourceCard({
   s,
   busy,
+  getMeeting,
+  save,
   onReject,
   onRemove,
 }: {
   s: ReadingSource;
   busy: string;
+  getMeeting: GetMeeting;
+  save: SaveMeeting;
   onReject: (s: ReadingSource, reason: string, replace: boolean) => void;
   onRemove: (s: ReadingSource) => void;
 }) {
@@ -464,6 +485,7 @@ function SourceCard({
         </div>
       )}
       {s.why && <p className="mt-2 text-xs italic text-muted">Why read it: {s.why}</p>}
+      <SourceQuestions s={s} getMeeting={getMeeting} save={save} />
 
       {busy === s.id && (
         <p className="mt-2 flex items-center gap-1.5 text-xs text-muted">
