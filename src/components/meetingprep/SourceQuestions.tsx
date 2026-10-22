@@ -474,15 +474,19 @@ Write questions specifically on that, each with a setup. How many is set by the 
     if (!m) return;
     const items = m.questions?.items || [];
     const item = toItem(d, items, old);
-    // Binned, not gone: the bin on the Questions tab can bring it back.
+    // To the bank, not the bin. Swapping a question out of the list is a
+    // choice about what to ask, not a verdict that the old one is rubbish,
+    // and the bin put it out of sight.
     const next = items.flatMap((q) =>
-      q.id === old.id ? [{ ...q, deleted: true, picked: false }, item] : [q],
+      q.id === old.id ? [{ ...q, picked: false, backup: false }, item] : [q],
     );
     save({ questions: { ...(m.questions || {}), items: next } });
     mark(d.id, "replaced");
     toast(
       "success",
-      "Swapped in. The old one is in the bin on the Questions tab.",
+      old.picked
+        ? "Swapped into your list. Yours moved to the bank."
+        : "Added to the bank. Yours is still there too.",
     );
   }
 
