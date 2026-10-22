@@ -219,6 +219,12 @@ export interface SourceDraft {
   /** A question already in the bank that asks the same thing, by id. */
   similarTo?: string;
   /**
+   * From the most recent request, and what it was asked for. Marked so new
+   * ones can be told from old at a glance; cleared on the next request.
+   */
+  isNew?: boolean;
+  askedFor?: string;
+  /**
    * What the writer did with it: put it in the bank or their list, used it
    * in place of the similar one, or kept theirs instead.
    */

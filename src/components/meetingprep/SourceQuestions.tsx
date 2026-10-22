@@ -96,14 +96,22 @@ export function SourceQuestions({
     const base =
       "Every question here is built on the one source marked THE SOURCE THIS BATCH IS BUILT ON: what it found, what it argues, and what it leaves open. Each one gets a setup that lays out the relevant finding or argument from it in plain words, without naming it, then asks what that means for the people answering.";
     const said = note ? `\nThe writer says, and this outranks everything above: ${note}` : "";
+    const avoid = seen.length
+      ? ` The writer has already seen these and wants different ones, so do not repeat them: ${seen.map((d) => d.text).join(" | ")}`
+      : "";
+    // A specific request is the brief, not a footnote to it. Asked for
+    // "publications", the batch used to stay on whatever the source covered,
+    // because "built on the one source" came first and won.
+    if (ask.kind === "batch" && note)
+      return {
+        count: 3,
+        focus: `THE WRITER ASKED FOR THIS, and it decides what every question is about: ${note}
+Write two or three questions specifically on that, no more, each with a setup. Draw on the source marked THE SOURCE THIS BATCH IS BUILT ON wherever it bears on the request; where it does not, use the rest of the reading list and what you know of the field, and keep the request. Never invent a figure: a number in a setup must come from the material given. Read the request the way someone working in this field means it, and never bend it to fit the source: if the source is about something else, the request still wins, and the source is only used where it genuinely bears. A question that is not about what the writer asked for is wrong however good it is.${avoid}`,
+      };
     if (ask.kind === "batch")
       return {
         count: 4,
-        focus: `${base} Three to five questions, no more; quality over count.${
-          seen.length
-            ? ` The writer has already seen these and wants different ones, so do not repeat them: ${seen.map((d) => d.text).join(" | ")}`
-            : ""
-        }${said}`,
+        focus: `${base} Three to five questions, no more; quality over count.${avoid}`,
       };
     const q = `${ask.draft.setup ? `Setup: ${ask.draft.setup}\n` : ""}Question: ${ask.draft.text}`;
     if (ask.kind === "more")
@@ -154,7 +162,7 @@ export function SourceQuestions({
         focus,
         guidance: m.questions?.guidance || "",
       });
-      const cap = ask.kind === "batch" ? 5 : ask.kind === "more" ? 3 : 2;
+      const cap = ask.kind === "batch" ? (note ? 3 : 5) : ask.kind === "more" ? 3 : 2;
       let got: SourceDraft[] = (json.questions || []).map((q) => ({
         id: newId("sd"),
         setup: String(q.setup || ""),
@@ -243,10 +251,21 @@ export function SourceQuestions({
         }
       }
 
-      const now = current();
+      // New ones are marked, with what they were asked for, and everything
+      // older loses the mark: telling the new batch from the old one was a
+      // matter of reading every question again.
+      for (const d of got) {
+        d.isNew = true;
+        d.askedFor =
+          ask.kind === "batch"
+            ? note
+            : `${ask.kind === "more" ? "more like" : ask.kind === "version" ? "another version of" : "a fix for"}: "${ask.draft.text.slice(0, 60)}${ask.draft.text.length > 60 ? "…" : ""}"${note ? `, ${note}` : ""}`;
+      }
+      const now = current().map((d) => (d.isNew ? { ...d, isNew: false } : d));
       if (ask.kind === "batch") {
-        // The ones already acted on stay; the untouched ones are replaced.
-        setDrafts([...now.filter((d) => d.done), ...got]);
+        // New ones first, where they will be seen; the ones already acted on
+        // stay below them; the untouched ones are what this replaces.
+        setDrafts([...got, ...now.filter((d) => d.done)]);
       } else {
         // Next to the one they came from. A fix takes its place.
         const at = now.findIndex((d) => d.id === ask.draft.id);
@@ -284,7 +303,7 @@ export function SourceQuestions({
   }
 
   function mark(id: string, done: SourceDraft["done"]) {
-    setDrafts(current().map((x) => (x.id === id ? { ...x, done } : x)));
+    setDrafts(current().map((x) => (x.id === id ? { ...x, done, isNew: false } : x)));
   }
 
   function add(d: SourceDraft, where: "bank" | "list") {
@@ -399,7 +418,18 @@ export function SourceQuestions({
         {drafts.map((d) => {
           const like = d.similarTo ? byId.get(d.similarTo) : undefined;
           return (
-            <li key={d.id} className={`text-sm ${d.done === "kept" ? "opacity-50" : ""}`}>
+            <li
+              key={d.id}
+              className={`text-sm ${d.done === "kept" ? "opacity-50" : ""} ${
+                d.isNew ? "-ml-3 border-l-2 border-amber-400 pl-2.5" : ""
+              }`}
+            >
+              {d.isNew && (
+                <p className="mb-1 flex flex-wrap items-center gap-1.5 text-[11px] text-amber-800">
+                  <span className="rounded bg-amber-100 px-1.5 py-0.5 font-semibold">New</span>
+                  {d.askedFor && <span className="text-muted">for {d.askedFor}</span>}
+                </p>
+              )}
               {d.setup && <p className="mb-1 leading-relaxed text-ink/70">{d.setup}</p>}
               <p className="font-medium">{d.text}</p>
               {d.followUp && <p className="mt-0.5 text-xs italic text-muted">Probe: {d.followUp}</p>}
