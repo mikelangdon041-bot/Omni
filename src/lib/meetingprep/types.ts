@@ -203,6 +203,18 @@ export interface ReadingSource {
   /** Why it is worth the writer's time for THIS meeting. */
   why: string;
   priority: "must" | "skim";
+  /**
+   * Whether the summary and findings come from reading the whole piece, or
+   * only from what the search showed of it (the page could not be opened).
+   */
+  read?: "full" | "snippet";
+  /**
+   * The full text the writer supplied for it (a paywalled page saved as a
+   * PDF), kept as a document so questions are written from it too.
+   */
+  fullDocId?: string;
+  /** What the writer has asked for from it, newest first, to see and reuse. */
+  asks?: string[];
   /** Questions written from this piece, kept so they are not rewritten on every visit. */
   questions?: SourceDraft[];
 }

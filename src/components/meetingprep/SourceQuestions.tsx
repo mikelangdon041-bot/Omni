@@ -47,7 +47,8 @@ const liveQuestions = (m: MpMeeting) => (m.questions?.items || []).filter((q) =>
  * read, and the batch is written from the summary instead.
  */
 async function fullTextOf(s: ReadingSource, m: MpMeeting): Promise<string> {
-  if (s.docId) return (m.documents || []).find((d) => d.id === s.docId)?.text || "";
+  const docId = s.fullDocId || s.docId;
+  if (docId) return (m.documents || []).find((d) => d.id === docId)?.text || "";
   if (!s.url) return "";
   try {
     const res = await fetch("/api/meeting/extract", {
@@ -104,14 +105,24 @@ export function SourceQuestions({
   /** The drafts as they are now, read fresh: another save may have landed. */
   const current = () => getMeeting()?.reading?.sources?.find((x) => x.id === s.id)?.questions || drafts;
 
-  function setDrafts(next: SourceDraft[]) {
+  function setDrafts(next: SourceDraft[], ask?: string) {
     const m = getMeeting();
     if (!m) return;
     const r = m.reading || {};
     save({
       reading: {
         ...r,
-        sources: (r.sources || []).map((x) => (x.id === s.id ? { ...x, questions: next } : x)),
+        sources: (r.sources || []).map((x) =>
+          x.id === s.id
+            ? {
+                ...x,
+                questions: next,
+                // What they asked for, newest first, so the next request
+                // box can show it back to them.
+                ...(ask ? { asks: [ask, ...(x.asks || []).filter((a) => a !== ask)].slice(0, 8) } : {}),
+              }
+            : x,
+        ),
       },
     });
   }
@@ -257,7 +268,7 @@ Write two or three questions specifically on that, no more, each with a setup. I
 
       // One that asks what a draft already on this source asks adds nothing.
       // Not for versions, which are meant to ask the same thing.
-      const others = seen.filter((d) => ask.kind === "batch" ? d.done : true).map((d) => d.text);
+      const others = seen.map((d) => d.text);
       if (got.length && others.length && ask.kind !== "version") {
         try {
           const { matches } = await post<{ matches: number[] }>({
@@ -310,14 +321,16 @@ Write two or three questions specifically on that, no more, each with a setup. I
       if (ask.kind === "batch") {
         // New ones first, where they will be seen; the ones already acted on
         // stay below them; the untouched ones are what this replaces.
-        setDrafts([...got, ...now.filter((d) => d.done)]);
+        // Nothing is thrown away: asked for more, the writer used to lose
+        // every question they had not acted on yet.
+        setDrafts([...got, ...now], note);
       } else {
         // Next to the one they came from. A fix takes its place.
         const at = now.findIndex((d) => d.id === ask.draft.id);
         const keep = ask.kind === "fix" ? 0 : 1;
         const next = [...now];
         next.splice(at < 0 ? next.length : at + (keep ? 1 : 0), at < 0 ? 0 : 1 - keep, ...got);
-        setDrafts(next);
+        setDrafts(next, note);
       }
     } catch (e) {
       toast("error", (e as Error).message);
@@ -398,6 +411,27 @@ Write two or three questions specifically on that, no more, each with a setup. I
         }}
       >
         <p className="text-xs font-medium">{PROMPTS[ask.kind]}</p>
+        {/* What they asked for before, to see and reuse. Rewriting without
+            it meant typing the same correction again from memory. */}
+        {(s.asks || []).length > 0 && (
+          <div className="text-xs">
+            <p className="text-muted">You asked before:</p>
+            <ul className="mt-0.5 space-y-0.5">
+              {(s.asks || []).map((a) => (
+                <li key={a}>
+                  <button
+                    type="button"
+                    onClick={() => setNote(a)}
+                    className="text-left text-ink/80 underline-offset-2 hover:underline"
+                    title="Use this again"
+                  >
+                    &ldquo;{a}&rdquo;
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div className="flex flex-wrap gap-1.5">
           {PICKS[ask.kind].map((p) => (
             <button

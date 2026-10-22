@@ -144,3 +144,39 @@ export async function readUrl(raw: string): Promise<{ text: string; name: string
     : { text: tidy(buffer.toString("utf-8")), title: "" };
   return { text, name: title || fallbackName };
 }
+
+type FetchBlock = {
+  type: string;
+  content?: { type?: string; content?: { source?: { data?: string } } };
+};
+
+/**
+ * A page that turns readers away (McKinsey answers a plain request with a
+ * 403) can still be read through the model's own fetch tool, which got the
+ * whole of the article the writer's reading list was built on. Slower and
+ * paid, so only ever the fallback.
+ */
+async function fetchThroughModel(url: string): Promise<string> {
+  const res = (await anthropic().messages.create({
+    model: RESEARCH_MODEL,
+    max_tokens: 200,
+    tools: [{ type: "web_fetch_20250910", name: "web_fetch", max_uses: 1 } as never],
+    messages: [{ role: "user", content: `Fetch ${url}. Then reply with just the word done.` }],
+  } as never)) as unknown as { content: FetchBlock[] };
+  const block = res.content.find((b) => b.type === "web_fetch_tool_result");
+  return tidy(block?.content?.content?.source?.data || "");
+}
+
+/** A link's text, read directly where the site allows it, through the fetch tool where it does not. */
+export async function openUrl(url: string): Promise<{ text: string; name: string }> {
+  try {
+    const out = await readUrl(url);
+    if (out.text.length >= 400) return out;
+  } catch (e) {
+    // Not a public page at all: no fallback will help.
+    if (/isn't a (link|public)/.test((e as Error).message)) throw e;
+  }
+  const text = await fetchThroughModel(url);
+  if (text.length < 400) throw new Error("That page won't let me in. Save it as a PDF, or paste the text.");
+  return { text, name: new URL(url).hostname.replace(/^www\./, "") };
+}

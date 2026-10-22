@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { extractPdfText } from "@/lib/pdfText";
-import { IMAGE_TYPES, MAX_BYTES, readImage, readUrl, tidy } from "@/lib/meetingprep/extractText";
+import { IMAGE_TYPES, MAX_BYTES, openUrl, readImage, tidy } from "@/lib/meetingprep/extractText";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -23,7 +23,7 @@ export async function POST(req: Request) {
   try {
     if ((req.headers.get("content-type") || "").includes("application/json")) {
       const body = await req.json().catch(() => ({}));
-      const { text, name } = await readUrl(String(body?.url || ""));
+      const { text, name } = await openUrl(String(body?.url || ""));
       if (text.length < 40)
         return NextResponse.json(
           {

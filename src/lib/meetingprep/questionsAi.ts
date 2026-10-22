@@ -81,6 +81,84 @@ export function leansOnAnother(setup: string): string | null {
   return hit ? hit[0] : null;
 }
 
+// Filler that pretends to be a reaction: the writer asked for it gone, and the
+// prompt alone did not hold it. Openers that announce the substance instead of
+// stating it, and words that tell the room how to feel.
+const FAKE_HOOK =
+  /\b(?:keep (?:coming back|returning|snagging) (?:to|on)|(?:stays|sticks) with me|worth sitting with|should (?:scare|worry|terrify|alarm)|(?:this|that|it) (?:surprises|shocks|stuns)|surprising(?:ly)?|striking|buried in|buried (?:inside|deep)|quiet(?:ly)? (?:admission|admits|warning|concedes|confession)|almost (?:embarrassing|disarming|philosophical|noble|brutal)|quietly brutal|(?:here'?s|there'?s) (?:a|an|one|this|something) (?:provocation|claim worth|line worth|thing worth|number that|vivid|uglier)|vivid picture|easy to skip past|(?:most )?people skip past|nobody wants to (?:name|admit|say)|everybody circles|I find (?:it )?(?:hard|fascinating)|uglier problem|deserves (?:more )?attention)\b/i;
+
+// A question with no setup in front of it that starts mid-thought.
+const MID_THOUGHT = /^\s*(?:given that|so[,\s]|and\s|but\s|that said|with that|which (?:means|is why)|then,|in that case|if so|if that's (?:true|right))/i;
+
+/**
+ * What is wrong with a setup and question as said, if anything: leaning on
+ * something said before it, or filler pretending to be a reaction. Null when
+ * it is fine.
+ */
+export function spokenProblem(setup: string, text: string): string | null {
+  const lean = leansOnAnother(setup) || leansOnAnother(text);
+  if (lean) return `it depends on something said before it ("${lean}")`;
+  if (!setup.trim() && MID_THOUGHT.test(text)) return "the question starts mid-thought with nothing before it";
+  const fake = setup.match(FAKE_HOOK);
+  if (fake) return `it opens with filler instead of substance ("${fake[0]}")`;
+  return null;
+}
+
+const JUDGE_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    failures: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: { index: { type: "number" as const }, reason: { type: "string" as const } },
+        required: ["index", "reason"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["failures"],
+  additionalProperties: false,
+};
+
+/**
+ * The same two tests, judged, for what a list of phrases cannot catch. Each
+ * item is a setup and the question after it, said aloud as the FIRST thing
+ * in a session. Returns index to reason for each that fails.
+ */
+export async function judgeSpoken(items: { setup: string; text: string }[]): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  if (!items.length) return out;
+  try {
+    const res = await anthropic().messages.create({
+      model: CHECK_MODEL,
+      max_tokens: 2000,
+      output_config: { format: { type: "json_schema", schema: JUDGE_SCHEMA } },
+      system: `Each item below is what someone will say out loud in a panel: a setup, then a question. They may ask any of them in any order and skip the rest, so each must work as the first and only thing they say.
+
+Fail an item only for one of these, and say which in a few words:
+1. It depends on something not in the item itself: another question, an earlier remark, "the same survey", "as I said", "coming back to", "given that" with nothing before it, "also", "another".
+2. It uses filler that pretends to be a reaction instead of stating the substance: telling the room something is surprising, striking, scary, worth sitting with, buried, quiet, or that it stays with the speaker. "Here's a claim worth sitting with", "There's a provocation buried in", "This surprises people".
+
+Facts, figures and plain conversational framing are fine. Most items pass; list only the ones that fail.`,
+      messages: [
+        {
+          role: "user",
+          content: items.map((x, i) => `${i}. ${x.setup ? `${x.setup} ` : ""}${x.text}`).join("\n\n"),
+        },
+      ],
+    });
+    const parsed = JSON.parse(firstText(res) || "{}");
+    for (const f of Array.isArray(parsed.failures) ? parsed.failures : []) {
+      const i = Number(f?.index);
+      if (Number.isInteger(i) && i >= 0 && i < items.length) out.set(i, String(f?.reason || "it does not stand alone"));
+    }
+  } catch {
+    // The pattern check still ran; this is the second net.
+  }
+  return out;
+}
+
 // How the writer wants to ask: the way Ezra Klein interviews. The bank used to
 // be one-breath questions with no preamble, which threw away the thing that
 // makes a question land in front of an audience: the room hearing what the
@@ -93,7 +171,7 @@ What a good setup does, in his manner:
 - Often states the strongest version of one side, or both sides, before asking which way the guest leans or what each side is missing. "One view is X, and it is a serious view because Y. The other is Z." Then: "Where do you come down?" or "What does the first camp get wrong?"
 - Ties it to the person answering where that is possible: their seat, their work, what someone in their role would have seen.
 - Uses a concrete figure or example in place of an abstraction. "Nine in ten organisations still measure field teams by how many meetings they log" rather than "metrics remain activity-based".
-- Sounds like a curious, prepared person thinking out loud, not a briefing read off a slide. First person is fine: "I keep coming back to", "Here is what I find hard about this".
+- Opens with the substance itself: the finding, the argument, the number, the example. Plain and conversational, the way a well-read person talks, not a briefing read off a slide.
 - Ends by handing over to the question; the question is the last thing said, and it is short.
 
 What it never does:
@@ -101,6 +179,7 @@ What it never does:
 - Never more than four sentences. Someone has to say it out loud without losing the room.
 - Never names a consultancy, analyst house, report, survey, study or author. The same rule as the question: the finding, not the brand. "One large global survey of MSLs found" is fine; a company's name is not.
 - Never leans on another question. ${STANDALONE_RULE}
+- Never a manufactured reaction or throat-clearing. No line about how surprising, striking, buried, quiet, scary, vivid or worth thinking about something is: not "this surprises people", "here's a claim worth sitting with", "there's a provocation buried in", "a number that should scare anyone", "this stays with me", "I keep coming back to", "most people skip past this". Those tell the room how to feel instead of telling it something. Say the thing; if it is surprising, the room will notice.
 - Never a setup for its own sake. An opener, a quick follow-up, a question whose substance is already in the question, or one that lands harder bare gets setup "". Klein does not preface every question, and a bank where every question has a paragraph in front of it is one nobody can get through.`;
 
 /**
@@ -644,14 +723,29 @@ ${instructionBlock(guidance.trim(), coverage.trim(), focus.trim())}`,
     housesIn(research),
   );
   // A batch is written as one sequence, so its setups lean on each other
-  // exactly the way a list of separate questions cannot.
-  const leaning = clean.filter((q) => leansOnAnother(q.setup));
-  if (leaning.length) {
-    const redone = await writeSetups({ meeting, kolBlock, research, questions: leaning, standing: guidance.trim(), force: true });
-    const byText = new Map(leaning.map((q, i) => [q.text, redone[i] || ""]));
-    for (const q of clean) if (byText.has(q.text)) q.setup = byText.get(q.text) || "";
+  // exactly the way a list of separate questions cannot; and filler slips in
+  // however the prompt is worded. Checked by pattern and by judgement.
+  const judged = await judgeSpoken(clean.map((q) => ({ setup: q.setup, text: q.text })));
+  const bad = clean
+    .map((q, i) => ({ q, why: spokenProblem(q.setup, q.text) || judged.get(i) || "" }))
+    .filter((r) => r.why);
+  if (bad.length) {
+    console.warn(`[questions] ${bad.length} did not stand alone or used filler: ${bad.map((r) => r.why).join(" | ")}`);
+    const redone = await writeSetups({
+      meeting,
+      kolBlock,
+      research,
+      questions: bad.map((r) => r.q),
+      standing: `${guidance.trim()}\nThe setups these had were rejected: ${bad.map((r) => r.why).join("; ")}. Each new one stands completely alone and opens with the substance.`.trim(),
+      force: true,
+    });
+    bad.forEach((r, i) => (r.q.setup = redone[i] || ""));
   }
-  return clean.sort((a, b) => a.rank - b.rank);
+  // A question that still only makes sense after something else is dropped:
+  // the writer cannot ask it without the thing it leans on.
+  return clean
+    .filter((q) => !(spokenProblem(q.setup, q.text) || "").startsWith("the question starts") && !leansOnAnother(q.text))
+    .sort((a, b) => a.rank - b.rank);
 }
 
 const SETUPS_SCHEMA = {
@@ -757,9 +851,16 @@ Return one entry per question, with "index" exactly as given. Plain prose, no ma
   // back once, one at a time so none of them can lean on its neighbour, with
   // the phrase quoted; anything still leaning goes bare. A question with no
   // setup is fine; one that starts mid-thought is not.
-  const leaning = repairing ? [] : out.map((x, i) => ({ i, hit: leansOnAnother(x) })).filter((r) => r.hit);
+  let leaning: { i: number; hit: string }[] = [];
+  if (!repairing) {
+    const judged = await judgeSpoken(out.map((x, i) => ({ setup: x, text: questions[i].text })));
+    leaning = out
+      .map((x, i) => ({ i, hit: spokenProblem(x, questions[i].text) || judged.get(i) || "" }))
+      // A bare question that is fine bare stays bare.
+      .filter((r) => r.hit && (out[r.i] || /mid-thought/.test(r.hit)));
+  }
   if (leaning.length) {
-    console.warn(`[setups] ${leaning.length} leaned on another question, rewriting: ${leaning.map((r) => r.hit).join(", ")}`);
+    console.warn(`[setups] ${leaning.length} did not stand alone or used filler, rewriting: ${leaning.map((r) => r.hit).join(" | ")}`);
     const fixed = await Promise.all(
       leaning.map((r) =>
         writeSetups({

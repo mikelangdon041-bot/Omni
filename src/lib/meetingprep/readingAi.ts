@@ -9,6 +9,7 @@
 
 import { anthropic, QUICK_MODEL, RESEARCH_MODEL } from "@/lib/anthropic";
 import { meetingContext, type MeetingPayload } from "./briefAi";
+import { openUrl } from "./extractText";
 
 export interface FoundSource {
   title: string;
@@ -19,6 +20,8 @@ export interface FoundSource {
   findings: string[];
   why: string;
   priority: "must" | "skim";
+  /** Read from the whole piece, or only from what the search showed of it. */
+  read: "full" | "snippet";
 }
 
 export interface UnsettledPoint {
@@ -334,12 +337,17 @@ Finish with the JSON object and nothing after it: {"overview": string, "sources"
         .slice(0, 6),
       why: String(raw.why || "").trim(),
       priority: raw.priority === "must" ? "must" : "skim",
+      read: "snippet",
     });
   }
+  const chosen = sources.slice(0, n);
+  // What the search saw of a page is a few lines. Every source is opened
+  // and read, so "What it says" is what it says.
+  await Promise.all(chosen.map((s) => readInFull(s, meeting)));
 
   return {
     overview: more ? "" : String(parsed?.overview || "").trim(),
-    sources: sources.slice(0, n),
+    sources: chosen,
     unsettled: more
       ? []
       : (Array.isArray(parsed?.unsettled) ? parsed!.unsettled : [])
@@ -521,4 +529,81 @@ Then, on the last line, "SOURCES:" followed by the one to three URLs you relied 
       .trim(),
     sources,
   };
+}
+
+const READ_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    summary: { type: "string" as const },
+    findings: { type: "array" as const, items: { type: "string" as const } },
+    why: { type: "string" as const },
+    date: { type: "string" as const },
+  },
+  required: ["summary", "findings", "why", "date"],
+  additionalProperties: false,
+};
+
+/**
+ * Open a source and read the whole of it, then rewrite its summary and
+ * findings from what it actually says.
+ *
+ * The first version wrote "What it says" from search snippets, and the writer
+ * read the McKinsey piece and found the list had not touched what it argued.
+ * Changes `s` in place; leaves it as the snippet version, marked so, when the
+ * page cannot be opened or read.
+ */
+export async function readInFull(s: FoundSource, meeting: MeetingPayload): Promise<void> {
+  let text = "";
+  try {
+    text = (await openUrl(s.url)).text;
+  } catch {
+    return;
+  }
+  await readText(s, meeting, text);
+}
+
+/**
+ * The same read, from text the writer handed over: the piece behind a
+ * paywall, saved as a PDF or pasted in. Returns whether it took.
+ */
+export async function readText(s: FoundSource, meeting: MeetingPayload, text: string): Promise<boolean> {
+  if (text.length < 800) return false;
+  try {
+    const res = await anthropic().messages.create({
+      model: RESEARCH_MODEL,
+      max_tokens: 3000,
+      output_config: { format: { type: "json_schema", schema: READ_SCHEMA } },
+      system: `You have just read the whole of one piece someone is reading before a meeting. Write down what it actually says, so they could discuss it without having read it, and so nothing in your notes is something the piece does not say.
+
+- summary: four to six plain sentences on the piece's actual argument: what it claims, how it makes the case, and what it concludes or recommends. Its own position, in its own terms, not a description of its topic. If it is a framework or a set of priorities, name each part.
+- findings: six to ten lines, each one specific thing the piece says, as a full sentence: a claim, a figure with what it measures and its base or sample where given, a framework or model it sets out, a concrete example it uses, a recommendation, a warning or an admission. Use its own numbers and named concepts. Never a line that would be true of any piece on the subject, and never a line it does not support. Lead with the ones that bear most on the meeting.
+- why: one line on why this piece matters for this meeting in particular.
+- date: as the piece dates itself ("2025", "June 2026"), or "".
+
+Plain text, no markdown, no em dashes.`,
+      messages: [
+        {
+          role: "user",
+          content: `The meeting:\n${meetingContext({ ...meeting, documents: [] }, "") || "(minimal context)"}\n\nThe piece: ${s.title}${s.outlet ? ` (${s.outlet})` : ""}\n${s.url}\n\nIts full text:\n${text.slice(0, 60000)}`,
+        },
+      ],
+    });
+    const p = JSON.parse(firstText(res.content as unknown as Block[]) || "{}") as {
+      summary?: string;
+      findings?: string[];
+      why?: string;
+      date?: string;
+    };
+    const findings = (p.findings || []).map((f) => String(f || "").trim()).filter(Boolean);
+    if (!String(p.summary || "").trim() || findings.length < 3) return false;
+    s.summary = String(p.summary).trim();
+    s.findings = findings.slice(0, 10);
+    if (String(p.why || "").trim()) s.why = String(p.why).trim();
+    if (!s.date && String(p.date || "").trim()) s.date = String(p.date).trim();
+    s.read = "full";
+    return true;
+  } catch {
+    // The snippet version stands, marked as such.
+    return false;
+  }
 }

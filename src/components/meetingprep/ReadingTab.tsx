@@ -25,6 +25,7 @@ import {
 import { Button } from "@/components/ui/Button";
 import { Working } from "@/components/ui/Progress";
 import { SourceQuestions } from "./SourceQuestions";
+import { FullPiece } from "./FullPiece";
 import { Input } from "@/components/ui/Input";
 import { useToast } from "@/components/ui/Feedback";
 import {
@@ -247,7 +248,7 @@ export function ReadingTab({
           </Button>
         </div>
         {/* Measured: a full list ran 72-87s on the writer's panel. */}
-        <Working active={busy === "build"} seconds={90} label="Searching and reading the sources" className="text-left" />
+        <Working active={busy === "build"} seconds={120} label="Searching and reading every source" className="text-left" />
       </div>
     );
 
@@ -295,8 +296,9 @@ export function ReadingTab({
       </div>
 
       {/* Measured on the panel: a full list 72-87s, find more 14-34s. */}
-      <Working active={busy === "build"} seconds={90} label="Rebuilding the reading list" />
-      <Working active={busy === "more"} seconds={30} label="Searching for more" />
+      {/* Search, then open and read every piece in full. */}
+      <Working active={busy === "build"} seconds={120} label="Searching and reading every source" />
+      <Working active={busy === "more"} seconds={55} label="Searching and reading the new ones" />
       <Working
         active={Boolean(busy) && busy !== "build" && busy !== "more"}
         seconds={25}
@@ -545,9 +547,20 @@ function SourceCard({
       </div>
 
       {s.summary && <p className="mt-2 text-sm leading-relaxed">{s.summary}</p>}
+      {s.kind === "found" && s.read !== "full" && (
+        <div className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+          <p>
+            I couldn&apos;t open the full piece (a paywall or a login, usually), so this is only from
+            what the search showed of it. Add the article and I&apos;ll read the whole thing.
+          </p>
+          <FullPiece s={s} getMeeting={getMeeting} save={save} />
+        </div>
+      )}
       {s.findings.length > 0 && (
         <div className="mt-2">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">What it says</p>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+            What it says{s.read === "full" ? " (read in full)" : ""}
+          </p>
           <ul className="mt-1 list-disc space-y-1 pl-5 text-sm">
             {s.findings.map((f, i) => (
               <li key={i}>{f}</li>

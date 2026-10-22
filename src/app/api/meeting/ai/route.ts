@@ -29,7 +29,13 @@ import {
   writeVariants,
 } from "@/lib/meetingprep/questionsAi";
 import { reviewPrep } from "@/lib/meetingprep/reviewAi";
-import { buildReading, digestMaterial, lookupPerson } from "@/lib/meetingprep/readingAi";
+import {
+  buildReading,
+  digestMaterial,
+  lookupPerson,
+  readText,
+  type FoundSource,
+} from "@/lib/meetingprep/readingAi";
 
 export const runtime = "nodejs";
 // A whole brief now writes out the words for every step, plus any boxes the
@@ -301,6 +307,31 @@ export async function POST(req: Request) {
         count: Number(body?.count) || 6,
       });
       return NextResponse.json(out);
+    }
+
+    // A reading-list source read from text the writer supplied, for a page
+    // that could not be opened (a paywall, a login).
+    if (action === "readsource") {
+      const meeting: MeetingPayload = body?.meeting || {};
+      const src = body?.source || {};
+      const s: FoundSource = {
+        title: String(src.title || ""),
+        outlet: String(src.outlet || ""),
+        date: String(src.date || ""),
+        url: String(src.url || ""),
+        summary: String(src.summary || ""),
+        findings: [],
+        why: String(src.why || ""),
+        priority: "must",
+        read: "snippet",
+      };
+      const ok = await readText(s, meeting, String(body?.text || "").slice(0, 200000));
+      if (!ok)
+        return NextResponse.json(
+          { error: "I couldn't make sense of that text. Check it's the whole article and try again." },
+          { status: 422 },
+        );
+      return NextResponse.json({ summary: s.summary, findings: s.findings, why: s.why, date: s.date });
     }
 
     if (action === "material") {
