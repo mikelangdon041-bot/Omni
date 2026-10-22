@@ -77,7 +77,7 @@ const PICKS = {
 };
 
 const PROMPTS = {
-  batch: "What should be different? (optional)",
+  batch: "What should they be about? (optional)",
   more: "What do you like about it? (optional)",
   version: "What should change? (optional)",
   fix: "What's wrong with it?",
@@ -142,7 +142,7 @@ export function SourceQuestions({
       return {
         count: 3,
         focus: `THE WRITER ASKED FOR THIS, and it decides what every question is about: ${note}
-Write two or three questions specifically on that, no more, each with a setup.${deeper} Draw on the source marked THE SOURCE THIS BATCH IS BUILT ON wherever it bears on the request; where it does not, use the rest of the reading list and what you know of the field, and keep the request. Never invent a figure: a number in a setup must come from the material given. Read the request the way someone working in this field means it, and never bend it to fit the source: if the source is about something else, the request still wins, and the source is only used where it genuinely bears. A question that is not about what the writer asked for is wrong however good it is.${avoid}`,
+Write two or three questions specifically on that, no more, each with a setup. If the request names more than one thing ("both X and Y", "A, B and C"), every one of them gets at least one question of its own; covering one of them and not the others is not doing what was asked.${deeper} Draw on the source marked THE SOURCE THIS BATCH IS BUILT ON wherever it bears on the request; where it does not, use the rest of the reading list and what you know of the field, and keep the request. Never invent a figure: a number in a setup must come from the material given. Read the request the way someone working in this field means it, and never bend it to fit the source: if the source is about something else, the request still wins, and the source is only used where it genuinely bears. A question that is not about what the writer asked for is wrong however good it is.${avoid}`,
       };
     if (ask.kind === "batch")
       return {
@@ -422,7 +422,7 @@ Write two or three questions specifically on that, no more, each with a setup.${
           </Button>
           <Button type="submit" size="sm" disabled={Boolean(busy) || (required && !note.trim())}>
             {ask.kind === "batch"
-              ? "Write them"
+              ? "Write questions"
               : ask.kind === "more"
                 ? "Write more"
                 : ask.kind === "version"
@@ -439,10 +439,15 @@ Write two or three questions specifically on that, no more, each with a setup.${
       <div className="mt-2">
         {busy === "batch" ? (
           <Working active seconds={SECONDS.batch} label="Writing questions from this source" />
+        ) : asking?.kind === "batch" ? (
+          askBox(asking)
         ) : (
           <button
             type="button"
-            onClick={() => (drafts.length ? setOpen(true) : void generate({ kind: "batch" }))}
+            // The first batch asks what it should be about too. It used to
+            // start writing on the click, so the one thing the writer wanted
+            // from this source had nowhere to go.
+            onClick={() => (drafts.length ? setOpen(true) : openAsk({ kind: "batch" }))}
             className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs font-medium text-[var(--accent)] hover:bg-[var(--accent-soft)]"
           >
             <MessageCircleQuestion size={13} />
