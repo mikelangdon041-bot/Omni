@@ -193,7 +193,7 @@ export function SourceQuestions({
       full && seen.length
         ? ` The questions already written from it used some of its points. Go to the parts of the document they did not use: its other findings, figures, frameworks, examples, warnings and recommendations, and build on those.`
         : "";
-    const base = `Every question here is built on the one source marked THE SOURCE THIS BATCH IS BUILT ON: what it found, what it argues, and what it leaves open. Each one gets a setup that lays out the relevant finding or argument from it in plain words, without naming it, then asks what that means for the people answering.${deeper}`;
+    const base = `Every question here is built on the one source marked THE SOURCE THIS BATCH IS BUILT ON: what it found, what it argues, and what it leaves open. Each one gets a setup that lays out the relevant finding or argument from it in plain words, then asks what that means for the people answering. The people listening have not read it: never call it "the source", "the article", "the guidance", "the report" or "the authors", and never name its publisher; state what it found as a plain fact, or introduce it the way you would to a stranger ("a recent industry report argues").${deeper}`;
     const said = note
       ? `\nThe writer says, and this outranks everything above: ${note}`
       : "";

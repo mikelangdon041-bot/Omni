@@ -85,7 +85,7 @@ export function leansOnAnother(setup: string): string | null {
 // prompt alone did not hold it. Openers that announce the substance instead of
 // stating it, and words that tell the room how to feel.
 const FAKE_HOOK =
-  /\b(?:keep (?:coming back|returning|snagging) (?:to|on)|(?:stays|sticks) with me|worth sitting with|should (?:scare|worry|terrify|alarm)|(?:this|that|it) (?:surprises|shocks|stuns)|surprising(?:ly)?|striking|buried in|buried (?:inside|deep)|quiet(?:ly)? (?:admission|admits|warning|concedes|confession)|almost (?:embarrassing|disarming|philosophical|noble|brutal)|quietly brutal|(?:here'?s|there'?s) (?:a|an|one|this|something) (?:provocation|claim worth|line worth|thing worth|number that|vivid|uglier)|vivid picture|easy to skip past|(?:most )?people skip past|nobody wants to (?:name|admit|say)|everybody circles|I find (?:it )?(?:hard|fascinating)|uglier problem|deserves (?:more )?attention|nobody (?:loves|likes|wants to (?:talk about|hear|admit))|(?:problem|question|truth|thing) (?:nobody|no one) (?:loves|likes|wants)|elephant in the room|let'?s be honest|here'?s the (?:thing|kicker|rub|catch))\b/i;
+  /\b(?:quiet(?:ly)?|keep (?:coming back|returning|snagging) (?:to|on)|(?:stays|sticks) with me|worth sitting with|should (?:scare|worry|terrify|alarm)|(?:this|that|it) (?:surprises|shocks|stuns)|surprising(?:ly)?|striking|buried in|buried (?:inside|deep)|quiet(?:ly)? (?:admission|admits|warning|concedes|confession)|almost (?:embarrassing|disarming|philosophical|noble|brutal)|quietly brutal|(?:here'?s|there'?s) (?:a|an|one|this|something) (?:provocation|claim worth|line worth|thing worth|number that|vivid|uglier)|vivid picture|easy to skip past|(?:most )?people skip past|nobody wants to (?:name|admit|say)|everybody circles|I find (?:it )?(?:hard|fascinating)|uglier problem|deserves (?:more )?attention|nobody (?:loves|likes|wants to (?:talk about|hear|admit))|(?:problem|question|truth|thing) (?:nobody|no one) (?:loves|likes|wants)|elephant in the room|let'?s be honest|here'?s the (?:thing|kicker|rub|catch)|(?:is|was|are|gets) (?:very |pretty )?blunt|bluntly|quiet (?:incentive|problem|truth|tension|shift|crisis|pressure|cost)|quietly (?:shrinking|brutal|admits|concedes|tells))\b/i;
 
 // A question with no setup in front of it that starts mid-thought.
 const MID_THOUGHT = /^\s*(?:given that|so[,\s]|and\s|but\s|that said|with that|which (?:means|is why)|then,|in that case|if so|if that's (?:true|right))/i;
@@ -95,7 +95,35 @@ const MID_THOUGHT = /^\s*(?:given that|so[,\s]|and\s|but\s|that said|with that|w
  * something said before it, or filler pretending to be a reaction. Null when
  * it is fine.
  */
+// A document the room has never been told about. "The source is blunt that
+// this creates blind spots" was said to a panel audience who could only ask
+// "what source?" The prompt called the article THE SOURCE and said not to
+// name it, so the writer called it "the source". These words always point at
+// something unintroduced; report/study/survey/paper/framework only do when
+// nothing earlier in the line introduced one ("a 2025 survey found... the
+// survey also...").
+const ALWAYS_UNNAMED =
+  /\b(?:the|this|that) (?:source|article|piece|deck|slides?|guidance|guidance document|document|authors?|write-?up|standards (?:work|document|guidance)|20\d\d (?:thinking|vision|piece|report))\b|\b(?:the source|the article|the authors?) (?:says?|argues?|is|was|found|makes)\b/i;
+const MAYBE_UNNAMED = /\b(?:the|this|that) (report|study|survey|paper|framework|analysis|research|white ?paper|playbook|review)\b/i;
+const INTRODUCES = /\b(?:a|an|one|another|some|recent|new|large|global|\d{4})\b[^.?!]{0,40}\b(?:report|study|survey|paper|framework|analysis|research|white ?paper|playbook|review)s?\b/i;
+
+/** The phrase pointing at a document nobody was told about, or null. */
+export function unnamedSource(line: string): string | null {
+  const t = String(line || "");
+  const hard = t.match(ALWAYS_UNNAMED);
+  if (hard) return hard[0];
+  const soft = t.match(MAYBE_UNNAMED);
+  if (soft && soft.index !== undefined && !INTRODUCES.test(t.slice(0, soft.index))) return soft[0];
+  return null;
+}
+
 export function spokenProblem(setup: string, text: string): string | null {
+  // The setup is the run-up; a setup that asks its own question has the
+  // question said twice. One rewrite ended by repeating it word for word.
+  if (/\?\s*$/.test(setup.trim()) || (text.length > 20 && setup.includes(text.slice(0, Math.min(50, text.length)))))
+    return "the setup asks the question itself, so it would be said twice";
+  const unnamed = unnamedSource(setup) || unnamedSource(text);
+  if (unnamed) return `it refers to a document the room has never been told about ("${unnamed}")`;
   const lean = leansOnAnother(setup) || leansOnAnother(text);
   if (lean) return `it depends on something said before it ("${lean}")`;
   if (!setup.trim() && MID_THOUGHT.test(text)) return "the question starts mid-thought with nothing before it";
@@ -138,7 +166,8 @@ export async function judgeSpoken(items: { setup: string; text: string }[]): Pro
 
 Fail an item only for one of these, and say which in a few words:
 1. It depends on something not in the item itself: another question, an earlier remark, "the same survey", "as I said", "coming back to", "given that" with nothing before it, "also", "another".
-2. It uses filler that pretends to be a reaction instead of stating the substance: telling the room something is surprising, striking, scary, worth sitting with, buried, quiet, or that it stays with the speaker. "Here's a claim worth sitting with", "There's a provocation buried in", "This surprises people".
+2. It refers to a document, study or author the listener has not been told about: "the source", "the article", "the guidance", "the report", "the authors", "the 2030 thinking", "it says". The listener has not read anything; a finding must be stated as a fact, or introduced in words a stranger would follow ("one large survey of MSLs found").
+3. It uses filler that pretends to be a reaction instead of stating the substance: telling the room something is surprising, striking, scary, worth sitting with, buried, quiet, or that it stays with the speaker. "Here's a claim worth sitting with", "There's a provocation buried in", "This surprises people".
 
 Facts, figures and plain conversational framing are fine. Most items pass; list only the ones that fail.`,
       messages: [
@@ -178,8 +207,9 @@ What it never does:
 - Never answers its own question, or tells the guest what they think.
 - Never more than four sentences. Someone has to say it out loud without losing the room.
 - Never names a consultancy, analyst house, report, survey, study or author. The same rule as the question: the finding, not the brand. "One large global survey of MSLs found" is fine; a company's name is not.
+- Never points at a document the room has not been told about. The listener has read nothing: "the source says", "the article argues", "the guidance admits", "the report found", "the authors", "the deck", "the 2030 thinking" all leave them asking which one. State the finding as a plain fact about the field ("Most organizations pick their KOLs bottom-up"), or introduce where it comes from in words a stranger would follow ("a recent industry report on medical affairs argues", "one large survey of MSLs found").
 - Never leans on another question. ${STANDALONE_RULE}
-- Never a manufactured reaction or throat-clearing. No line about how surprising, striking, buried, quiet, scary, vivid or worth thinking about something is: not "this surprises people", "here's a claim worth sitting with", "there's a provocation buried in", "a number that should scare anyone", "this stays with me", "I keep coming back to", "most people skip past this". Those tell the room how to feel instead of telling it something. Say the thing; if it is surprising, the room will notice.
+- Never a manufactured reaction or throat-clearing. No "quiet" or "quietly" at all, and no line about how surprising, striking, buried, scary, vivid or worth thinking about something is: not "this surprises people", "here's a claim worth sitting with", "there's a provocation buried in", "a number that should scare anyone", "this stays with me", "I keep coming back to", "most people skip past this". Those tell the room how to feel instead of telling it something. Say the thing; if it is surprising, the room will notice.
 - Never a setup for its own sake. An opener, a quick follow-up, a question whose substance is already in the question, or one that lands harder bare gets setup "". Klein does not preface every question, and a bank where every question has a paragraph in front of it is one nobody can get through.`;
 
 /**
@@ -810,7 +840,7 @@ ${SETUP_RULE}
 Write each setup so it leads straight into that exact question as worded. ${STANDALONE_RULE}
 
 ${force ? `\nThe writer has asked for a setup on every question below by name, including ones you would normally leave bare. Write one for each: the shortest setup that makes the question land, one or two sentences where that is all it needs. Never return "".\n` : ""}
-Draw the substance from the research and reading list below first; where they say nothing on a question, use what you know of the subject, but never invent a figure. A number in a setup must come from the material below.
+When a question already has a setup being replaced, keep every figure and named finding it had ("more than a quarter", "20 percent relative to revenue"): those are why it was written. Draw the substance from the research and reading list below first; where they say nothing on a question, use what you know of the subject, but never invent a figure. A number in a setup must come from the material below.
 ${standing.trim() ? `\nThe writer's standing instruction on how their questions are written. It applies to the setups too and outranks every rule above:\n${standing.trim()}\n` : ""}
 Return one entry per question, with "index" exactly as given. Plain prose, no markdown, no quotation marks. Never an em dash or en dash.`,
     messages: [
