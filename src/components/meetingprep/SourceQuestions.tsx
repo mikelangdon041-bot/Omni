@@ -433,8 +433,13 @@ export function SourceQuestions({
                     <Button size="sm" onClick={() => replace(d, like)}>
                       <ArrowLeftRight size={12} /> Use this one instead
                     </Button>
-                    <Button size="sm" variant="secondary" onClick={() => add(d, like.picked ? "list" : "bank")}>
-                      Keep both
+                    {/* Keeping both used to put the new one wherever yours
+                        lived, with no say in it. Where it goes is the choice. */}
+                    <Button size="sm" variant="secondary" onClick={() => add(d, "list")}>
+                      <Plus size={12} /> Add to my list too
+                    </Button>
+                    <Button size="sm" variant="secondary" onClick={() => add(d, "bank")}>
+                      Add to bank
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => mark(d.id, "kept")}>
                       Keep mine
