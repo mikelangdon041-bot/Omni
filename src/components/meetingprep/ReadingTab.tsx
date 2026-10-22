@@ -142,7 +142,15 @@ export function ReadingTab({
         toast("info", "Nothing new turned up for that. Try putting it another way.");
         return;
       }
-      save({ reading: { ...r, sources: [...(r.sources || []), ...out.sources.map(stamp)] } });
+      const added = out.sources.map(stamp);
+      save({
+        reading: {
+          ...r,
+          sources: [...(r.sources || []), ...added],
+          // A replacement for one card is not a batch to judge; a search is.
+          ...(replacing ? {} : { lastFound: { ids: added.map((x) => x.id), ask: request } }),
+        },
+      });
       toast("success", `Added ${out.sources.length} ${out.sources.length === 1 ? "source" : "sources"}.`);
       setAsk("");
       setMoreOpen(false);
@@ -172,11 +180,46 @@ export function ReadingTab({
       );
   }
 
+  /**
+   * "Not what I wanted" about the whole last search: those sources come off,
+   * kept out of later searches with the reason, and the search runs again
+   * with the feedback added to what was asked.
+   */
+  function searchAgain(feedback: string) {
+    const now = getMeeting() || m;
+    const r: Reading = now.reading || {};
+    const ids = new Set(r.lastFound?.ids || []);
+    const gone = (r.sources || []).filter((x) => ids.has(x.id));
+    const reason = feedback.trim() || "not what I was looking for";
+    save({
+      reading: {
+        ...r,
+        sources: (r.sources || []).filter((x) => !ids.has(x.id)),
+        rejected: [...(r.rejected || []), ...gone.map((x) => ({ title: x.title, url: x.url, reason }))],
+        lastFound: undefined,
+      },
+    });
+    const asked = r.lastFound?.ask || "";
+    void findMore(
+      [asked && `First asked for: ${asked}`, `The last results were not it. The writer says: ${reason}`]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  }
+
+  function clearLastFound() {
+    const now = getMeeting() || m;
+    save({ reading: { ...(now.reading || {}), lastFound: undefined } });
+  }
+
   function setSteer(steer: string) {
     const now = getMeeting() || m;
     save({ reading: { ...(now.reading || {}), steer } });
   }
 
+  const justFound = new Set(
+    (reading.lastFound?.ids || []).filter((id) => sources.some((s) => s.id === id)),
+  );
   const must = sources.filter((s) => s.priority === "must");
   const skim = sources.filter((s) => s.priority !== "must");
 
@@ -278,6 +321,16 @@ export function ReadingTab({
         </form>
       )}
 
+      {justFound.size > 0 && (
+        <JustFound
+          titles={sources.filter((s) => justFound.has(s.id)).map((s) => s.title)}
+          ask={reading.lastFound?.ask || ""}
+          busy={Boolean(busy)}
+          onAgain={searchAgain}
+          onGood={clearLastFound}
+        />
+      )}
+
       {reading.overview && (
         <section className="rounded-xl border border-border bg-surface p-4 shadow-sm">
           <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold">
@@ -296,6 +349,7 @@ export function ReadingTab({
           title="Read before you go"
           items={must}
           busy={busy}
+          fresh={justFound}
           getMeeting={getMeeting}
           save={save}
           onReject={reject}
@@ -307,6 +361,7 @@ export function ReadingTab({
           title="Worth a skim"
           items={skim}
           busy={busy}
+          fresh={justFound}
           getMeeting={getMeeting}
           save={save}
           onReject={reject}
@@ -374,6 +429,7 @@ function SourceGroup({
   title,
   items,
   busy,
+  fresh,
   getMeeting,
   save,
   onReject,
@@ -382,6 +438,7 @@ function SourceGroup({
   title: string;
   items: ReadingSource[];
   busy: string;
+  fresh: Set<string>;
   getMeeting: GetMeeting;
   save: SaveMeeting;
   onReject: (s: ReadingSource, reason: string, replace: boolean) => void;
@@ -396,6 +453,7 @@ function SourceGroup({
             key={s.id}
             s={s}
             busy={busy}
+            isNew={fresh.has(s.id)}
             getMeeting={getMeeting}
             save={save}
             onReject={onReject}
@@ -410,6 +468,7 @@ function SourceGroup({
 function SourceCard({
   s,
   busy,
+  isNew = false,
   getMeeting,
   save,
   onReject,
@@ -417,6 +476,7 @@ function SourceCard({
 }: {
   s: ReadingSource;
   busy: string;
+  isNew?: boolean;
   getMeeting: GetMeeting;
   save: SaveMeeting;
   onReject: (s: ReadingSource, reason: string, replace: boolean) => void;
@@ -445,6 +505,11 @@ function SourceCard({
           )}
           <p className="mt-0.5 text-xs text-muted">
             {meta}
+            {isNew && (
+              <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+                Just found
+              </span>
+            )}
             {s.kind === "yours" && (
               <span className="ml-1.5 rounded bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--accent)]">
                 You added this
@@ -522,5 +587,54 @@ function SourceCard({
         </div>
       )}
     </li>
+  );
+}
+
+/** What the last search found, and the chance to say it missed. */
+function JustFound({
+  titles,
+  ask,
+  busy,
+  onAgain,
+  onGood,
+}: {
+  titles: string[];
+  ask: string;
+  busy: boolean;
+  onAgain: (feedback: string) => void;
+  onGood: () => void;
+}) {
+  const [feedback, setFeedback] = useState("");
+  return (
+    <section className="space-y-2 rounded-xl border border-amber-300 bg-amber-50/60 p-3 text-sm">
+      <p>
+        <span className="font-semibold">Just found {titles.length}</span>
+        {ask ? <span className="text-muted"> for &ldquo;{ask}&rdquo;</span> : null}:{" "}
+        <span className="text-ink/80">{titles.join(" · ")}</span>
+      </p>
+      <form
+        className="flex flex-wrap gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          onAgain(feedback);
+        }}
+      >
+        <Input
+          value={feedback}
+          onChange={(e) => setFeedback(e.target.value)}
+          placeholder='Not what you wanted? Say what is missing, e.g. "I wanted payer views, not more surveys"'
+          className="min-w-64 flex-1"
+        />
+        <Button type="submit" size="sm" disabled={busy}>
+          <Search size={13} /> Search again
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={onGood}>
+          These are fine
+        </Button>
+      </form>
+      <p className="text-[11px] text-muted">
+        Searching again takes these off the list and keeps them out of later searches.
+      </p>
+    </section>
   );
 }

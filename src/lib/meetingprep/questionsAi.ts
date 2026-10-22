@@ -768,3 +768,78 @@ Return one entry per question, with "index" exactly as given. Plain prose, no ma
   }
   return out;
 }
+
+const SIMILAR_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    matches: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: {
+          draft: { type: "number" as const },
+          existing: { type: "number" as const },
+        },
+        required: ["draft", "existing"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["matches"],
+  additionalProperties: false,
+};
+
+/**
+ * Which question the writer already has that each new one is really asking.
+ *
+ * Wording overlap is not the test: "how do you put a number on a trusted
+ * relationship" and "how do you measure a KOL relationship without cheapening
+ * it" share three words and are the same question. So it is judged, once per
+ * batch, on a model that is quick and strict. Returns, per draft, the index
+ * into `existing` it duplicates, or -1.
+ */
+export async function findSimilar({
+  drafts,
+  existing,
+  within = false,
+}: {
+  drafts: string[];
+  existing: string[];
+  /** Both lists are one batch: match only to an earlier question, never itself. */
+  within?: boolean;
+}): Promise<number[]> {
+  const out = drafts.map(() => -1);
+  if (!drafts.length || !existing.length) return out;
+  const res = await anthropic().messages.create({
+    model: CHECK_MODEL,
+    max_tokens: 1500,
+    output_config: { format: { type: "json_schema", schema: SIMILAR_SCHEMA } },
+    system: `You compare new interview questions against the ones the writer already has, so they never end up asking the same thing twice.
+
+For each new question, find the existing question that asks essentially the same thing: the same ask of the person answering, so that asking both in one session would feel repetitive, even if the wording, the angle or the setup differs. Sharing a topic is not enough. "How do you measure value?" and "What would you put on one slide to prove your worth to the board?" are different questions about the same topic; "How do you put a number on a trusted relationship?" and "How do you measure a KOL relationship without cheapening it?" are the same question.
+
+Return a match only when you are confident. Most new questions have none; leave those out. At most one existing match per new question: the closest.${
+      within
+        ? " The two lists are the SAME batch. A new question may only match an existing question with a SMALLER number than its own, never itself: you are finding the later question of each pair that repeats an earlier one."
+        : ""
+    }`,
+    messages: [
+      {
+        role: "user",
+        content: `New questions:\n${drafts.map((d, i) => `${i}. ${d}`).join("\n")}\n\nQuestions the writer already has:\n${existing
+          .map((e, i) => `${i}. ${e}`)
+          .join("\n")
+          .slice(0, 16000)}`,
+      },
+    ],
+  });
+  if (res.stop_reason === "refusal") return out;
+  const parsed = JSON.parse(firstText(res) || "{}");
+  for (const x of Array.isArray(parsed.matches) ? parsed.matches : []) {
+    const d = Number(x?.draft);
+    const e = Number(x?.existing);
+    if (Number.isInteger(d) && d >= 0 && d < out.length && Number.isInteger(e) && e >= 0 && e < existing.length)
+      if (!within || e < d) out[d] = e;
+  }
+  return out;
+}

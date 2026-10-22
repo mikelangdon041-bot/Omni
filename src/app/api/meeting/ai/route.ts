@@ -23,6 +23,7 @@ import {
 import { MEETING_TYPES } from "@/lib/meetingprep/types";
 import {
   fillOutQuestion,
+  findSimilar,
   writeQuestions,
   writeSetups,
   writeVariants,
@@ -66,6 +67,7 @@ export const maxDuration = 300;
 //                                              → { title, summary, findings:[], people:[], session }
 //   setups   { meeting, kolId?, research?, questions:[{text,category,why}], standing? }
 //                                              → { setups:[string] } (one per question, "" = none)
+//   similar  { drafts:[string], existing:[string] } → { matches:[number] } (-1 = none)
 //   person   { person:{name,role,org,notes}, subject }
 //                                              → { text, sources:[{title,url}] }
 
@@ -431,6 +433,18 @@ export async function POST(req: Request) {
         force: Boolean(body?.force),
       });
       return NextResponse.json({ setups });
+    }
+
+    // Which question already in the bank each new one duplicates, if any.
+    if (action === "similar") {
+      const list = (v: unknown, n: number) =>
+        (Array.isArray(v) ? v : []).slice(0, n).map((x) => String(x || "").slice(0, 1500));
+      const matches = await findSimilar({
+        drafts: list(body?.drafts, 10),
+        existing: list(body?.existing, 150),
+        within: Boolean(body?.within),
+      });
+      return NextResponse.json({ matches });
     }
 
     if (action === "probe") {

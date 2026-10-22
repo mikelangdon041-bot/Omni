@@ -203,6 +203,26 @@ export interface ReadingSource {
   /** Why it is worth the writer's time for THIS meeting. */
   why: string;
   priority: "must" | "skim";
+  /** Questions written from this piece, kept so they are not rewritten on every visit. */
+  questions?: SourceDraft[];
+}
+
+// A question written from one reading-list source, waiting on the writer.
+export interface SourceDraft {
+  id: string;
+  setup: string;
+  text: string;
+  why: string;
+  followUp: string;
+  forWhom: string;
+  category: string;
+  /** A question already in the bank that asks the same thing, by id. */
+  similarTo?: string;
+  /**
+   * What the writer did with it: put it in the bank or their list, used it
+   * in place of the similar one, or kept theirs instead.
+   */
+  done?: "bank" | "list" | "replaced" | "kept";
 }
 
 // Something about the subject that is not settled. A panel needs the sides
@@ -230,6 +250,11 @@ export interface Reading {
   /** What the writer wants from sources, obeyed by every later search. */
   steer?: string;
   rejected?: RejectedSource[];
+  /**
+   * What the last "Find more" turned up and what it was asked for, so the
+   * writer can say "not that" about the batch rather than one card at a time.
+   */
+  lastFound?: { ids: string[]; ask: string };
   at?: string;
   /** Setup it was built from, so a changed subject can say it is stale. */
   fingerprint?: string;
