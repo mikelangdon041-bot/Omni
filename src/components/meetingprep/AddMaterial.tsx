@@ -8,6 +8,7 @@
 import { useState } from "react";
 import { FileText, Link2, Loader2, ClipboardPaste } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
+import { Working } from "@/components/ui/Progress";
 import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Input";
 import { useToast } from "@/components/ui/Feedback";
@@ -97,6 +98,8 @@ function Body({
       <div className="flex flex-col items-center gap-3 py-8 text-center">
         <Loader2 size={22} className="animate-spin text-[var(--accent)]" />
         <p className="text-sm font-medium">{stage}</p>
+        {/* Measured: an agenda read in 13s; a long PDF or a photo can take longer. */}
+        <Working active seconds={20} label="Reading it" className="w-full max-w-xs text-left" />
         <p className="max-w-xs text-xs text-muted">
           You can close this. It keeps going, and tells you when it&apos;s done.
         </p>

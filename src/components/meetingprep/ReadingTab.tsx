@@ -23,6 +23,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { Working } from "@/components/ui/Progress";
 import { SourceQuestions } from "./SourceQuestions";
 import { Input } from "@/components/ui/Input";
 import { useToast } from "@/components/ui/Feedback";
@@ -239,12 +240,14 @@ export function ReadingTab({
         <div className="flex flex-wrap items-center justify-center gap-2">
           <Button onClick={() => void build()} disabled={Boolean(busy)}>
             {busy ? <Loader2 size={15} className="animate-spin" /> : <Search size={15} />}
-            {busy ? "Searching… about a minute" : "Build the reading list"}
+            {busy ? "Searching…" : "Build the reading list"}
           </Button>
           <Button variant="secondary" onClick={onAddSource}>
             <Plus size={15} /> Add your own
           </Button>
         </div>
+        {/* Measured: a full list ran 72-87s on the writer's panel. */}
+        <Working active={busy === "build"} seconds={90} label="Searching and reading the sources" className="text-left" />
       </div>
     );
 
@@ -273,7 +276,7 @@ export function ReadingTab({
         </Button>
         <Button size="sm" variant="ghost" onClick={() => void build()} disabled={Boolean(busy)}>
           {busy === "build" ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-          {busy === "build" ? "Rebuilding… about a minute" : "Rebuild"}
+          {busy === "build" ? "Rebuilding…" : "Rebuild"}
         </Button>
         <button
           type="button"
@@ -291,11 +294,14 @@ export function ReadingTab({
         </button>
       </div>
 
-      {busy && busy !== "build" && busy !== "more" && (
-        <p className="flex items-center gap-1.5 text-xs text-muted">
-          <Loader2 size={12} className="animate-spin" /> Finding a replacement…
-        </p>
-      )}
+      {/* Measured on the panel: a full list 72-87s, find more 14-34s. */}
+      <Working active={busy === "build"} seconds={90} label="Rebuilding the reading list" />
+      <Working active={busy === "more"} seconds={30} label="Searching for more" />
+      <Working
+        active={Boolean(busy) && busy !== "build" && busy !== "more"}
+        seconds={25}
+        label="Finding a replacement"
+      />
 
       {steerOpen && <SteerBox value={reading.steer || ""} onChange={setSteer} open />}
 

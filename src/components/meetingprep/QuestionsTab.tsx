@@ -43,7 +43,7 @@ import { useReview } from "@/lib/meetingprep/useReview";
 import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
-import { ProgressBar, useProgress } from "@/components/ui/Progress";
+import { ProgressBar, useProgress, Working } from "@/components/ui/Progress";
 import { useToast } from "@/components/ui/Feedback";
 import { htmlToPlain } from "@/lib/writer/types";
 import type { SaveState } from "@/lib/meetingprep/hooks";
@@ -825,6 +825,13 @@ export function QuestionsTab({
       {review.reviewing && (
         <ProgressBar pct={review.pct} label="Reading your whole pack back…" className="px-0.5" />
       )}
+      {/* Measured: 14 setups in 18s. Longer lists take a little longer. */}
+      <Working
+        active={settingUp}
+        seconds={10 + setupTargets.qs.length}
+        label="Writing setups"
+        className="px-0.5"
+      />
       {fillingAll && (
         <ProgressBar
           pct={Math.round((filledCount / Math.max(1, missingProbes)) * 100)}

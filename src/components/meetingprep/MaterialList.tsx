@@ -8,6 +8,7 @@ import { useState } from "react";
 import { FileText, Link2, Loader2, Plus, Trash2, UserPlus, Search } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { Working } from "@/components/ui/Progress";
 import { useToast } from "@/components/ui/Feedback";
 import {
   materialPurposeLabel,
@@ -245,6 +246,8 @@ export function PersonLookup({
 
   return (
     <div className="text-xs">
+      {/* Measured: 7s for one person. */}
+      <Working active={busy} seconds={10} label={`Looking up ${name}`} className="mb-1" />
       {profile?.text ? (
         <details>
           <summary className="cursor-pointer font-medium text-[var(--accent)]">

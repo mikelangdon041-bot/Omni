@@ -59,3 +59,46 @@ export function ProgressBar({
     </div>
   );
 }
+
+/**
+ * A bar for one AI step, with how long is left in words. The estimate is what
+ * the step measured on a real meeting; past it, the line says so rather than
+ * counting into negative seconds.
+ */
+export function Working({
+  active,
+  seconds,
+  label,
+  className = "",
+}: {
+  active: boolean;
+  seconds: number;
+  label: string;
+  className?: string;
+}) {
+  const pct = useProgress(active, seconds * 1000);
+  const [started, setStarted] = useState(0);
+  const [now, setNow] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    const t0 = Date.now();
+    const first = setTimeout(() => {
+      setStarted(t0);
+      setNow(t0);
+    }, 0);
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(timer);
+    };
+  }, [active]);
+  if (!active) return null;
+  const left = Math.round(seconds - (now - started) / 1000);
+  return (
+    <ProgressBar
+      pct={pct}
+      label={`${label} · ${left > 3 ? `about ${left}s left` : "nearly done…"}`}
+      className={className}
+    />
+  );
+}

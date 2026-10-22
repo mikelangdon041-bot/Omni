@@ -9,10 +9,17 @@
 // is checked against the questions already in the bank when it is written:
 // one that asks the same thing as a question they have says so, and they
 // choose between the two rather than finding the pair later in their list.
+//
+// Every request back to the writer model says what the writer wants, because
+// rewriting blind gives them another batch with the same problem and no way
+// to name it: a new batch, more like one they liked, another version of one,
+// or one fixed for what they did not like.
 
 import { useState } from "react";
-import { ArrowLeftRight, Check, Loader2, MessageCircleQuestion, Plus } from "lucide-react";
+import { ArrowLeftRight, Check, Copy, MessageCircleQuestion, Plus, RefreshCw, ThumbsDown } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
+import { Working } from "@/components/ui/Progress";
 import { useToast } from "@/components/ui/Feedback";
 import { withReading } from "@/lib/meetingprep/reading";
 import { meetingPayload, newId, type GetMeeting, type SaveMeeting } from "@/lib/meetingprep/material";
@@ -32,6 +39,26 @@ async function post<T>(body: unknown): Promise<T> {
 
 const liveQuestions = (m: MpMeeting) => (m.questions?.items || []).filter((q) => !q.deleted);
 
+/** What the writer asked for. "batch" is a whole new set; the rest are about one draft. */
+type Ask = { kind: "batch" } | { kind: "more" | "version" | "fix"; draft: SourceDraft };
+
+// Measured on the writer's panel: a batch with both checks ran about 45s.
+const SECONDS = { batch: 45, more: 40, version: 35, fix: 35 } as const;
+
+const PICKS = {
+  batch: ["Harder", "Shorter setups", "More on the data", "From a different angle", "Less like mine"],
+  more: ["Same angle", "Harder", "For a specific panelist", "Shorter"],
+  version: ["Blunter", "Shorter", "More personal", "Shorter setup"],
+  fix: ["Too long", "Too vague", "Too leading", "Setup doesn't fit", "Already asked this"],
+};
+
+const PROMPTS = {
+  batch: "What should be different? (optional)",
+  more: "What do you like about it? (optional)",
+  version: "What should change? (optional)",
+  fix: "What's wrong with it?",
+};
+
 export function SourceQuestions({
   s,
   getMeeting,
@@ -42,11 +69,17 @@ export function SourceQuestions({
   save: SaveMeeting;
 }) {
   const toast = useToast();
-  const [busy, setBusy] = useState(false);
+  /** "batch" or the id of the draft being worked on. */
+  const [busy, setBusy] = useState<string>("");
   const [open, setOpen] = useState(true);
+  /** The feedback box that is open, if any. */
+  const [asking, setAsking] = useState<Ask | null>(null);
+  const [note, setNote] = useState("");
   const drafts = s.questions || [];
 
-  /** Write onto this source's drafts, reading the meeting fresh. */
+  /** The drafts as they are now, read fresh: another save may have landed. */
+  const current = () => getMeeting()?.reading?.sources?.find((x) => x.id === s.id)?.questions || drafts;
+
   function setDrafts(next: SourceDraft[]) {
     const m = getMeeting();
     if (!m) return;
@@ -59,13 +92,46 @@ export function SourceQuestions({
     });
   }
 
-  async function write() {
+  function focusFor(ask: Ask, note: string, seen: SourceDraft[]): { focus: string; count: number } {
+    const base =
+      "Every question here is built on the one source marked THE SOURCE THIS BATCH IS BUILT ON: what it found, what it argues, and what it leaves open. Each one gets a setup that lays out the relevant finding or argument from it in plain words, without naming it, then asks what that means for the people answering.";
+    const said = note ? `\nThe writer says, and this outranks everything above: ${note}` : "";
+    if (ask.kind === "batch")
+      return {
+        count: 4,
+        focus: `${base} Three to five questions, no more; quality over count.${
+          seen.length
+            ? ` The writer has already seen these and wants different ones, so do not repeat them: ${seen.map((d) => d.text).join(" | ")}`
+            : ""
+        }${said}`,
+      };
+    const q = `${ask.draft.setup ? `Setup: ${ask.draft.setup}\n` : ""}Question: ${ask.draft.text}`;
+    if (ask.kind === "more")
+      return {
+        // Five asked, three kept: a single source has only so many distinct
+        // points, and the ones that repeat a draft already here are dropped.
+        count: 5,
+        focus: `${base} The writer liked this one and wants five more of the same kind: the same angle, register and kind of setup, each asking something genuinely different, never a rewording of it or of each other.\n${q}${said}`,
+      };
+    if (ask.kind === "version")
+      return {
+        count: 3,
+        focus: `${base} Rewrite this ONE question exactly two ways. Same job in the conversation, same thing being asked, but far enough apart that choosing between them is a real choice. Return exactly two.\n${q}${said}`,
+      };
+    return {
+      count: 3,
+      focus: `${base} The writer did not like this question. Write three replacements. All three ask about the SAME thing the original asks about, the same subject and the same point; only how it is asked changes, fixed for what the writer says is wrong with it. A replacement about a different point is not a fix.\n${q}${said}`,
+    };
+  }
+
+  async function generate(ask: Ask, note = "") {
     const m = getMeeting();
-    if (!m) return;
-    setBusy(true);
+    if (!m || busy) return;
+    setBusy(ask.kind === "batch" ? "batch" : ask.draft.id);
     setOpen(true);
     try {
       const live = liveQuestions(m);
+      const seen = current();
       const piece = [
         `${s.title}${s.outlet ? ` (${s.outlet}${s.date ? `, ${s.date}` : ""})` : ""}`,
         s.summary,
@@ -73,24 +139,23 @@ export function SourceQuestions({
       ]
         .filter(Boolean)
         .join("\n");
+      const { focus, count } = focusFor(ask, note, seen);
       const json = await post<{ questions: Partial<SourceDraft>[] }>({
         action: "questions",
         meeting: meetingPayload(m),
         kolId: m.kol_id || "",
         research: withReading(`THE SOURCE THIS BATCH IS BUILT ON:\n${piece}`, m),
-        // Not the drafts being replaced: "write different ones" should not
-        // be told the old batch is already in the bank.
-        existing: live.map((q) => q.text),
+        // The bank and every draft on this source, the one being worked from
+        // included: without them "another version" handed the original back
+        // word for word and "more like this" rewrote drafts already here.
+        existing: [...live.map((q) => q.text), ...seen.map((d) => d.text)],
         categories: [...new Set(live.map((q) => q.category))],
-        count: 4,
-        focus: `Every question in this batch is built on the one source marked THE SOURCE THIS BATCH IS BUILT ON: what it found, what it argues, and what it leaves open. Each one gets a setup that lays out the relevant finding or argument from it in plain words, without naming it, then asks what that means for the people answering. Three to five questions, no more; quality over count.${
-          drafts.length
-            ? ` The writer has already seen these and wants different ones, so do not repeat them: ${drafts.map((d) => d.text).join(" | ")}`
-            : ""
-        }`,
+        count,
+        focus,
         guidance: m.questions?.guidance || "",
       });
-      const got: SourceDraft[] = (json.questions || []).slice(0, 5).map((q) => ({
+      const cap = ask.kind === "batch" ? 5 : ask.kind === "more" ? 3 : 2;
+      let got: SourceDraft[] = (json.questions || []).map((q) => ({
         id: newId("sd"),
         setup: String(q.setup || ""),
         text: String(q.text || ""),
@@ -100,9 +165,27 @@ export function SourceQuestions({
         category: String(q.category || "Questions"),
       }));
       if (!got.length) throw new Error("Nothing came back. Try again.");
-      // Two drafts in one batch can ask the same thing as each other, which
-      // the bank check cannot see. The later one of a pair is dropped.
-      if (got.length > 1) {
+
+      // A fix that wandered onto a different point is not a fix. Keep the
+      // replacements judged to ask what the original asked; if none are,
+      // keep what came back rather than nothing.
+      if (ask.kind === "fix" && got.length > 1) {
+        try {
+          const { matches } = await post<{ matches: number[] }>({
+            action: "similar",
+            drafts: got.map((d) => d.text),
+            existing: [ask.draft.text],
+          });
+          const onPoint = got.filter((_, i) => matches?.[i] === 0);
+          if (onPoint.length) got = onPoint;
+        } catch {
+          // Keep them all.
+        }
+      }
+
+      // Two new drafts that ask the same thing as each other: keep the first.
+      // Not for versions, which are meant to be the same question.
+      if (got.length > 1 && (ask.kind === "batch" || ask.kind === "more")) {
         try {
           const { matches } = await post<{ matches: number[] }>({
             action: "similar",
@@ -119,8 +202,31 @@ export function SourceQuestions({
         }
       }
 
-      // Which of the questions already in the bank each draft repeats. Its
-      // own quick check, so a draft can say which one it is like.
+      // One that asks what a draft already on this source asks adds nothing.
+      // Not for versions, which are meant to ask the same thing.
+      const others = seen.filter((d) => ask.kind === "batch" ? d.done : true).map((d) => d.text);
+      if (got.length && others.length && ask.kind !== "version") {
+        try {
+          const { matches } = await post<{ matches: number[] }>({
+            action: "similar",
+            drafts: got.map((d) => d.text),
+            existing: others,
+          });
+          // A fix is checked against everything but the one it replaces.
+          const fixing = ask.kind === "fix" ? ask.draft.text : "";
+          for (let i = got.length - 1; i >= 0; i--) {
+            const k = matches?.[i];
+            if (typeof k === "number" && k >= 0 && others[k] !== fixing) got.splice(i, 1);
+          }
+        } catch {
+          // Keep them rather than lose the batch.
+        }
+        if (!got.length) throw new Error("Everything it wrote repeated a question already here. Try saying what you want differently.");
+      }
+
+      got = got.slice(0, cap);
+
+      // Which question already in the bank each one repeats, so it can say so.
       if (live.length) {
         try {
           const { matches } = await post<{ matches: number[] }>({
@@ -133,17 +239,26 @@ export function SourceQuestions({
             if (typeof k === "number" && k >= 0 && live[k]) d.similarTo = live[k].id;
           });
         } catch {
-          // Without the check the drafts are still worth having; they just
-          // cannot say which question they are like.
+          // Without the check the drafts are still worth having.
         }
       }
-      // Kept drafts the writer already acted on stay in the record; the
-      // untouched ones are what "different ones" replaces.
-      setDrafts([...drafts.filter((d) => d.done), ...got]);
+
+      const now = current();
+      if (ask.kind === "batch") {
+        // The ones already acted on stay; the untouched ones are replaced.
+        setDrafts([...now.filter((d) => d.done), ...got]);
+      } else {
+        // Next to the one they came from. A fix takes its place.
+        const at = now.findIndex((d) => d.id === ask.draft.id);
+        const keep = ask.kind === "fix" ? 0 : 1;
+        const next = [...now];
+        next.splice(at < 0 ? next.length : at + (keep ? 1 : 0), at < 0 ? 0 : 1 - keep, ...got);
+        setDrafts(next);
+      }
     } catch (e) {
       toast("error", (e as Error).message);
     } finally {
-      setBusy(false);
+      setBusy("");
     }
   }
 
@@ -169,9 +284,7 @@ export function SourceQuestions({
   }
 
   function mark(id: string, done: SourceDraft["done"]) {
-    const m = getMeeting();
-    const now = m?.reading?.sources?.find((x) => x.id === s.id)?.questions || drafts;
-    setDrafts(now.map((x) => (x.id === id ? { ...x, done } : x)));
+    setDrafts(current().map((x) => (x.id === id ? { ...x, done } : x)));
   }
 
   function add(d: SourceDraft, where: "bank" | "list") {
@@ -200,25 +313,84 @@ export function SourceQuestions({
     toast("success", "Swapped in. The old one is in the bin on the Questions tab.");
   }
 
+  function openAsk(ask: Ask) {
+    setAsking(ask);
+    setNote("");
+  }
+
+  // The feedback box for whichever request is open. A function that returns
+  // markup, not a component: one declared in here would be a new component
+  // every render, and the box would lose its caret on every keystroke.
+  function askBox(ask: Ask) {
+    const required = ask.kind === "fix";
+    return (
+      <form
+        className="mt-2 space-y-2 rounded-md border border-border bg-surface p-2.5"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (required && !note.trim()) return;
+          setAsking(null);
+          void generate(ask, note.trim());
+        }}
+      >
+        <p className="text-xs font-medium">{PROMPTS[ask.kind]}</p>
+        <div className="flex flex-wrap gap-1.5">
+          {PICKS[ask.kind].map((p) => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => setNote((f) => (f.includes(p) ? f : f ? `${f}; ${p}` : p))}
+              className="rounded-full border border-border px-2.5 py-0.5 text-xs text-muted hover:text-ink"
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+        <Input
+          autoFocus
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder={required ? "Say what you didn't like" : "Or say it in your own words"}
+        />
+        <div className="flex justify-end gap-2">
+          <Button type="button" size="sm" variant="ghost" onClick={() => setAsking(null)}>
+            Cancel
+          </Button>
+          <Button type="submit" size="sm" disabled={Boolean(busy) || (required && !note.trim())}>
+            {ask.kind === "batch"
+              ? "Write them"
+              : ask.kind === "more"
+                ? "Write more"
+                : ask.kind === "version"
+                  ? "Write 2 versions"
+                  : "Fix it"}
+          </Button>
+        </div>
+      </form>
+    );
+  }
+
   if (!drafts.length || !open)
     return (
-      <button
-        type="button"
-        onClick={() => (drafts.length ? setOpen(true) : void write())}
-        disabled={busy}
-        className="mt-2 inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs font-medium text-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:opacity-60"
-      >
-        {busy ? <Loader2 size={13} className="animate-spin" /> : <MessageCircleQuestion size={13} />}
-        {busy
-          ? "Writing questions from it…"
-          : drafts.length
-            ? `Questions from this (${drafts.length})`
-            : "Questions from this"}
-      </button>
+      <div className="mt-2">
+        {busy === "batch" ? (
+          <Working active seconds={SECONDS.batch} label="Writing questions from this source" />
+        ) : (
+          <button
+            type="button"
+            onClick={() => (drafts.length ? setOpen(true) : void generate({ kind: "batch" }))}
+            className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs font-medium text-[var(--accent)] hover:bg-[var(--accent-soft)]"
+          >
+            <MessageCircleQuestion size={13} />
+            {drafts.length ? `Questions from this (${drafts.length})` : "Questions from this"}
+          </button>
+        )}
+      </div>
     );
 
   const m = getMeeting();
   const byId = new Map(m ? liveQuestions(m).map((q) => [q.id, q]) : []);
+  const askingDraft = asking && asking.kind !== "batch" ? asking.draft.id : "";
 
   return (
     <div className="mt-3 space-y-2 rounded-lg bg-canvas p-3">
@@ -244,7 +416,7 @@ export function SourceQuestions({
                 </div>
               )}
 
-              <div className="mt-1.5 flex flex-wrap gap-1.5">
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                 {d.done ? (
                   <span className="inline-flex items-center gap-1 text-xs text-emerald-700">
                     <Check size={12} />
@@ -278,25 +450,66 @@ export function SourceQuestions({
                     </Button>
                   </>
                 )}
+                {/* Working from this one: more of the kind, another way to
+                    ask it, or a fix for what is wrong with it. */}
+                {!busy && (
+                  <span className="ml-auto flex flex-wrap gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => openAsk({ kind: "more", draft: d })}
+                      className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs text-muted hover:bg-surface hover:text-ink"
+                    >
+                      <Copy size={12} /> More like this
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openAsk({ kind: "version", draft: d })}
+                      className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs text-muted hover:bg-surface hover:text-ink"
+                    >
+                      <RefreshCw size={12} /> Another version
+                    </button>
+                    {!d.done && (
+                      <button
+                        type="button"
+                        onClick={() => openAsk({ kind: "fix", draft: d })}
+                        className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs text-muted hover:bg-surface hover:text-ink"
+                      >
+                        <ThumbsDown size={12} /> What&apos;s wrong?
+                      </button>
+                    )}
+                  </span>
+                )}
               </div>
+              {askingDraft === d.id && asking && askBox(asking)}
+              {busy === d.id && asking === null && (
+                <Working
+                  active
+                  seconds={SECONDS.more}
+                  label="Writing from this question"
+                  className="mt-2"
+                />
+              )}
             </li>
           );
         })}
       </ul>
-      <div className="flex justify-end gap-2">
-        <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
-          Hide
-        </Button>
-        <Button size="sm" variant="ghost" onClick={() => void write()} disabled={busy}>
-          {busy ? (
-            <>
-              <Loader2 size={12} className="animate-spin" /> Writing…
-            </>
-          ) : (
-            "Write different ones"
-          )}
-        </Button>
-      </div>
+
+      {busy === "batch" && <Working active seconds={SECONDS.batch} label="Writing different ones" />}
+
+      {asking?.kind === "batch" ? (
+        askBox(asking)
+      ) : (
+        !busy && (
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
+              Hide
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => openAsk({ kind: "batch" })}>
+              Write different ones
+            </Button>
+          </div>
+        )
+      )}
     </div>
   );
 }
