@@ -545,6 +545,40 @@ function SourceCard({
           </button>
         )}
       </div>
+      {/* Right under the button. At the foot of the card it opened below the
+          whole list of drafted questions, off-screen, and the click looked dead. */}
+      {rejecting && (
+        <div className="mt-2 space-y-2 rounded-lg border border-border bg-canvas p-3">
+          <p className="text-xs font-medium">What&apos;s wrong with it? Later searches will avoid the same thing.</p>
+          <p className="text-[11px] text-muted">Questions from it already in your list or bank stay where they are.</p>
+          <div className="flex flex-wrap gap-1.5">
+            {REASONS.map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setReason(r)}
+                className={`rounded-full border px-2.5 py-0.5 text-xs ${
+                  reason === r ? "border-[var(--accent)] text-[var(--accent)]" : "border-border text-muted hover:text-ink"
+                }`}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+          <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Or say it in your words" />
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="ghost" onClick={() => setRejecting(false)}>
+              Cancel
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => onReject(s, reason.trim(), false)}>
+              Just remove it
+            </Button>
+            <Button size="sm" onClick={() => onReject(s, reason.trim(), true)} disabled={Boolean(busy)}>
+              Replace it
+            </Button>
+          </div>
+        </div>
+      )}
 
       {s.summary && <p className="mt-2 text-sm leading-relaxed">{s.summary}</p>}
       {s.kind === "found" && s.read !== "full" && (
@@ -577,34 +611,6 @@ function SourceCard({
         </p>
       )}
 
-      {rejecting && (
-        <div className="mt-3 space-y-2 rounded-lg bg-canvas p-3">
-          <p className="text-xs font-medium">What&apos;s wrong with it? Later searches will avoid the same thing.</p>
-          <div className="flex flex-wrap gap-1.5">
-            {REASONS.map((r) => (
-              <button
-                key={r}
-                type="button"
-                onClick={() => setReason(r)}
-                className={`rounded-full border px-2.5 py-0.5 text-xs ${
-                  reason === r ? "border-[var(--accent)] text-[var(--accent)]" : "border-border text-muted hover:text-ink"
-                }`}
-              >
-                {r}
-              </button>
-            ))}
-          </div>
-          <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Or say it in your words" />
-          <div className="flex justify-end gap-2">
-            <Button size="sm" variant="ghost" onClick={() => onReject(s, reason.trim(), false)}>
-              Just remove it
-            </Button>
-            <Button size="sm" onClick={() => onReject(s, reason.trim(), true)} disabled={Boolean(busy)}>
-              Replace it
-            </Button>
-          </div>
-        </div>
-      )}
     </li>
   );
 }
