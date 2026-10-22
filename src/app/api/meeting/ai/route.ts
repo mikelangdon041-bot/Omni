@@ -362,6 +362,7 @@ export async function POST(req: Request) {
         focus: String(body?.focus || "").slice(0, 500),
         guidance: String(body?.guidance || "").slice(0, 2000),
         coverage: String(body?.coverage || "").slice(0, 2000),
+        sourceText: String(body?.sourceText || "").slice(0, 45000),
       });
       return NextResponse.json({ questions });
     }

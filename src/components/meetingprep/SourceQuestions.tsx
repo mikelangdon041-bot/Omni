@@ -39,6 +39,30 @@ async function post<T>(body: unknown): Promise<T> {
 
 const liveQuestions = (m: MpMeeting) => (m.questions?.items || []).filter((q) => !q.deleted);
 
+/**
+ * The whole of the source, not the summary of it. Material the writer added
+ * already has its text; a found source is opened at its link, every time
+ * (a few seconds), rather than kept: sixty slides of text on every source
+ * would ride along on every load of every meeting. "" when it cannot be
+ * read, and the batch is written from the summary instead.
+ */
+async function fullTextOf(s: ReadingSource, m: MpMeeting): Promise<string> {
+  if (s.docId) return (m.documents || []).find((d) => d.id === s.docId)?.text || "";
+  if (!s.url) return "";
+  try {
+    const res = await fetch("/api/meeting/extract", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ url: s.url }),
+    });
+    const json = await res.json().catch(() => ({}));
+    return res.ok ? String(json.text || "") : "";
+  } catch {
+    return "";
+  }
+}
+
 /** What the writer asked for. "batch" is a whole new set; the rest are about one draft. */
 type Ask = { kind: "batch" } | { kind: "more" | "version" | "fix"; draft: SourceDraft };
 
@@ -92,9 +116,21 @@ export function SourceQuestions({
     });
   }
 
-  function focusFor(ask: Ask, note: string, seen: SourceDraft[]): { focus: string; count: number } {
-    const base =
-      "Every question here is built on the one source marked THE SOURCE THIS BATCH IS BUILT ON: what it found, what it argues, and what it leaves open. Each one gets a setup that lays out the relevant finding or argument from it in plain words, without naming it, then asks what that means for the people answering.";
+  function focusFor(
+    ask: Ask,
+    note: string,
+    seen: SourceDraft[],
+    full: boolean,
+  ): { focus: string; count: number } {
+    // With the whole document in hand, the questions already written show
+    // which parts of it have been used. Told only "do not repeat these
+    // questions", a second batch from a sixty-seven slide deck came back on
+    // the same three points in new words.
+    const deeper =
+      full && seen.length
+        ? ` The questions already written from it used some of its points. Go to the parts of the document they did not use: its other findings, figures, frameworks, examples, warnings and recommendations, and build on those.`
+        : "";
+    const base = `Every question here is built on the one source marked THE SOURCE THIS BATCH IS BUILT ON: what it found, what it argues, and what it leaves open. Each one gets a setup that lays out the relevant finding or argument from it in plain words, without naming it, then asks what that means for the people answering.${deeper}`;
     const said = note ? `\nThe writer says, and this outranks everything above: ${note}` : "";
     const avoid = seen.length
       ? ` The writer has already seen these and wants different ones, so do not repeat them: ${seen.map((d) => d.text).join(" | ")}`
@@ -106,7 +142,7 @@ export function SourceQuestions({
       return {
         count: 3,
         focus: `THE WRITER ASKED FOR THIS, and it decides what every question is about: ${note}
-Write two or three questions specifically on that, no more, each with a setup. Draw on the source marked THE SOURCE THIS BATCH IS BUILT ON wherever it bears on the request; where it does not, use the rest of the reading list and what you know of the field, and keep the request. Never invent a figure: a number in a setup must come from the material given. Read the request the way someone working in this field means it, and never bend it to fit the source: if the source is about something else, the request still wins, and the source is only used where it genuinely bears. A question that is not about what the writer asked for is wrong however good it is.${avoid}`,
+Write two or three questions specifically on that, no more, each with a setup.${deeper} Draw on the source marked THE SOURCE THIS BATCH IS BUILT ON wherever it bears on the request; where it does not, use the rest of the reading list and what you know of the field, and keep the request. Never invent a figure: a number in a setup must come from the material given. Read the request the way someone working in this field means it, and never bend it to fit the source: if the source is about something else, the request still wins, and the source is only used where it genuinely bears. A question that is not about what the writer asked for is wrong however good it is.${avoid}`,
       };
     if (ask.kind === "batch")
       return {
@@ -147,12 +183,20 @@ Write two or three questions specifically on that, no more, each with a setup. D
       ]
         .filter(Boolean)
         .join("\n");
-      const { focus, count } = focusFor(ask, note, seen);
+      const sourceText = await fullTextOf(s, m);
+      if (!sourceText && s.url)
+        toast("info", "Couldn't open the document at that link, so these are written from its summary.");
+      const { focus, count } = focusFor(ask, note, seen, Boolean(sourceText));
       const json = await post<{ questions: Partial<SourceDraft>[] }>({
         action: "questions",
         meeting: meetingPayload(m),
         kolId: m.kol_id || "",
-        research: withReading(`THE SOURCE THIS BATCH IS BUILT ON:\n${piece}`, m),
+        research: withReading(
+          sourceText
+            ? `THE SOURCE THIS BATCH IS BUILT ON is ${s.title}${s.outlet ? ` (${s.outlet})` : ""}, given in full below.`
+            : `THE SOURCE THIS BATCH IS BUILT ON:\n${piece}`,
+          m,
+        ),
         // The bank and every draft on this source, the one being worked from
         // included: without them "another version" handed the original back
         // word for word and "more like this" rewrote drafts already here.
@@ -161,6 +205,7 @@ Write two or three questions specifically on that, no more, each with a setup. D
         count,
         focus,
         guidance: m.questions?.guidance || "",
+        sourceText,
       });
       const cap = ask.kind === "batch" ? (note ? 3 : 5) : ask.kind === "more" ? 3 : 2;
       let got: SourceDraft[] = (json.questions || []).map((q) => ({

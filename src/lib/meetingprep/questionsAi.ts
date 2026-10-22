@@ -63,7 +63,7 @@ const STANDALONE_RULE = `Each setup must make complete sense on its own, said co
 
 // Words that only make sense if something else was said first.
 const LEANS_ON =
-  /\b(?:that same|this same|those same|the same (?:survey|study|report|paper|data|research|finding|findings|group|people|respondents|numbers?)|as (?:I|we) (?:said|mentioned|noted|discussed)|(?:I|we) (?:just )?mentioned|(?:said|mentioned|noted) earlier|earlier question|coming back to|come back to|going back to|as before|once again|another finding from|the other finding|building on that|on that same)\b/i;
+  /\b(?:that same|this same|those same|the same (?:survey|study|report|paper|data|research|finding|findings|group|people|respondents|numbers?|guidance|document|deck|piece|source|article|framework|standards?|work|analysis|review)|as (?:I|we) (?:said|mentioned|noted|discussed)|(?:I|we) (?:just )?mentioned|(?:said|mentioned|noted) earlier|earlier question|coming back to|come back to|going back to|as before|once again|another finding from|the other finding|building on that|on that same)\b/i;
 
 /**
  * The phrase in a setup that needs something said before it, or null.
@@ -528,10 +528,19 @@ export async function writeQuestions({
   focus = "",
   guidance = "",
   coverage = "",
+  sourceText = "",
 }: {
   meeting: MeetingPayload;
   kolBlock?: string;
   research?: string;
+  /**
+   * The whole of one document the batch is written from: a reading-list
+   * source opened at its link, or material the writer uploaded. Its own
+   * block, apart from the research, so a sixty-slide deck is not cut down to
+   * the research budget, and so "based on this publication" has the
+   * publication to work from rather than a four-line summary of it.
+   */
+  sourceText?: string;
   /** The brief, so the bank extends it rather than repeating it. */
   briefText?: string;
   /** Questions already in the bank — never repeat or paraphrase these. */
@@ -550,6 +559,8 @@ export async function writeQuestions({
     meetingContext(meeting, kolBlock),
     research && `Research notes, from a web search run for this meeting. This is your best material — most questions should be traceable to something in here:\n${research.slice(0, 20000)}`,
     briefText && `The brief already written for this meeting:\n${briefText.slice(0, 12000)}`,
+    sourceText &&
+      `THE FULL TEXT OF THE SOURCE THIS BATCH IS BUILT ON. Work from what it actually says: its specific findings, frameworks, examples, recommendations and admissions, in its own terms, not a summary of it:\n${sourceText.slice(0, 45000)}`,
   ]
     .filter(Boolean)
     .join("\n\n");
