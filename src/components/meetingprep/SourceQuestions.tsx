@@ -913,19 +913,20 @@ Write questions specifically on that, each with a setup. How many is set by the 
                 )}
               </span>
             )}
-            <p className="text-[15px] font-medium leading-snug text-ink">{d.text}</p>
+            {/* In the order it is said: the whole setup, then the question. */}
             {setup ? (
-              <Setup text={setup} />
+              <p className="text-sm leading-relaxed text-ink/75">{setup}</p>
             ) : (
               <button
                 type="button"
                 onClick={() => void addSetupTo(d)}
                 disabled={busy === d.id}
-                className="mt-1 text-xs font-medium text-[var(--accent)] hover:underline disabled:opacity-60"
+                className="text-xs font-medium text-[var(--accent)] hover:underline disabled:opacity-60"
               >
                 {busy === d.id ? "Writing a setup…" : "Add a setup"}
               </button>
             )}
+            <p className="mt-1.5 text-[15px] font-medium leading-snug text-ink">{d.text}</p>
           </div>
         </div>
 
@@ -1132,23 +1133,6 @@ function IconAction({ label, onClick, children }: { label: string; onClick: () =
     >
       {children}
     </button>
-  );
-}
-
-/** The setup under its question: two lines, the rest a click away. */
-function Setup({ text }: { text: string }) {
-  const [full, setFull] = useState(false);
-  const long = text.length > 180;
-  return (
-    <p className="mt-1 text-xs leading-relaxed text-muted">
-      <span className="font-semibold text-ink/60">Setup: </span>
-      {full || !long ? text : `${text.slice(0, 170).replace(/\s+\S*$/, "")}… `}
-      {long && (
-        <button type="button" onClick={() => setFull((v) => !v)} className="text-[var(--accent)] hover:underline">
-          {full ? " less" : "more"}
-        </button>
-      )}
-    </p>
   );
 }
 
