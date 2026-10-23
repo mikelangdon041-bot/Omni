@@ -184,6 +184,63 @@ const FIT_SCHEMA = {
  * Returns index to the problem for each that scores under 4. Only judged
  * where there is a setup to follow.
  */
+/**
+ * What the question after a setup is for. The writer: "how often does this
+ * happen", "is there real data behind it", "was it data or an MSL vouching"
+ * do not start a conversation. A panel question is an invitation to a long
+ * answer, a story or an argument, never a choice between two answers.
+ */
+export const OPEN_QUESTION_RULE = `The question after a setup starts a conversation: an invitation to a long answer, where a panelist could talk for two minutes and still not be done.
+
+The setup explains something general: an idea, a finding, a problem, an argument. The panelists are experienced people in the field, but you know nothing about what they personally have done. So the question never assumes they have used the method, tool, metric or framework the setup describes, and never assumes they have a story of it working or failing. "Tell us about a time one of these ratios caught a relationship going sideways" is absurd: nobody knows if they ever used that ratio. Every panelist must be able to answer it well, whatever they have or have not tried.
+
+What it asks for instead:
+- how the problem the setup describes shows up in their own world, and what they make of it;
+- where they land on the argument, and why;
+- what it would take, what would have to change, or what gets in the way, for the idea to work where they sit;
+- how they think it through or handle it, when the problem is one everyone in their role faces anyway (leadership wanting a number, an MSL's time, a budget).
+Good shapes: "How does that play out where you sit?", "Where do you land on that, and why?", "What would it take for that to work in your organisation?", "What gets in the way of...?", "How do you think about X when Y?", "Make the case for or against...". Use "Tell us about a time" only for something every person in their role has lived through.
+
+Never:
+- offer a choice ("A, or B?", "data or gut?", "X versus Y?"): they pick one and stop;
+- ask for a frequency, count, share or estimate ("how often", "how many", "what share"), a yes/no or a fact check ("is there", "do you", "have you"), or "when was the last time";
+- say "be honest" or imply they otherwise would not be;
+- open every question the same way.`;
+
+/** Openings handed out in turn when many questions are rewritten at once. */
+const OPENERS = [
+  "How does that play out where you sit...",
+  "Where do you land on...",
+  "What would it take for...",
+  "What gets in the way of...",
+  "How do you think about...",
+  "Make the case for or against...",
+  "What would have to change for...",
+  "What does that look like in your organisation...",
+];
+
+/**
+ * A closed question by its shape: either/or, frequency or count, or opened
+ * with a verb that wants yes or no. The model judges let these through
+ * ("Be honest, what share...", "is there real data behind that or did it
+ * come down to an MSL saying trust me"), so they are caught by pattern too.
+ */
+export function closedQuestion(text: string): string {
+  if (/\b(tell us|tell me|walk us through)\b[^?]*\b(a time|the time|when)\b[^?]*\b(this|these|that|those|one of these|such an?)\s+(ratio|metric|tool|dashboard|framework|model|approach|method|score|index|kind of)/i.test(text))
+    return "it assumes they have used what the setup describes";
+  const t = text.trim().replace(/^(so|and|but|okay|now|honestly)[,\s]+/i, "");
+  // the last clause is the question actually asked
+  const asked = (t.split(/[,;:.]\s+/).filter((x) => x.includes("?")).pop() || t).trim();
+  if (/\b(how often|how many|how much of|what share|what percentage|what proportion|what fraction|how frequently|when was the last time)\b/i.test(asked))
+    return "it asks for a number or a frequency, which gets a short answer";
+  if (/\bbe honest\b/i.test(t)) return "\"be honest\" implies they otherwise would not be";
+  if (/,?\s+or\s+(is|was|did|do|does|are|were|has|have|would|could|can|just|simply|a|an|the|more|less|it|they|you|someone)\b[^?]*\?\s*$/i.test(t) || /\bversus\b|\bvs\.?\s/i.test(asked))
+    return "it offers a choice between two answers, so they pick one and stop";
+  if (/^(is|are|was|were|do|does|did|have|has|had|would|will|could|can|should|shall)\s/i.test(asked))
+    return "it can be answered yes or no";
+  return "";
+}
+
 export async function judgeFit(items: { setup: string; text: string }[]): Promise<Map<number, string>> {
   const out = new Map<number, string>();
   const idx = items.map((x, i) => (x.setup.trim() ? i : -1)).filter((i) => i >= 0);
@@ -198,10 +255,10 @@ export async function judgeFit(items: { setup: string; text: string }[]): Promis
           output_config: { format: { type: "json_schema", schema: FIT_SCHEMA } },
           system: `Each item is a setup a panel moderator says, then the question they ask after it. The setups are good. Score only the QUESTION, 1 to 5, on whether it makes the most of its setup.
 
-5: the question a sharp moderator would ask the moment that setup ends. It goes straight at the specific tension or finding the setup laid out and makes the panelist answer from what they have done: how they handled it, what they chose and why, what worked, what failed, what it cost, what they would change. Only someone who has done the work could answer it well.
+5: the question a sharp moderator would ask the moment that setup ends, and one that starts a conversation: the panelist could talk for two minutes, telling a story or making an argument. It goes straight at the specific tension or finding the setup laid out and asks how it plays out in their world, where they land on it and why, or what it would take. Any experienced panelist can answer it well, whether or not they have done what the setup describes.
 4: on the setup's point and draws on experience, but could be sharper or more specific to what the setup set up.
 3: related to the setup but generic: it could follow almost any setup on the subject, or it restates the setup as a question, or asks for an opinion anyone could give.
-2: narrow or flat: a date, a count, a yes/no, a "have you ever", a "when was the last time", or a detail of their process that teaches the room nothing.
+2: presumes, closed or flat: it assumes they have used the method, tool or metric the setup describes, or have a story of it working or failing ("tell us about a time one of these ratios caught..."); or a choice between two answers ("data, or an MSL vouching?"), a frequency, count or share ("how often", "what share"), a yes/no or fact check ("is there real data behind that"), a "when was the last time", or a detail of their process that teaches the room nothing. These get a short answer and end the conversation.
 1: about something other than what the setup laid out.
 
 Be demanding: a question that merely relates to its setup is a 3. For anything under 5, say in one line what it misses. Score every item.`,
@@ -224,6 +281,11 @@ Be demanding: a question that merely relates to its setup is a 3. For anything u
       }
     }),
   );
+  // Closed by its shape, whatever the score.
+  for (const i of idx) {
+    const why = closedQuestion(items[i].text);
+    if (why && !out.has(i)) out.set(i, `${why}; ask for the story or the argument instead`);
+  }
   return out;
 }
 
@@ -278,8 +340,10 @@ What a good setup does, in his manner:
 
 The question after a setup:
 - asks about the specific problem, tension or finding the setup just laid out, so it is the obvious next thing to ask the moment the setup ends. A question about a neighbouring point wastes the setup.
-- asks the people answering for what they know from doing the work: how they handled it, what they tried, what worked and what did not, what they would change, what it cost them, how they would fix it.
+- asks the people answering what they know from their own seat: how the problem plays out where they sit, where they land on it and why, what it would take to fix. It never assumes they have done what the setup describes.
 - never asks "when was the last time", never a yes/no, never a detail of their process that teaches the room nothing.
+
+${OPEN_QUESTION_RULE}
 
 What it never does:
 - Never answers its own question, or tells the guest what they think.
@@ -1117,10 +1181,13 @@ export async function rewriteQuestion({
   kind = "fix",
   standing = "",
   count = 2,
+  opener = "",
 }: {
   meeting: MeetingPayload;
   setup: string;
   question: string;
+  /** A suggested opening, so a batch of rewrites does not all start alike. */
+  opener?: string;
   /** What the writer said about it. */
   complaint?: string;
   /** "fix": they did not like it. "version": they want it asked another way. */
@@ -1138,11 +1205,13 @@ ${SEAT_RULE}
 
 The question:
 - is about the exact problem or tension the setup lays out, so it lands as the obvious next thing to ask after hearing it. A question about a neighbouring point is wrong however good it is.
-- asks the people answering for what they know from doing the work: how they fix it, what they have tried, what worked and what did not, what they would change, what it cost them. Not "when was the last time", not yes/no, not a trivia question about their process.
+- asks the people answering what they know from their own seat: how the problem plays out where they sit, where they land on it and why, what it would take to fix. It never assumes they have done what the setup describes. Not "when was the last time", not yes/no, not a trivia question about their process.
 - is short enough to say in one breath and opens something up.
+
+${OPEN_QUESTION_RULE}
 - never names a consultancy, report, study, survey or author, and never refers to "the source", "the article" or anything the room has not heard.
 ${kind === "version" ? "\nThe writer likes the current question and wants other ways of asking the same thing, far enough apart that choosing is a real choice." : "\nThe writer did not like the current question. Fix what they said is wrong with it."}
-${complaint ? `\nWhat the writer said, which outranks every rule above: ${complaint}\n` : ""}${standing.trim() ? `\nTheir standing instruction for how all their questions are written: ${standing.trim()}\n` : ""}
+${opener ? `\nFor variety, open the first one along the lines of "${opener}" if it fits; and never assume they have done what the setup describes.\n` : ""}${complaint ? `\nWhat the writer said, which outranks every rule above: ${complaint}\n` : ""}${standing.trim() ? `\nTheir standing instruction for how all their questions are written: ${standing.trim()}\n` : ""}
 Write exactly ${count} questions, each with a follow-up probe for when the first answer is thin, written word for word. Plain prose, no quotation marks, never an em dash.`,
     messages: [
       {
@@ -1156,16 +1225,17 @@ Write exactly ${count} questions, each with a follow-up probe for when the first
   const allow = allowedNames(meeting.attendees);
   return (Array.isArray(parsed.questions) ? parsed.questions : [])
     .map((q: { text?: unknown; followUp?: unknown }) => ({
-      text: String(q?.text || "").trim(),
+      text: String(q?.text || "").trim().replace(/[\s.,;:]*$/, "").replace(/([^?])$/, "$1?"),
       followUp: String(q?.followUp || "").trim(),
     }))
     .filter(
       (q: { text: string }) =>
-        q.text &&
+        q.text.length > 1 &&
         q.text.toLowerCase() !== question.trim().toLowerCase() &&
         !namedSource(q.text, allow) &&
         !unnamedSource(q.text) &&
-        !leansOnAnother(q.text),
+        !leansOnAnother(q.text) &&
+        !closedQuestion(q.text),
     )
     .slice(0, count);
 }
@@ -1189,7 +1259,7 @@ export async function sharpenQuestions({
   // Six at a time: each is a quick call, and a whole bank at once trips rate limits.
   for (let k = 0; k < weak.length; k += 6)
     await Promise.all(
-      weak.slice(k, k + 6).map(async ([i, why]) => {
+      weak.slice(k, k + 6).map(async ([i, why], j) => {
         const [q] = await rewriteQuestion({
           meeting,
           setup: items[i].setup,
@@ -1197,7 +1267,8 @@ export async function sharpenQuestions({
           complaint: why,
           kind: "fix",
           standing,
-          count: 1,
+          count: 2,
+          opener: OPENERS[(k + j) % OPENERS.length],
         }).catch(() => []);
         if (q) out[i] = { text: q.text, followUp: q.followUp, why };
       }),
