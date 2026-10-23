@@ -245,6 +245,8 @@ export interface SourceDraft {
   suggested?: SharperQuestion;
   /** Other ways to ask it under the same setup; the writer picks one. */
   options?: QuestionOption[];
+  /** The writer picked one of the options, so the rest fold away. */
+  optionChosen?: boolean;
 }
 
 // Something about the subject that is not settled. A panel needs the sides
@@ -265,10 +267,19 @@ export interface RejectedSource {
   reason: string;
 }
 
+/** Something the sources broadly agree on, and who says so. */
+export interface AgreedPoint {
+  id: string;
+  point: string;
+  who: string;
+}
+
 export interface Reading {
   overview?: string;
   sources?: ReadingSource[];
   unsettled?: ReadingPoint[];
+  /** Where the sources agree, shown beside where they do not. */
+  agreed?: AgreedPoint[];
   /** What the writer wants from sources, obeyed by every later search. */
   steer?: string;
   rejected?: RejectedSource[];
@@ -286,6 +297,16 @@ export interface Reading {
 // question underneath is the same for every meeting (what about this subject
 // is not settled?), but a moderator wants the sides of the argument and a
 // one to one wants where the person across the table sits.
+/** The agreed-points section, named for the seat the writer is in. */
+export function agreedHeading(t: MeetingType): { title: string; hint: string } {
+  if (t === "panel" || t === "congress" || t === "advisory_board" || t === "presentation")
+    return {
+      title: "Where people agree",
+      hint: "Common ground across the sources: what you can take as given on the panel, and where a question can push past it.",
+    };
+  return { title: "What's settled", hint: "What the sources broadly agree on." };
+}
+
 export function unsettledHeading(t: MeetingType): { title: string; hint: string } {
   if (t === "panel" || t === "congress" || t === "advisory_board" || t === "presentation")
     return {
@@ -370,6 +391,8 @@ export interface QuestionItem {
   suggested?: SharperQuestion;
   /** Other ways to ask it under the same setup; the writer picks one. */
   options?: QuestionOption[];
+  /** The writer picked one of the options, so the rest fold away. */
+  optionChosen?: boolean;
   source: "ai" | "user";
 }
 

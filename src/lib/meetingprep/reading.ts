@@ -31,6 +31,8 @@ export function withReading(research: string, m: MpMeeting): string {
     research,
     r.overview && `The subject in brief, from the writer's reading:\n${r.overview}`,
     unsettled && `What is unsettled about it:\n${unsettled}`,
+    (r.agreed || []).length > 0 &&
+      `What the sources broadly agree on:\n${(r.agreed || []).map((a) => `- ${a.point} (${a.who})`).join("\n")}`,
     list && `On the writer's reading list (cite these by outlet and year where they back a question):\n${list}`,
     // Read back by the name check on everything said aloud, as well as by
     // the model: see housesIn.

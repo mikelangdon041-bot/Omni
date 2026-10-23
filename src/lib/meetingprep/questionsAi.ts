@@ -118,6 +118,15 @@ export function unnamedSource(line: string): string | null {
   return null;
 }
 
+/**
+ * One source's view said as if it were settled. The writer, on "there's a
+ * well-known trust equation" and "when you pin down relationship quality,
+ * you land on four things": do you, or is that one person's opinion? The
+ * model judge passed the first, so it is caught by pattern too.
+ */
+const OVERCLAIM =
+  /\b(?:well[- ]known|everyone (?:agrees|knows|says)|everybody (?:agrees|knows)|(?:nearly|almost) (?:all|everyone|everybody)|you land on|the field keeps|it'?s widely (?:accepted|agreed|known)|universally|most (?:organi[sz]ations|companies|teams|leaders) (?:pick|build|use|say|agree|still))\b/i;
+
 export function spokenProblem(setup: string, text: string): string | null {
   // The setup is the run-up; a setup that asks its own question has the
   // question said twice. One rewrite ended by repeating it word for word.
@@ -130,6 +139,8 @@ export function spokenProblem(setup: string, text: string): string | null {
   if (!setup.trim() && MID_THOUGHT.test(text)) return "the question starts mid-thought with nothing before it";
   const fake = setup.match(FAKE_HOOK);
   if (fake) return `it opens with filler instead of substance ("${fake[0]}")`;
+  const over = setup.match(OVERCLAIM);
+  if (over) return `it says one view as if everyone holds it ("${over[0]}"); say whose view it is, or that it is one view`;
   return null;
 }
 
@@ -301,6 +312,7 @@ Fail an item only for one of these, and say which in a few words:
 1. It depends on something not in the item itself: another question, an earlier remark, "the same survey", "as I said", "coming back to", "given that" with nothing before it, "also", "another".
 2. It refers to a document, study or author the listener has not been told about: "the source", "the article", "the guidance", "the report", "the authors", "the 2030 thinking", "it says". The listener has not read anything; a finding must be stated as a fact, or introduced in words a stranger would follow ("one large survey of MSLs found").
 3. It uses filler that pretends to be a reaction instead of stating the substance: telling the room something is surprising, striking, scary, worth sitting with, buried, quiet, or that it stays with the speaker. "Here's a claim worth sitting with", "There's a provocation buried in", "This surprises people".
+5. It states one source's framework, one person's opinion or one company's model as if it were settled or universal: "when you pin down relationship quality, you land on four things", "there's a well-known trust equation", "everyone agrees", "the field keeps running into". It should say it is one view ("one framework splits it into four", "one leader put it this way").
 4. It leans on a term, image or label a document coined instead of the words people in the field actually use, so a practitioner would not recognise it or would have to guess: "send mode", "a walkie-talkie", "a seek and avoidance ratio", "digital exhaust", "relationship health". Or it is too vague to picture: "measured on how much they pushed out" instead of "measured on how many meetings they log, not on what they bring back".
 
 Facts, figures and plain conversational framing are fine. Most items pass; list only the ones that fail.`,
@@ -334,6 +346,7 @@ What a good setup does, in his manner:
 - Where there is a real disagreement, can state the strongest version of each side, but never then asks the guest to pick one.
 - Says it in the words people in the field actually use. A term or image the source coined ("relationship health", "send mode", a walkie-talkie, a seek-versus-avoid ratio) is translated into what practitioners would say: "whether a KOL relationship is strong", "MSLs have the meetings but the insights never come back". A listener should never have to guess what a phrase means, and "how much they pushed out" is too vague to land.
 - Uses the strongest, most recognisable example the source gives, not the first one or the most technical.
+- Is honest about how settled a thing is. One source's framework, one person's view or one company's model is introduced as that ("one way people break it down is...", "one framework splits it into four...", "one medical affairs leader put it this way..."), never as the way things are ("when you pin down relationship quality, you land on four things", "there's a well-known equation"). Only what is broadly agreed, or a figure from a named kind of study, is stated flat. No "everyone agrees", "the field keeps running into", "well-known" unless it truly is.
 - Ties it to the person answering where that is possible: their seat, their work, what someone in their role would have seen.
 - Uses a concrete figure or example in place of an abstraction. "Nine in ten organisations still measure field teams by how many meetings they log" rather than "metrics remain activity-based".
 - Opens with the substance itself: the finding, the argument, the number, the example. Plain and conversational, the way a well-read person talks, not a briefing read off a slide.

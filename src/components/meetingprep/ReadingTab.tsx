@@ -17,6 +17,7 @@ import {
   Plus,
   RefreshCw,
   Scale,
+  Check,
   Search,
   ThumbsDown,
   Trash2,
@@ -31,6 +32,7 @@ import { useToast } from "@/components/ui/Feedback";
 import {
   setupFingerprint,
   unsettledHeading,
+  agreedHeading,
   type MpMeeting,
   type Reading,
   type ReadingSource,
@@ -48,6 +50,7 @@ interface ReadingResponse {
   overview: string;
   sources: Found[];
   unsettled: { point: string; sides: { position: string; who: string }[] }[];
+  agreed?: { point: string; who: string }[];
 }
 
 const REASONS = ["Too old", "Too general", "Not credible enough", "Off topic", "Already know it"];
@@ -67,6 +70,7 @@ export function ReadingTab({
   const reading: Reading = m.reading || {};
   const sources = reading.sources || [];
   const frame = unsettledHeading(m.meeting_type);
+  const agreedFrame = agreedHeading(m.meeting_type);
   const [busy, setBusy] = useState<"" | "build" | "more" | string>("");
   const [moreOpen, setMoreOpen] = useState(false);
   const [ask, setAsk] = useState("");
@@ -128,6 +132,7 @@ export function ReadingTab({
           overview: out.overview,
           sources: [...yours, ...out.sources.map(stamp)],
           unsettled: out.unsettled.map((u) => ({ ...u, id: newId("u") })),
+          agreed: (out.agreed || []).map((a) => ({ ...a, id: newId("a") })),
           at: new Date().toISOString(),
           fingerprint: setupFingerprint(now),
         },
@@ -370,33 +375,30 @@ export function ReadingTab({
         </section>
       )}
 
-      {must.length > 0 && (
-        <SourceGroup
-          title="Read before you go"
-          items={must}
-          busy={busy}
-          fresh={justFound}
-          getMeeting={getMeeting}
-          save={save}
-          onReject={reject}
-          onRemove={(s) => (s.docId ? removeMaterial(s.docId, getMeeting, save) : reject(s, "", false))}
-        />
+      {/* A summary across every source, not a source: so it sits with the
+          overview, above the reading list, where it is read first. */}
+      {(reading.agreed || []).length > 0 && (
+        <section className="rounded-xl border border-border bg-canvas p-4">
+          <h2 className="flex items-center gap-2 text-sm font-semibold">
+            <Check size={15} className="text-[var(--accent)]" /> {agreedFrame.title}
+          </h2>
+          <p className="mb-3 text-xs text-muted">{agreedFrame.hint}</p>
+          <ul className="space-y-2.5">
+            {(reading.agreed || []).map((a) => (
+              <li key={a.id} className="text-sm">
+                {a.point}
+                {a.who && (
+                  <span className="mt-0.5 flex items-center gap-1 text-xs text-muted">
+                    <UserRound size={11} /> {a.who}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
-      {skim.length > 0 && (
-        <SourceGroup
-          title="Worth a skim"
-          items={skim}
-          busy={busy}
-          fresh={justFound}
-          getMeeting={getMeeting}
-          save={save}
-          onReject={reject}
-          onRemove={(s) => reject(s, "", false)}
-        />
-      )}
-
       {(reading.unsettled || []).length > 0 && (
-        <section className="rounded-xl border border-border bg-surface p-4 shadow-sm">
+        <section className="rounded-xl border border-border bg-canvas p-4">
           <h2 className="flex items-center gap-2 text-sm font-semibold">
             <Scale size={15} className="text-[var(--accent)]" /> {frame.title}
           </h2>
@@ -421,6 +423,31 @@ export function ReadingTab({
             ))}
           </ul>
         </section>
+      )}
+
+      {must.length > 0 && (
+        <SourceGroup
+          title="Read before you go"
+          items={must}
+          busy={busy}
+          fresh={justFound}
+          getMeeting={getMeeting}
+          save={save}
+          onReject={reject}
+          onRemove={(s) => (s.docId ? removeMaterial(s.docId, getMeeting, save) : reject(s, "", false))}
+        />
+      )}
+      {skim.length > 0 && (
+        <SourceGroup
+          title="Worth a skim"
+          items={skim}
+          busy={busy}
+          fresh={justFound}
+          getMeeting={getMeeting}
+          save={save}
+          onReject={reject}
+          onRemove={(s) => reject(s, "", false)}
+        />
       )}
 
       {reading.at && (
@@ -611,11 +638,13 @@ function SourceCard({
       {s.findings.length > 0 && (
         <div className="mt-2">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-            What it says{s.read === "full" ? " (read in full)" : ""}
+            What it says
           </p>
           <ul className="mt-1 list-disc space-y-1 pl-5 text-sm">
             {s.findings.map((f, i) => (
-              <li key={i}>{f}</li>
+              <li key={i}>
+                <Finding text={f} />
+              </li>
             ))}
           </ul>
         </div>
@@ -679,5 +708,19 @@ function JustFound({
         Searching again takes these off the list and keeps them out of later searches.
       </p>
     </section>
+  );
+}
+
+/**
+ * One point from a source, its label in bold. Findings are written "Label:
+ * the point"; an older one without a label reads as it always did.
+ */
+function Finding({ text }: { text: string }) {
+  const m = text.match(/^([^:.?!]{3,48}):\s+([\s\S]+)$/);
+  if (!m || m[1].split(/\s+/).length > 6) return <>{text}</>;
+  return (
+    <>
+      <span className="font-semibold">{m[1]}:</span> {m[2]}
+    </>
   );
 }

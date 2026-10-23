@@ -33,6 +33,7 @@ export interface ReadingOut {
   overview: string;
   sources: FoundSource[];
   unsettled: UnsettledPoint[];
+  agreed?: { point: string; who: string }[];
 }
 
 type Block = { type: string; [k: string]: unknown };
@@ -224,7 +225,7 @@ For each source:
 - url: copied exactly from a search result you actually saw this turn. Never write a URL from memory and never guess one. If you cannot point to the page, leave the source out.
 - title: the piece's own title. outlet: the publisher, journal or author. date: as the source dates itself ("2025", "March 2026"), or "" if it does not say.
 - summary: two or three plain sentences: what it is and what it argues or found.
-- findings: 2-5 lines, each one figure, finding or position from the piece, stated as the piece states it, with the number where there is one ("62% of medical affairs leaders say ... (n=410)"). Only what the source says; if you only saw a snippet, only what the snippet says.
+- findings: 2-5 lines, each one figure, finding or position from the piece, with the number where there is one ("62% of medical affairs leaders say ... (n=410)"). Only what the source says; if you only saw a snippet, only what the snippet says. Each finding starts with a short label of two to five words naming what the point is, then a colon, then the point itself, stated directly: "Measurement is hard: 67% of 1,023 medical affairs professionals rated measuring MSL performance difficult or very difficult." Never open a finding with what the piece does ("It argues", "It cites", "It lays out", "The piece states", "The authors recommend", "McKinsey reports"); say the thing.
 - why: one line on why this is worth the writer's time for this meeting specifically.
 - priority: "must" for the two or three pieces the writer should not walk in without having read; "skim" for the rest.`;
 
@@ -344,8 +345,10 @@ Finish with the JSON object and nothing after it: {"overview": string, "sources"
   // What the search saw of a page is a few lines. Every source is opened
   // and read, so "What it says" is what it says.
   await Promise.all(chosen.map((s) => readInFull(s, meeting)));
+  const agreed = more ? [] : await commonGround({ meeting, sources: chosen });
 
   return {
+    agreed,
     overview: more ? "" : String(parsed?.overview || "").trim(),
     sources: chosen,
     unsettled: more
@@ -448,7 +451,7 @@ The writer's note on what they want out of it is the instruction that matters mo
 Fields:
 - title: the document's own title, or a plain name for it. outlet: who published or wrote it, "" if unknown. date: as it dates itself, "" if it does not.
 - summary: two or three plain sentences.
-- findings: 2-8 lines, each one specific thing from the document, as the document states it. Nothing it does not say.
+- findings: 2-8 lines, each one specific thing from the document. Nothing it does not say. Each finding starts with a short label of two to five words naming what the point is, then a colon, then the point itself, stated directly: "Measurement is hard: 67% of 1,023 medical affairs professionals rated measuring MSL performance difficult or very difficult." Never open a finding with what the piece does ("It argues", "It cites", "It lays out", "The piece states", "The authors recommend", "McKinsey reports"); say the thing.
 - why: one line tying it to what the writer asked for.
 - people: only for an agenda, an attendee list, or something from the other side naming who will attend; otherwise []. Never the writer themself. role and org as stated; notes is the one line about them the document gives (their talk title, their panel role). Never invent a role.
 - session: for an agenda only; otherwise topic "", durationMin 0, date "", location "". date as ISO 8601 when a date and time are both stated, else "". durationMin from stated start and end times when both are given.
@@ -552,6 +555,62 @@ const READ_SCHEMA = {
  * Changes `s` in place; leaves it as the snippet version, marked so, when the
  * page cannot be opened or read.
  */
+const AGREED_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    agreed: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: { point: { type: "string" as const }, who: { type: "string" as const } },
+        required: ["point", "who"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["agreed"],
+  additionalProperties: false,
+};
+
+/**
+ * What the sources broadly agree on. The writer asked why the reading only
+ * showed where people disagree: common ground is what a panel can take as
+ * given, and where a question can push past it. Read from what each source
+ * was found to say in full, so it never claims agreement nobody stated.
+ */
+export async function commonGround({
+  meeting,
+  sources,
+}: {
+  meeting: MeetingPayload;
+  sources: { title: string; outlet?: string; summary: string; findings: string[] }[];
+}): Promise<{ point: string; who: string }[]> {
+  if (sources.length < 2) return [];
+  try {
+    const res = await anthropic().messages.create({
+      model: RESEARCH_MODEL,
+      max_tokens: 1500,
+      output_config: { format: { type: "json_schema", schema: AGREED_SCHEMA } },
+      system: `Below are notes on several pieces someone is reading before a meeting. Write down what they broadly agree on: 2 to 4 points that at least two of the pieces state or clearly share, each as one plain sentence saying the point itself, and who holds it (the outlets or authors, by name). Nothing only one piece says, nothing they disagree on, nothing so general it would be true of any subject. If they agree on nothing worth saying, return []. Plain text, no markdown, no em dashes.`,
+      messages: [
+        {
+          role: "user",
+          content: `The meeting:\n${meetingContext({ ...meeting, documents: [] }, "") || "(minimal context)"}\n\n${sources
+            .map((s) => `${s.title}${s.outlet ? ` (${s.outlet})` : ""}\n${s.summary}\n${s.findings.map((f) => `- ${f}`).join("\n")}`)
+            .join("\n\n")}`,
+        },
+      ],
+    });
+    const p = JSON.parse(firstText(res.content as unknown as Block[]) || "{}") as { agreed?: { point?: string; who?: string }[] };
+    return (p.agreed || [])
+      .map((a) => ({ point: String(a?.point || "").trim(), who: String(a?.who || "").trim() }))
+      .filter((a) => a.point)
+      .slice(0, 4);
+  } catch {
+    return [];
+  }
+}
+
 export async function readInFull(s: FoundSource, meeting: MeetingPayload): Promise<void> {
   let text = "";
   try {
@@ -575,8 +634,8 @@ export async function readText(s: FoundSource, meeting: MeetingPayload, text: st
       output_config: { format: { type: "json_schema", schema: READ_SCHEMA } },
       system: `You have just read the whole of one piece someone is reading before a meeting. Write down what it actually says, so they could discuss it without having read it, and so nothing in your notes is something the piece does not say.
 
-- summary: four to six plain sentences on the piece's actual argument: what it claims, how it makes the case, and what it concludes or recommends. Its own position, in its own terms, not a description of its topic. If it is a framework or a set of priorities, name each part.
-- findings: six to ten lines, each one specific thing the piece says, as a full sentence: a claim, a figure with what it measures and its base or sample where given, a framework or model it sets out, a concrete example it uses, a recommendation, a warning or an admission. Use its own numbers and named concepts. Never a line that would be true of any piece on the subject, and never a line it does not support. Lead with the ones that bear most on the meeting.
+- summary: four to six plain sentences on the piece's actual argument: what it claims, how it makes the case, and what it concludes or recommends. Its own position, in its own terms, not a description of its topic. If it is a framework or a set of priorities, name each part. Say whose work it is once, then state the argument directly rather than opening every sentence with "it argues" or "the authors".
+- findings: six to ten lines, each one specific thing the piece says, as a full sentence: a claim, a figure with what it measures and its base or sample where given, a framework or model it sets out, a concrete example it uses, a recommendation, a warning or an admission. Use its own numbers and named concepts. Never a line that would be true of any piece on the subject, and never a line it does not support. Lead with the ones that bear most on the meeting. Each finding starts with a short label of two to five words naming what the point is, then a colon, then the point itself, stated directly: "Measurement is hard: 67% of 1,023 medical affairs professionals rated measuring MSL performance difficult or very difficult." Never open a finding with what the piece does ("It argues", "It cites", "It lays out", "The piece states", "The authors recommend", "McKinsey reports"); say the thing.
 - why: one line on why this piece matters for this meeting in particular.
 - date: as the piece dates itself ("2025", "June 2026"), or "".
 
