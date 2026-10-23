@@ -120,6 +120,13 @@ export async function exportBriefDocx(m: MpMeeting): Promise<void> {
             bullet: { level: 1 },
           }),
         );
+      for (const b of (q.options || []).filter((o) => o.keep))
+        children.push(
+          new Paragraph({
+            children: [new TextRun({ text: `Backup: ${b.text}` })],
+            bullet: { level: 1 },
+          }),
+        );
       if (q.followUp)
         children.push(
           new Paragraph({

@@ -171,6 +171,19 @@ export function AskMode({
               {cur.text}
             </p>
 
+            {(cur.options || []).some((o) => o.keep) && (
+              <div className="mt-6 rounded-xl border border-border bg-surface p-4">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Or ask</p>
+                {(cur.options || [])
+                  .filter((o) => o.keep)
+                  .map((o) => (
+                    <p key={o.text} className="mt-1.5 text-base leading-snug text-ink/75 sm:text-lg">
+                      {o.text}
+                    </p>
+                  ))}
+              </div>
+            )}
+
             {cur.followUp && (
               <div className="mt-6 rounded-xl border border-border bg-surface p-4">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
@@ -327,6 +340,13 @@ function AskRow({
           {q.text}
         </span>
         {q.forWhom && <span className="mt-0.5 block text-sm text-muted">For {q.forWhom}</span>}
+        {(q.options || [])
+          .filter((o) => o.keep)
+          .map((o) => (
+            <span key={o.text} className="mt-1 block text-sm text-muted">
+              Or: {o.text}
+            </span>
+          ))}
         {q.followUp && (
           <span className="mt-1 block text-sm text-muted">Then: {q.followUp}</span>
         )}

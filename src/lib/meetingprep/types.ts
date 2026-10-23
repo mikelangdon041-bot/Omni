@@ -403,6 +403,8 @@ export interface QuestionOption {
   kind: string;
   text: string;
   followUp: string;
+  /** Kept beside the main question as a backup, not just a version. */
+  keep?: boolean;
 }
 
 export interface SharperQuestion {

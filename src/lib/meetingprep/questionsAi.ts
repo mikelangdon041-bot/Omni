@@ -290,11 +290,58 @@ Be demanding: a question that merely relates to its setup is a 3. For anything u
       }
     }),
   );
+  // Words from the source nobody in the room would follow.
+  for (const [i, why] of await outsideTerms(idx.map((i) => items[i])).then((m) => [...m].map(([k, w]) => [idx[k], w] as const)))
+    if (!out.has(i)) out.set(i, `${why}; say it in the field's own words`);
   // Closed by its shape, whatever the score.
   for (const i of idx) {
     const why = closedQuestion(items[i].text);
     if (why && !out.has(i)) out.set(i, `${why}; ask for the story or the argument instead`);
   }
+  return out;
+}
+
+/**
+ * Questions that only make sense to someone who read the source. The setup
+ * check caught "send mode" and the walkie-talkie in setups, but the
+ * questions under them kept "the push-to-talk button" after the setup had
+ * been rewritten without it, and the writer: "makes no sense". Judged
+ * against its own setup: a term the setup explains is fine.
+ */
+export async function outsideTerms(items: { setup: string; text: string }[]): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  const chunks: number[][] = [];
+  for (let k = 0; k < items.length; k += 12) chunks.push(items.slice(k, k + 12).map((_, j) => k + j));
+  await Promise.all(
+    chunks.map(async (chunk) => {
+      try {
+        const res = await anthropic().messages.create({
+          model: CHECK_MODEL,
+          max_tokens: 1500,
+          output_config: { format: { type: "json_schema", schema: JUDGE_SCHEMA } },
+          system: `Each item is a setup a panel moderator says out loud, then a question asked after it. Nobody in the room has read anything.
+
+Fail the QUESTION, saying which words in a few words, when it uses a term, image, metaphor, label, framework name or figure that its setup did not introduce and that people working in the field would not say themselves, so it only makes sense to someone who read a particular document: "the push-to-talk button", "send mode", "a seek and avoidance ratio", "digital exhaust", "the trust equation". Also fail it when it points at a document, a study, a report or the people interviewed for one.
+
+Ordinary vocabulary of the field (KOL, MSL, KPI, HCP, field team, scorecard, medical affairs, insights) is fine, and so is anything the setup itself explains. Most pass; list only the ones that fail.`,
+          messages: [
+            {
+              role: "user",
+              content: chunk.map((i, k) => `${k}. SETUP: ${items[i].setup || "(none)"}\nQUESTION: ${items[i].text}`).join("\n\n"),
+            },
+          ],
+        });
+        const parsed = JSON.parse(firstText(res) || "{}");
+        for (const f of Array.isArray(parsed.failures) ? parsed.failures : []) {
+          const k = Number(f?.index);
+          if (Number.isInteger(k) && k >= 0 && k < chunk.length)
+            out.set(chunk[k], `it uses words only a reader of the source would follow: ${String(f?.reason || "")}`);
+        }
+      } catch {
+        // Unchecked, the rest still stand.
+      }
+    }),
+  );
   return out;
 }
 
@@ -1318,7 +1365,7 @@ Each one is short enough to say in one breath and ends with a question mark, wit
   if (res.stop_reason === "refusal") return [];
   const parsed = JSON.parse(firstText(res) || "{}");
   const allow = allowedNames(meeting.attendees);
-  return (Array.isArray(parsed.options) ? parsed.options : [])
+  const kept = (Array.isArray(parsed.options) ? parsed.options : [])
     .map((q: { kind?: unknown; text?: unknown; followUp?: unknown }) => ({
       kind: String(q?.kind || ""),
       text: String(q?.text || "").trim().replace(/\bquietly\s+/gi, "").replace(/[\s.,;:]*$/, "").replace(/([^?])$/, "$1?"),
@@ -1330,6 +1377,9 @@ Each one is short enough to say in one breath and ends with a question mark, wit
       const closed = closedQuestion(q.text);
       return !closed || (q.kind === "A push back" && closed === "it can be answered yes or no");
     });
+  // Versions that only make sense to someone who read the source.
+  const bad = await outsideTerms(kept.map((q: { text: string }) => ({ setup, text: q.text })));
+  return kept.filter((_: unknown, i: number) => !bad.has(i));
 }
 
 /** Options for many setups at once, six at a time. */

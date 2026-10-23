@@ -604,6 +604,9 @@ Write questions specifically on that, each with a setup. How many is set by the 
       asked: false,
       order: place ? place.order : 0,
       source: "ai",
+      // The versions and any backup question go with it into the list.
+      options: d.options,
+      optionChosen: d.optionChosen,
     };
   }
 
