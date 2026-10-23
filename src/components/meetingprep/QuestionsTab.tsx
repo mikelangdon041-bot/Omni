@@ -12,7 +12,7 @@
 // backup, asked and order — so generating more questions only ever appends,
 // and never disturbs a list someone has arranged.
 
-import { createContext, useContext, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -38,6 +38,7 @@ import {
   BookOpen,
 } from "lucide-react";
 import { AskMode } from "@/components/meetingprep/AskMode";
+import { QuestionChoices } from "@/components/meetingprep/QuestionChoices";
 import { ReviewPanel } from "@/components/meetingprep/ReviewPanel";
 import { useReview } from "@/lib/meetingprep/useReview";
 import { Button } from "@/components/ui/Button";
@@ -186,45 +187,54 @@ export function QuestionsTab({
   const sharpenAbort = useRef<AbortController | null>(null);
 
   /**
-   * A sharper question for every setup whose question falls flat, offered
-   * under it. The writer said the setups were good and the questions under
-   * them were not; this scores each against its setup and suggests, and
-   * changes nothing until they choose.
+   * Other ways to ask every question with a setup, offered under each: the
+   * writer picks the kind they like for each setup, and nothing changes
+   * until they do. Reads the meeting fresh before saving, so anything done
+   * while it ran is kept.
    */
-  async function sharpen() {
-    const targets = live.filter((q) => q.setup && !q.suggested);
+  const [versioningIds, setVersioningIds] = useState<string[]>([]);
+  async function sharpen(only?: QuestionItem[]) {
+    const targets = (only || live).filter((q) => q.setup && !q.options?.length);
     if (!targets.length) return;
-    sharpenAbort.current = new AbortController();
-    setSharpening(true);
+    const ids = targets.map((q) => q.id);
+    if (!only) {
+      sharpenAbort.current = new AbortController();
+      setSharpening(true);
+    }
+    setVersioningIds((v) => [...v, ...ids]);
     try {
       const res = await fetch("/api/meeting/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
         body: JSON.stringify({
-          action: "sharpen",
+          action: "options",
           meeting: payloadOf(m),
           items: targets.map((q) => ({ setup: stripAskedQuestion(q.setup, q.text), text: q.text })),
           standing: guidance,
         }),
-        signal: sharpenAbort.current.signal,
+        signal: only ? undefined : sharpenAbort.current?.signal,
       });
       const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json.error || "Could not check the questions");
-      const out: ({ text: string; followUp: string; why: string } | null)[] = json.suggestions || [];
-      const byId = new Map(targets.map((q, i) => [q.id, out[i]]).filter(([, x]) => x) as [string, QuestionItem["suggested"]][]);
-      setItems(items.map((x) => (byId.has(x.id) ? { ...x, suggested: byId.get(x.id) } : x)));
-      toast(
-        "success",
-        byId.size
-          ? `${byId.size} of ${targets.length} could be sharper. The suggestions are under each one.`
-          : "Every question already follows its setup well.",
-      );
+      if (!res.ok) throw new Error(json.error || "Could not write the versions");
+      const out: QuestionItem["options"][] = json.options || [];
+      const byId = new Map(targets.map((q, i) => [q.id, out[i] || []]));
+      const fresh = latest.current.questions?.items || [];
+      save({
+        questions: {
+          ...latest.current.questions,
+          items: fresh.map((x) => (byId.get(x.id)?.length ? { ...x, options: byId.get(x.id) } : x)),
+        },
+      });
+      if (!only) toast("success", "Other ways to ask each one are under it. Pick the one you would say.");
     } catch (e) {
       if (!sharpenAbort.current?.signal.aborted) toast("error", (e as Error).message);
     } finally {
-      sharpenAbort.current = null;
-      setSharpening(false);
+      if (!only) {
+        sharpenAbort.current = null;
+        setSharpening(false);
+      }
+      setVersioningIds((v) => v.filter((id) => !ids.includes(id)));
     }
   }
   const [settingUp, setSettingUp] = useState(false);
@@ -259,6 +269,11 @@ export function QuestionsTab({
     [live],
   );
 
+  // The meeting as it is now, for saves that land after a wait.
+  const latest = useRef(m);
+  useEffect(() => {
+    latest.current = m;
+  }, [m]);
   const setItems = (next: QuestionItem[]) =>
     save({ questions: { ...m.questions, items: next } });
 
@@ -823,9 +838,9 @@ export function QuestionsTab({
             variant="secondary"
             disabled={sharpening || busy}
             onClick={() => void sharpen()}
-            title="Scores every question against its setup and offers a sharper one where it falls flat. Nothing changes until you choose."
+            title="Writes other ways to ask each question under its setup. Nothing changes until you pick one."
           >
-            <Wand2 size={14} /> Sharpen the questions
+            <Wand2 size={14} /> Other ways to ask each
           </Button>
         )}
         {setupTargets.qs.length > 0 && (
@@ -891,7 +906,7 @@ export function QuestionsTab({
       <Working
         active={sharpening}
         seconds={25 + Math.ceil(live.filter((q) => q.setup).length / 6) * 4}
-        label="Checking each question against its setup"
+        label="Writing other ways to ask each question"
         className="px-0.5"
         onCancel={() => {
           sharpenAbort.current?.abort();
@@ -1094,6 +1109,8 @@ export function QuestionsTab({
                         busy={settingUpId === q.id}
                         onAddSetup={() => void addSetups(q)}
                         onPatch={(p) => patch(q.id, p)}
+                        versioning={versioningIds.includes(q.id)}
+                        onWriteVersions={() => void sharpen([q])}
                       />
                       {/* Your list is one running order, not groups: the
                           order you ask them in is the whole point of it. But
@@ -1264,6 +1281,8 @@ export function QuestionsTab({
                         busy={settingUpId === q.id}
                         onAddSetup={() => void addSetups(q)}
                         onPatch={(p) => patch(q.id, p)}
+                        versioning={versioningIds.includes(q.id)}
+                        onWriteVersions={() => void sharpen([q])}
                       />
                           <p className="mt-0.5 text-xs text-muted">
                             {q.why}
@@ -1657,12 +1676,16 @@ function SpokenQuestion({
   busy = false,
   onAddSetup,
   onPatch,
+  versioning = false,
+  onWriteVersions,
 }: {
   q: QuestionItem;
   busy?: boolean;
   onAddSetup?: () => void;
-  /** For taking or dismissing a sharper question. */
+  /** For picking another way to ask it. */
   onPatch?: (p: Partial<QuestionItem>) => void;
+  versioning?: boolean;
+  onWriteVersions?: () => void;
 }) {
   return (
     <>
@@ -1670,27 +1693,9 @@ function SpokenQuestion({
         <p className="mb-1 text-sm leading-relaxed text-ink/70">{stripAskedQuestion(q.setup, q.text)}</p>
       )}
       <p className={`text-sm text-ink ${q.setup ? "font-medium" : ""}`}>{q.text}</p>
-      {/* A sharper question for the same setup, offered, never applied: the
-          list is the writer's. */}
-      {q.suggested && onPatch && (
-        <div className="mt-1.5 rounded-md border border-[var(--accent)]/30 bg-[var(--accent-soft)]/30 px-2.5 py-2 text-xs">
-          <p className="font-semibold text-[var(--accent)]">A sharper question for this setup</p>
-          <p className="mt-0.5 text-sm text-ink">{q.suggested.text}</p>
-          <p className="mt-0.5 text-muted">Why: {q.suggested.why}</p>
-          <div className="mt-1.5 flex gap-1.5">
-            <Button
-              size="sm"
-              onClick={() =>
-                onPatch({ text: q.suggested!.text, followUp: q.suggested!.followUp || q.followUp, suggested: undefined })
-              }
-            >
-              Use it
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => onPatch({ suggested: undefined })}>
-              Keep mine
-            </Button>
-          </div>
-        </div>
+      {/* Other ways to ask it under the same setup; picking one swaps it in. */}
+      {onPatch && (
+        <QuestionChoices x={q} busy={versioning} onPick={(p) => onPatch(p)} onWrite={q.setup ? onWriteVersions : undefined} />
       )}
       {/* Left bare on purpose ("") is a judgement, and the writer may not
           share it. One click overrules it. */}

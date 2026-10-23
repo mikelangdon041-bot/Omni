@@ -28,6 +28,7 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { QuestionChoices } from "@/components/meetingprep/QuestionChoices";
 import { Input, Textarea } from "@/components/ui/Input";
 import { Working } from "@/components/ui/Progress";
 import { useToast } from "@/components/ui/Feedback";
@@ -387,6 +388,7 @@ Write questions specifically on that, each with a setup. How many is set by the 
       else next.splice(at < 0 ? next.length : at + 1, 0, ...got);
       if (stopped()) return;
       setDrafts(next);
+      void fillOptions(got);
     } catch (e) {
       if (!stopped()) toast("error", (e as Error).message);
     } finally {
@@ -556,6 +558,7 @@ Write questions specifically on that, each with a setup. How many is set by the 
         // every question they had not acted on yet.
         if (stopped()) return;
         setDrafts([...got, ...now], note);
+        void fillOptions(got);
       } else {
         // Next to the one they came from. A fix takes its place.
         const at = now.findIndex((d) => d.id === ask.draft.id);
@@ -568,6 +571,7 @@ Write questions specifically on that, each with a setup. How many is set by the 
         );
         if (stopped()) return;
         setDrafts(next);
+        void fillOptions(got);
       }
     } catch (e) {
       if (!stopped()) toast("error", (e as Error).message);
@@ -605,6 +609,33 @@ Write questions specifically on that, each with a setup. How many is set by the 
 
   function patchDraft(id: string, p: Partial<SourceDraft>) {
     setDrafts(current().map((x) => (x.id === id ? { ...x, ...p } : x)));
+  }
+
+  /**
+   * Other ways to ask each new draft, written in the background once it is
+   * on screen: the writer can start reading while they come in.
+   */
+  const [versioning, setVersioning] = useState<string[]>([]);
+  async function fillOptions(ds: SourceDraft[]) {
+    const m = getMeeting();
+    const todo = ds.filter((d) => d.setup && !d.options?.length);
+    if (!m || !todo.length) return;
+    const ids = todo.map((d) => d.id);
+    setVersioning((v) => [...v, ...ids]);
+    try {
+      const { options } = await post<{ options: SourceDraft["options"][] }>({
+        action: "options",
+        meeting: meetingPayload(m),
+        items: todo.map((d) => ({ setup: stripAskedQuestion(d.setup, d.text), text: d.text })),
+        standing: m.questions?.guidance || "",
+      });
+      const byId = new Map(todo.map((d, i) => [d.id, options?.[i] || []]));
+      setDrafts(current().map((x) => (byId.get(x.id)?.length ? { ...x, options: byId.get(x.id) } : x)));
+    } catch {
+      // The drafts stand without them; "Other ways to ask it" tries again.
+    } finally {
+      setVersioning((v) => v.filter((id) => !ids.includes(id)));
+    }
   }
 
   /** A setup for a draft that has none, written in place. */
@@ -930,31 +961,13 @@ Write questions specifically on that, each with a setup. How many is set by the 
           </div>
         </div>
 
-        {/* A sharper question for this setup, offered, not applied. */}
-        {d.suggested && (
-          <div className="mt-2 rounded-md border border-[var(--accent)]/30 bg-[var(--accent-soft)]/30 px-2.5 py-2 text-xs">
-            <p className="font-semibold text-[var(--accent)]">A sharper question for this setup</p>
-            <p className="mt-0.5 text-sm text-ink">{d.suggested.text}</p>
-            <p className="mt-0.5 text-muted">Why: {d.suggested.why}</p>
-            <div className="mt-1.5 flex gap-1.5">
-              <Button
-                size="sm"
-                onClick={() =>
-                  patchDraft(d.id, {
-                    text: d.suggested!.text,
-                    followUp: d.suggested!.followUp || d.followUp,
-                    suggested: undefined,
-                  })
-                }
-              >
-                Use it
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => patchDraft(d.id, { suggested: undefined })}>
-                Keep mine
-              </Button>
-            </div>
-          </div>
-        )}
+        {/* Other ways to ask it under the same setup; picking one swaps it in. */}
+        <QuestionChoices
+          x={d}
+          busy={versioning.includes(d.id)}
+          onPick={(p) => patchDraft(d.id, p)}
+          onWrite={d.setup ? () => void fillOptions([d]) : undefined}
+        />
 
         {/* Asks what one of theirs already asks. */}
         {like && (

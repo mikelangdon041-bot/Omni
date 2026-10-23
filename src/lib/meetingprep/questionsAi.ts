@@ -104,7 +104,7 @@ const MID_THOUGHT = /^\s*(?:given that|so[,\s]|and\s|but\s|that said|with that|w
 // nothing earlier in the line introduced one ("a 2025 survey found... the
 // survey also...").
 const ALWAYS_UNNAMED =
-  /\b(?:the|this|that) (?:source|article|piece|deck|slides?|guidance|guidance document|document|authors?|write-?up|standards (?:work|document|guidance)|20\d\d (?:thinking|vision|piece|report))\b|\b(?:the source|the article|the authors?) (?:says?|argues?|is|was|found|makes)\b/i;
+  /\b(?:the|this|that) (?:source|article|piece|deck|slides?|guidance|guidance document|document|authors?|write-?up|standards (?:work|document|guidance)|20\d\d (?:thinking|vision|piece|report))\b|\b(?:the source|the article|the authors?) (?:says?|argues?|is|was|found|makes)\b|\b(?:this|the) material\b|\b(?:one|a|another) contributor\b|\bthe (?:whole|same|full|entire) (?:report|article|piece|paper|study)\b|\bin this (?:work|material|piece|research)\b|\b(?:people|folks|everyone|leaders|those|experts|executives|teams?) (?:we )?interviewed\b|\b(?:one|some|several|many|most) of the (?:people|folks|leaders|teams|experts|executives|interviewees|contributors) (?:here|interviewed|in it)\b|\binterviewees?\b/i;
 const MAYBE_UNNAMED = /\b(?:the|this|that) (report|study|survey|paper|framework|analysis|research|white ?paper|playbook|review)\b/i;
 const INTRODUCES = /\b(?:a|an|one|another|some|recent|new|large|global|\d{4})\b[^.?!]{0,40}\b(?:report|study|survey|paper|framework|analysis|research|white ?paper|playbook|review)s?\b/i;
 
@@ -192,31 +192,29 @@ const FIT_SCHEMA = {
  */
 export const OPEN_QUESTION_RULE = `The question after a setup starts a conversation: an invitation to a long answer, where a panelist could talk for two minutes and still not be done.
 
-The setup explains something general: an idea, a finding, a problem, an argument. The panelists are experienced people in the field, but you know nothing about what they personally have done. So the question never assumes they have used the method, tool, metric or framework the setup describes, and never assumes they have a story of it working or failing. "Tell us about a time one of these ratios caught a relationship going sideways" is absurd: nobody knows if they ever used that ratio. Every panelist must be able to answer it well, whatever they have or have not tried.
+The setup explains something general: an idea, a finding, a problem. The panelists are experienced people in the field, but you know nothing about what they personally have done. So the question never assumes they have used the method, tool, metric or framework the setup describes, and never assumes they have a story of it working or failing. "Tell us about a time one of these ratios caught a relationship going sideways" is absurd: nobody knows if they ever used that ratio. Every panelist must be able to answer it well.
 
-What it asks for instead:
-- how the problem the setup describes shows up in their own world, and what they make of it;
-- where they land on the argument, and why;
-- what it would take, what would have to change, or what gets in the way, for the idea to work where they sit;
-- how they think it through or handle it, when the problem is one everyone in their role faces anyway (leadership wanting a number, an MSL's time, a budget).
-Good shapes: "How does that play out where you sit?", "Where do you land on that, and why?", "What would it take for that to work in your organisation?", "What gets in the way of...?", "How do you think about X when Y?", "Make the case for or against...". Use "Tell us about a time" only for something every person in their role has lived through.
+What works, best first (the writer ranked these):
+1. How the problem the setup describes actually works, or shows up, in their own organisation, in plain words: "When someone in your organization says a KOL relationship is strong, what are they actually looking at?"
+2. The same, ending on what they do about it: "...and how do you make sure that doesn't happen?" or "...and how do you fix it?"
+3. A short push back that follows from the setup, one people will argue with: "If every relationship metric ends up being activity in disguise, should we stop trying to measure relationships at all?"
+4. What it would take, or what would have to change. Fine, but weaker, and a question so hard that nobody can answer it gets silence.
 
 Never:
-- offer a choice ("A, or B?", "data or gut?", "X versus Y?"): they pick one and stop;
-- ask for a frequency, count, share or estimate ("how often", "how many", "what share"), a yes/no or a fact check ("is there", "do you", "have you"), or "when was the last time";
-- say "be honest" or imply they otherwise would not be;
-- open every question the same way.`;
+- "make the case", or anything that asks them to pick a side ("A, or B?", "data or gut?", "where do you come down?"): forcing people to take a side is strange on a panel;
+- a frequency, count, share or estimate ("how often", "how many", "what share"), a fact check ("is there real data behind that"), or "when was the last time";
+- "be honest", or anything that implies they otherwise would not be;
+- the same opening for every question.`;
 
 /** Openings handed out in turn when many questions are rewritten at once. */
 const OPENERS = [
-  "How does that play out where you sit...",
-  "Where do you land on...",
-  "What would it take for...",
+  "When someone in your organization...",
+  "How does that actually work where you sit...",
+  "What does that look like in your organization...",
+  "Where does that show up for you...",
+  "How do you make sure that doesn't happen...",
   "What gets in the way of...",
-  "How do you think about...",
-  "Make the case for or against...",
   "What would have to change for...",
-  "What does that look like in your organisation...",
 ];
 
 /**
@@ -303,6 +301,7 @@ Fail an item only for one of these, and say which in a few words:
 1. It depends on something not in the item itself: another question, an earlier remark, "the same survey", "as I said", "coming back to", "given that" with nothing before it, "also", "another".
 2. It refers to a document, study or author the listener has not been told about: "the source", "the article", "the guidance", "the report", "the authors", "the 2030 thinking", "it says". The listener has not read anything; a finding must be stated as a fact, or introduced in words a stranger would follow ("one large survey of MSLs found").
 3. It uses filler that pretends to be a reaction instead of stating the substance: telling the room something is surprising, striking, scary, worth sitting with, buried, quiet, or that it stays with the speaker. "Here's a claim worth sitting with", "There's a provocation buried in", "This surprises people".
+4. It leans on a term, image or label a document coined instead of the words people in the field actually use, so a practitioner would not recognise it or would have to guess: "send mode", "a walkie-talkie", "a seek and avoidance ratio", "digital exhaust", "relationship health". Or it is too vague to picture: "measured on how much they pushed out" instead of "measured on how many meetings they log, not on what they bring back".
 
 Facts, figures and plain conversational framing are fine. Most items pass; list only the ones that fail.`,
       messages: [
@@ -332,7 +331,9 @@ export const SETUP_RULE = `The writer asks questions the way Ezra Klein does in 
 
 What a good setup does, in his manner:
 - Lays out the argument, the finding or the tension in plain words, specifically enough that someone new to the subject could follow it: what the long-running disagreement actually is, what the numbers say, where the gap between what people say and what they do sits.
-- Often states the strongest version of one side, or both sides, before asking which way the guest leans or what each side is missing. "One view is X, and it is a serious view because Y. The other is Z." Then: "Where do you come down?" or "What does the first camp get wrong?"
+- Where there is a real disagreement, can state the strongest version of each side, but never then asks the guest to pick one.
+- Says it in the words people in the field actually use. A term or image the source coined ("relationship health", "send mode", a walkie-talkie, a seek-versus-avoid ratio) is translated into what practitioners would say: "whether a KOL relationship is strong", "MSLs have the meetings but the insights never come back". A listener should never have to guess what a phrase means, and "how much they pushed out" is too vague to land.
+- Uses the strongest, most recognisable example the source gives, not the first one or the most technical.
 - Ties it to the person answering where that is possible: their seat, their work, what someone in their role would have seen.
 - Uses a concrete figure or example in place of an abstraction. "Nine in ten organisations still measure field teams by how many meetings they log" rather than "metrics remain activity-based".
 - Opens with the substance itself: the finding, the argument, the number, the example. Plain and conversational, the way a well-read person talks, not a briefing read off a slide.
@@ -1225,7 +1226,7 @@ Write exactly ${count} questions, each with a follow-up probe for when the first
   const allow = allowedNames(meeting.attendees);
   return (Array.isArray(parsed.questions) ? parsed.questions : [])
     .map((q: { text?: unknown; followUp?: unknown }) => ({
-      text: String(q?.text || "").trim().replace(/[\s.,;:]*$/, "").replace(/([^?])$/, "$1?"),
+      text: String(q?.text || "").trim().replace(/\bquietly\s+/gi, "").replace(/[\s.,;:]*$/, "").replace(/([^?])$/, "$1?"),
       followUp: String(q?.followUp || "").trim(),
     }))
     .filter(
@@ -1238,6 +1239,105 @@ Write exactly ${count} questions, each with a follow-up probe for when the first
         !closedQuestion(q.text),
     )
     .slice(0, count);
+}
+
+const OPTIONS_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    options: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: {
+          kind: { type: "string" as const, enum: ["Where they sit", "And how they fix it", "A push back"] },
+          text: { type: "string" as const },
+          followUp: { type: "string" as const },
+        },
+        required: ["kind", "text", "followUp"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["options"],
+  additionalProperties: false,
+};
+
+/**
+ * Three ways to ask the question under one setup, of different kinds, for the
+ * writer to choose from. Asked to rank versions of the same question, the
+ * writer liked one kind for one setup and another for the next, and said
+ * someone else might choose differently again: so choose, not decide for them.
+ */
+export async function questionOptions({
+  meeting,
+  setup,
+  question,
+  standing = "",
+}: {
+  meeting: MeetingPayload;
+  setup: string;
+  question: string;
+  standing?: string;
+}): Promise<{ kind: string; text: string; followUp: string }[]> {
+  const res = await anthropic().messages.create({
+    model: CHECK_MODEL,
+    max_tokens: 1500,
+    output_config: { format: { type: "json_schema", schema: OPTIONS_SCHEMA } },
+    system: `You write three ways to ask the question that follows a setup a moderator will say out loud on a panel. The setup stays exactly as it is. The writer picks one, so write one of each kind, each a real choice:
+- "Where they sit": how the problem the setup lays out actually works, or shows up, in the panelist's own organisation. The writer's favourite kind.
+- "And how they fix it": the same, ending on what they do about it ("...and how do you make sure that doesn't happen?").
+- "A push back": a short challenge that follows from the setup, that people will argue with at length. This one may be shaped like a yes or no, if nobody could answer it in a word.
+
+${SEAT_RULE}
+
+${OPEN_QUESTION_RULE}
+
+Use the words people in the field actually say, never a term or image the setup borrowed from a document. Never name a consultancy, report, study, survey or author, never refer to "the source" or anything the room has not heard.
+${standing.trim() ? `\nThe writer's standing instruction for how all their questions are written: ${standing.trim()}\n` : ""}
+Each one is short enough to say in one breath and ends with a question mark, with a follow-up probe for when the first answer is thin, written word for word. Plain prose, no quotation marks, never an em dash.`,
+    messages: [
+      {
+        role: "user",
+        content: `${meetingContext({ ...meeting, documents: [] }, "") || "(minimal context)"}\n\nThe setup, which stays:\n${setup || "(none)"}\n\nThe question as it stands, for what it is after:\n${question}`,
+      },
+    ],
+  });
+  if (res.stop_reason === "refusal") return [];
+  const parsed = JSON.parse(firstText(res) || "{}");
+  const allow = allowedNames(meeting.attendees);
+  return (Array.isArray(parsed.options) ? parsed.options : [])
+    .map((q: { kind?: unknown; text?: unknown; followUp?: unknown }) => ({
+      kind: String(q?.kind || ""),
+      text: String(q?.text || "").trim().replace(/\bquietly\s+/gi, "").replace(/[\s.,;:]*$/, "").replace(/([^?])$/, "$1?"),
+      followUp: String(q?.followUp || "").trim(),
+    }))
+    .filter((q: { kind: string; text: string }) => {
+      if (q.text.length < 2 || q.text.toLowerCase() === question.trim().toLowerCase()) return false;
+      if (namedSource(q.text, allow) || unnamedSource(q.text) || leansOnAnother(q.text)) return false;
+      const closed = closedQuestion(q.text);
+      return !closed || (q.kind === "A push back" && closed === "it can be answered yes or no");
+    });
+}
+
+/** Options for many setups at once, six at a time. */
+export async function optionsFor({
+  meeting,
+  items,
+  standing = "",
+}: {
+  meeting: MeetingPayload;
+  items: { setup: string; text: string }[];
+  standing?: string;
+}): Promise<{ kind: string; text: string; followUp: string }[][]> {
+  const out: { kind: string; text: string; followUp: string }[][] = items.map(() => []);
+  for (let k = 0; k < items.length; k += 6)
+    await Promise.all(
+      items.slice(k, k + 6).map(async (x, j) => {
+        if (!x.setup.trim()) return;
+        out[k + j] = await questionOptions({ meeting, setup: x.setup, question: x.text, standing }).catch(() => []);
+      }),
+    );
+  return out;
 }
 
 /**

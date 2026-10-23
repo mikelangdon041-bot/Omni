@@ -26,6 +26,7 @@ import {
   findSimilar,
   rewriteQuestion,
   sharpenQuestions,
+  optionsFor,
   writeQuestions,
   writeSetups,
   writeVariants,
@@ -482,6 +483,19 @@ export async function POST(req: Request) {
         count: Math.min(4, Math.max(1, Number(body?.count) || 2)),
       });
       return NextResponse.json({ questions });
+    }
+
+    // Other ways to ask each question under its setup, to choose from.
+    if (action === "options") {
+      const meeting: MeetingPayload = body?.meeting || {};
+      const items = (Array.isArray(body?.items) ? body.items : []).slice(0, 60).map(
+        (x: { setup?: unknown; text?: unknown }) => ({
+          setup: String(x?.setup || "").slice(0, 3000),
+          text: String(x?.text || "").slice(0, 1000),
+        }),
+      );
+      const options = await optionsFor({ meeting, items, standing: String(body?.standing || "").slice(0, 2000) });
+      return NextResponse.json({ options });
     }
 
     // Sharper questions for setups whose questions fall flat, offered.

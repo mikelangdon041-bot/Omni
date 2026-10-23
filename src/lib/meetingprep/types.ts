@@ -243,6 +243,8 @@ export interface SourceDraft {
   done?: "bank" | "list" | "replaced" | "kept" | "removed";
   /** A sharper question for the same setup, offered, not applied. */
   suggested?: SharperQuestion;
+  /** Other ways to ask it under the same setup; the writer picks one. */
+  options?: QuestionOption[];
 }
 
 // Something about the subject that is not settled. A panel needs the sides
@@ -366,10 +368,20 @@ export interface QuestionItem {
   order: number;
   /** A sharper question for the same setup, offered, not applied. */
   suggested?: SharperQuestion;
+  /** Other ways to ask it under the same setup; the writer picks one. */
+  options?: QuestionOption[];
   source: "ai" | "user";
 }
 
 /** A better question for a setup the writer likes, waiting on Use it / Keep mine. */
+/** One way to ask the question under a setup, for the writer to choose. */
+export interface QuestionOption {
+  /** "Where they sit", "And how they fix it", "A push back", or "Yours before". */
+  kind: string;
+  text: string;
+  followUp: string;
+}
+
 export interface SharperQuestion {
   text: string;
   followUp: string;
