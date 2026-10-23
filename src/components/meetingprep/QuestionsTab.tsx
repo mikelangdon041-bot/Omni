@@ -182,6 +182,51 @@ export function QuestionsTab({
   const [settingUpId, setSettingUpId] = useState<string | null>(null);
   // So Cancel can stop waiting for a setups request.
   const setupAbort = useRef<AbortController | null>(null);
+  const [sharpening, setSharpening] = useState(false);
+  const sharpenAbort = useRef<AbortController | null>(null);
+
+  /**
+   * A sharper question for every setup whose question falls flat, offered
+   * under it. The writer said the setups were good and the questions under
+   * them were not; this scores each against its setup and suggests, and
+   * changes nothing until they choose.
+   */
+  async function sharpen() {
+    const targets = live.filter((q) => q.setup && !q.suggested);
+    if (!targets.length) return;
+    sharpenAbort.current = new AbortController();
+    setSharpening(true);
+    try {
+      const res = await fetch("/api/meeting/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          action: "sharpen",
+          meeting: payloadOf(m),
+          items: targets.map((q) => ({ setup: stripAskedQuestion(q.setup, q.text), text: q.text })),
+          standing: guidance,
+        }),
+        signal: sharpenAbort.current.signal,
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "Could not check the questions");
+      const out: ({ text: string; followUp: string; why: string } | null)[] = json.suggestions || [];
+      const byId = new Map(targets.map((q, i) => [q.id, out[i]]).filter(([, x]) => x) as [string, QuestionItem["suggested"]][]);
+      setItems(items.map((x) => (byId.has(x.id) ? { ...x, suggested: byId.get(x.id) } : x)));
+      toast(
+        "success",
+        byId.size
+          ? `${byId.size} of ${targets.length} could be sharper. The suggestions are under each one.`
+          : "Every question already follows its setup well.",
+      );
+    } catch (e) {
+      if (!sharpenAbort.current?.signal.aborted) toast("error", (e as Error).message);
+    } finally {
+      sharpenAbort.current = null;
+      setSharpening(false);
+    }
+  }
   const [settingUp, setSettingUp] = useState(false);
 
 
@@ -772,6 +817,17 @@ export function QuestionsTab({
         {/* Only for questions written before setups existed, or typed by
             you. New questions arrive with theirs, so this takes itself off
             the bar once everything has been through it. */}
+        {live.some((q) => q.setup) && (
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={sharpening || busy}
+            onClick={() => void sharpen()}
+            title="Scores every question against its setup and offers a sharper one where it falls flat. Nothing changes until you choose."
+          >
+            <Wand2 size={14} /> Sharpen the questions
+          </Button>
+        )}
         {setupTargets.qs.length > 0 && (
           <Button
             size="sm"
@@ -831,6 +887,17 @@ export function QuestionsTab({
       {review.reviewing && (
         <ProgressBar pct={review.pct} label="Reading your whole pack back…" className="px-0.5" />
       )}
+      {/* Scoring runs eight at a time, then a quick rewrite for each that falls flat. */}
+      <Working
+        active={sharpening}
+        seconds={25 + Math.ceil(live.filter((q) => q.setup).length / 6) * 4}
+        label="Checking each question against its setup"
+        className="px-0.5"
+        onCancel={() => {
+          sharpenAbort.current?.abort();
+          toast("info", "Cancelled.");
+        }}
+      />
       {/* Measured: 14 setups in 18s. Longer lists take a little longer. */}
       <Working
         active={settingUp}
@@ -1022,7 +1089,12 @@ export function QuestionsTab({
                           choice — the chip below says it is a backup, and
                           that is the whole job. Nothing in this list is
                           less readable than anything else in it. */}
-                      <SpokenQuestion q={q} busy={settingUpId === q.id} onAddSetup={() => void addSetups(q)} />
+                      <SpokenQuestion
+                        q={q}
+                        busy={settingUpId === q.id}
+                        onAddSetup={() => void addSetups(q)}
+                        onPatch={(p) => patch(q.id, p)}
+                      />
                       {/* Your list is one running order, not groups: the
                           order you ask them in is the whole point of it. But
                           which group a question came out of is worth knowing
@@ -1187,7 +1259,12 @@ export function QuestionsTab({
                         />
                       ) : (
                         <>
-                          <SpokenQuestion q={q} busy={settingUpId === q.id} onAddSetup={() => void addSetups(q)} />
+                          <SpokenQuestion
+                        q={q}
+                        busy={settingUpId === q.id}
+                        onAddSetup={() => void addSetups(q)}
+                        onPatch={(p) => patch(q.id, p)}
+                      />
                           <p className="mt-0.5 text-xs text-muted">
                             {q.why}
                             {q.forWhom ? ` · For: ${q.forWhom}` : ""}
@@ -1579,10 +1656,13 @@ function SpokenQuestion({
   q,
   busy = false,
   onAddSetup,
+  onPatch,
 }: {
   q: QuestionItem;
   busy?: boolean;
   onAddSetup?: () => void;
+  /** For taking or dismissing a sharper question. */
+  onPatch?: (p: Partial<QuestionItem>) => void;
 }) {
   return (
     <>
@@ -1590,6 +1670,28 @@ function SpokenQuestion({
         <p className="mb-1 text-sm leading-relaxed text-ink/70">{stripAskedQuestion(q.setup, q.text)}</p>
       )}
       <p className={`text-sm text-ink ${q.setup ? "font-medium" : ""}`}>{q.text}</p>
+      {/* A sharper question for the same setup, offered, never applied: the
+          list is the writer's. */}
+      {q.suggested && onPatch && (
+        <div className="mt-1.5 rounded-md border border-[var(--accent)]/30 bg-[var(--accent-soft)]/30 px-2.5 py-2 text-xs">
+          <p className="font-semibold text-[var(--accent)]">A sharper question for this setup</p>
+          <p className="mt-0.5 text-sm text-ink">{q.suggested.text}</p>
+          <p className="mt-0.5 text-muted">Why: {q.suggested.why}</p>
+          <div className="mt-1.5 flex gap-1.5">
+            <Button
+              size="sm"
+              onClick={() =>
+                onPatch({ text: q.suggested!.text, followUp: q.suggested!.followUp || q.followUp, suggested: undefined })
+              }
+            >
+              Use it
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => onPatch({ suggested: undefined })}>
+              Keep mine
+            </Button>
+          </div>
+        </div>
+      )}
       {/* Left bare on purpose ("") is a judgement, and the writer may not
           share it. One click overrules it. */}
       {q.setup === "" && onAddSetup && (

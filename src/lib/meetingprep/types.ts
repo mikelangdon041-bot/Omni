@@ -240,7 +240,9 @@ export interface SourceDraft {
    * What the writer did with it: put it in the bank or their list, used it
    * in place of the similar one, or kept theirs instead.
    */
-  done?: "bank" | "list" | "replaced" | "kept";
+  done?: "bank" | "list" | "replaced" | "kept" | "removed";
+  /** A sharper question for the same setup, offered, not applied. */
+  suggested?: SharperQuestion;
 }
 
 // Something about the subject that is not settled. A panel needs the sides
@@ -362,7 +364,17 @@ export interface QuestionItem {
   note?: string;
   /** Position within the picked list; the writer arranges this. */
   order: number;
+  /** A sharper question for the same setup, offered, not applied. */
+  suggested?: SharperQuestion;
   source: "ai" | "user";
+}
+
+/** A better question for a setup the writer likes, waiting on Use it / Keep mine. */
+export interface SharperQuestion {
+  text: string;
+  followUp: string;
+  /** What the current question misses, in one line. */
+  why: string;
 }
 
 export interface QuestionBank {

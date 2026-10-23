@@ -155,6 +155,78 @@ const JUDGE_SCHEMA = {
  * item is a setup and the question after it, said aloud as the FIRST thing
  * in a session. Returns index to reason for each that fails.
  */
+const FIT_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    scores: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: {
+          index: { type: "number" as const },
+          score: { type: "number" as const },
+          problem: { type: "string" as const },
+        },
+        required: ["index", "score", "problem"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["scores"],
+  additionalProperties: false,
+};
+
+/**
+ * How well each question earns its setup, scored. The writer said the setups
+ * were thoughtful and the questions under them fell flat. Asked only to list
+ * failures across a whole bank, the judge passed all 56; so every question
+ * is scored, eight at a time, against what a sharp moderator would ask next.
+ * Returns index to the problem for each that scores under 4. Only judged
+ * where there is a setup to follow.
+ */
+export async function judgeFit(items: { setup: string; text: string }[]): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  const idx = items.map((x, i) => (x.setup.trim() ? i : -1)).filter((i) => i >= 0);
+  const chunks: number[][] = [];
+  for (let k = 0; k < idx.length; k += 8) chunks.push(idx.slice(k, k + 8));
+  await Promise.all(
+    chunks.map(async (chunk) => {
+      try {
+        const res = await anthropic().messages.create({
+          model: CHECK_MODEL,
+          max_tokens: 2500,
+          output_config: { format: { type: "json_schema", schema: FIT_SCHEMA } },
+          system: `Each item is a setup a panel moderator says, then the question they ask after it. The setups are good. Score only the QUESTION, 1 to 5, on whether it makes the most of its setup.
+
+5: the question a sharp moderator would ask the moment that setup ends. It goes straight at the specific tension or finding the setup laid out and makes the panelist answer from what they have done: how they handled it, what they chose and why, what worked, what failed, what it cost, what they would change. Only someone who has done the work could answer it well.
+4: on the setup's point and draws on experience, but could be sharper or more specific to what the setup set up.
+3: related to the setup but generic: it could follow almost any setup on the subject, or it restates the setup as a question, or asks for an opinion anyone could give.
+2: narrow or flat: a date, a count, a yes/no, a "have you ever", a "when was the last time", or a detail of their process that teaches the room nothing.
+1: about something other than what the setup laid out.
+
+Be demanding: a question that merely relates to its setup is a 3. For anything under 5, say in one line what it misses. Score every item.`,
+          messages: [
+            {
+              role: "user",
+              content: chunk.map((i, k) => `${k}. SETUP: ${items[i].setup}\nQUESTION: ${items[i].text}`).join("\n\n"),
+            },
+          ],
+        });
+        const parsed = JSON.parse(firstText(res) || "{}");
+        for (const f of Array.isArray(parsed.scores) ? parsed.scores : []) {
+          const k = Number(f?.index);
+          const score = Number(f?.score);
+          if (Number.isInteger(k) && k >= 0 && k < chunk.length && score < 4)
+            out.set(chunk[k], String(f?.problem || "it does not make the most of its setup"));
+        }
+      } catch {
+        // That chunk goes unjudged; the rest still count.
+      }
+    }),
+  );
+  return out;
+}
+
 export async function judgeSpoken(items: { setup: string; text: string }[]): Promise<Map<number, string>> {
   const out = new Map<number, string>();
   if (!items.length) return out;
@@ -203,6 +275,11 @@ What a good setup does, in his manner:
 - Uses a concrete figure or example in place of an abstraction. "Nine in ten organisations still measure field teams by how many meetings they log" rather than "metrics remain activity-based".
 - Opens with the substance itself: the finding, the argument, the number, the example. Plain and conversational, the way a well-read person talks, not a briefing read off a slide.
 - Ends by handing over to the question; the question is the last thing said, and it is short.
+
+The question after a setup:
+- asks about the specific problem, tension or finding the setup just laid out, so it is the obvious next thing to ask the moment the setup ends. A question about a neighbouring point wastes the setup.
+- asks the people answering for what they know from doing the work: how they handled it, what they tried, what worked and what did not, what they would change, what it cost them, how they would fix it.
+- never asks "when was the last time", never a yes/no, never a detail of their process that teaches the room nothing.
 
 What it never does:
 - Never answers its own question, or tells the guest what they think.
@@ -772,6 +849,22 @@ ${instructionBlock(guidance.trim(), coverage.trim(), focus.trim())}`,
     });
     bad.forEach((r, i) => (r.q.setup = redone[i] || ""));
   }
+  // A question that misses its setup is rewritten under the same setup, on
+  // the quick model; the setup was checked above and stays.
+  const misfit = await judgeFit(clean.map((q) => ({ setup: q.setup, text: q.text })));
+  if (misfit.size) {
+    console.warn(`[questions] ${misfit.size} did not follow their setup: ${[...misfit.values()].join(" | ")}`);
+    await Promise.all(
+      [...misfit].map(async ([i, why]) => {
+        const q = clean[i];
+        const [better] = await rewriteQuestion({ meeting, setup: q.setup, question: q.text, complaint: why, kind: "fix", standing: guidance, count: 1 }).catch(() => []);
+        if (better) {
+          q.text = better.text;
+          q.followUp = better.followUp || q.followUp;
+        }
+      }),
+    );
+  }
   // A question that still only makes sense after something else is dropped:
   // the writer cannot ask it without the thing it leans on.
   return clean
@@ -1075,4 +1168,39 @@ Write exactly ${count} questions, each with a follow-up probe for when the first
         !leansOnAnother(q.text),
     )
     .slice(0, count);
+}
+
+/**
+ * A sharper question for every setup whose question scores under 4, offered
+ * to the writer rather than applied: the list and the bank are theirs.
+ * Returns, per item, the suggestion or null.
+ */
+export async function sharpenQuestions({
+  meeting,
+  items,
+  standing = "",
+}: {
+  meeting: MeetingPayload;
+  items: { setup: string; text: string }[];
+  standing?: string;
+}): Promise<({ text: string; followUp: string; why: string } | null)[]> {
+  const out: ({ text: string; followUp: string; why: string } | null)[] = items.map(() => null);
+  const weak = [...(await judgeFit(items))];
+  // Six at a time: each is a quick call, and a whole bank at once trips rate limits.
+  for (let k = 0; k < weak.length; k += 6)
+    await Promise.all(
+      weak.slice(k, k + 6).map(async ([i, why]) => {
+        const [q] = await rewriteQuestion({
+          meeting,
+          setup: items[i].setup,
+          question: items[i].text,
+          complaint: why,
+          kind: "fix",
+          standing,
+          count: 1,
+        }).catch(() => []);
+        if (q) out[i] = { text: q.text, followUp: q.followUp, why };
+      }),
+    );
+  return out;
 }

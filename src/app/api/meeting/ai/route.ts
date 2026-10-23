@@ -25,6 +25,7 @@ import {
   fillOutQuestion,
   findSimilar,
   rewriteQuestion,
+  sharpenQuestions,
   writeQuestions,
   writeSetups,
   writeVariants,
@@ -481,6 +482,23 @@ export async function POST(req: Request) {
         count: Math.min(4, Math.max(1, Number(body?.count) || 2)),
       });
       return NextResponse.json({ questions });
+    }
+
+    // Sharper questions for setups whose questions fall flat, offered.
+    if (action === "sharpen") {
+      const meeting: MeetingPayload = body?.meeting || {};
+      const items = (Array.isArray(body?.items) ? body.items : []).slice(0, 80).map(
+        (x: { setup?: unknown; text?: unknown }) => ({
+          setup: String(x?.setup || "").slice(0, 3000),
+          text: String(x?.text || "").slice(0, 1000),
+        }),
+      );
+      const suggestions = await sharpenQuestions({
+        meeting,
+        items,
+        standing: String(body?.standing || "").slice(0, 2000),
+      });
+      return NextResponse.json({ suggestions });
     }
 
     // Which question already in the bank each new one duplicates, if any.

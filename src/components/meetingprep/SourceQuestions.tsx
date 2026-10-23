@@ -15,18 +15,20 @@
 // to name it: a new batch, more like one they liked, another version of one,
 // or one fixed for what they did not like.
 
-import { Fragment, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import {
   ArrowLeftRight,
   Check,
   Copy,
   MessageCircleQuestion,
+  Pencil,
   Plus,
   RefreshCw,
   ThumbsDown,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
-import { Input } from "@/components/ui/Input";
+import { Input, Textarea } from "@/components/ui/Input";
 import { Working } from "@/components/ui/Progress";
 import { useToast } from "@/components/ui/Feedback";
 import { withReading } from "@/lib/meetingprep/reading";
@@ -124,11 +126,11 @@ const SECONDS = { batch: 45, more: 40, version: 35, fix: 35 } as const;
 
 const PICKS = {
   batch: [
-    "Harder",
-    "Shorter setups",
-    "More on the data",
-    "From a different angle",
-    "Less like mine",
+    "One question per main argument",
+    "Questions that ask for a real example",
+    "The hardest question this raises",
+    "Questions that put panelists on opposite sides",
+    "On the strongest figure in it",
   ],
   more: ["Same angle", "Harder", "For a specific panelist", "Shorter"],
   version: ["Blunter", "Shorter", "More personal", "Shorter setup"],
@@ -176,19 +178,20 @@ export function SourceQuestions({
   const [open, setOpen] = useState(true);
   /** The feedback box that is open, if any. */
   const [asking, setAsking] = useState<Ask | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const drafts = s.questions || [];
   // Everything they have asked of this source: the saved list, and the
   // request carried on each batch of drafts (which predates the list).
-  const pastAsks = [
-    ...new Set(
-      [...(s.asks || []), ...drafts.map((d) => d.askedFor || "")].filter(
-        (a) =>
-          a &&
-          !/^(more like|another version of|a fix for|the full article)/.test(a),
-      ),
-    ),
-  ].slice(0, 8);
+  // Only requests for a whole batch: a note on one question ("question
+  // sucks") read back as a suggestion for the next batch was the writer's own
+  // complaint, shown to them as if it were an example.
+  const batchAsks = new Set(
+    drafts
+      .map((d) => d.askedFor || "")
+      .filter((a) => a && !/^(more like|another version of|a fix for|the full article)/.test(a)),
+  );
+  const pastAsks = [...new Set([...(s.asks || []).filter((a) => batchAsks.has(a)), ...batchAsks])].slice(0, 6);
 
   /** The drafts as they are now, read fresh: another save may have landed. */
   const current = () =>
@@ -374,14 +377,16 @@ Write questions specifically on that, each with a setup. How many is set by the 
         g.isNew = true;
         g.askedFor = `${ask.kind === "version" ? "another version of" : "a fix for"} ${what} of: "${d.text.slice(0, 60)}${d.text.length > 60 ? "…" : ""}"${note ? `, ${note}` : ""}`;
       }
-      const now = current().map((x) => (x.isNew ? { ...x, isNew: false } : x));
+      // Older New tags stay: a writer working down ten new questions should
+      // not lose the tag on nine because they asked for a version of one.
+      const now = current();
       const at = now.findIndex((x) => x.id === d.id);
       const next = [...now];
       // A fix takes the place of what it fixes; versions go beside it.
       if (ask.kind === "fix") next.splice(at < 0 ? next.length : at, at < 0 ? 0 : 1, ...got);
       else next.splice(at < 0 ? next.length : at + 1, 0, ...got);
       if (stopped()) return;
-      setDrafts(next, note);
+      setDrafts(next);
     } catch (e) {
       if (!stopped()) toast("error", (e as Error).message);
     } finally {
@@ -489,7 +494,12 @@ Write questions specifically on that, each with a setup. How many is set by the 
       // One that asks what a draft already on this source asks adds nothing.
       // Not for versions, which are meant to ask the same thing.
       const others = seen.map((d) => d.text);
-      if (got.length && others.length && ask.kind !== "version") {
+      // A specific request is never thinned out for resembling a draft
+      // already here: asked for questions on hard-to-reach KOLs, the writer
+      // got nothing, because each new one looked like an older draft on KOL
+      // selection and all of them were dropped. Without a request, repeats go,
+      // but never all of them.
+      if (got.length && others.length && ask.kind !== "version" && !(ask.kind === "batch" && note)) {
         try {
           const { matches } = await call<{ matches: number[] }>({
             action: "similar",
@@ -498,18 +508,14 @@ Write questions specifically on that, each with a setup. How many is set by the 
           });
           // A fix is checked against everything but the one it replaces.
           const fixing = ask.kind === "fix" ? ask.draft.text : "";
-          for (let i = got.length - 1; i >= 0; i--) {
+          const kept = got.filter((_, i) => {
             const k = matches?.[i];
-            if (typeof k === "number" && k >= 0 && others[k] !== fixing)
-              got.splice(i, 1);
-          }
+            return !(typeof k === "number" && k >= 0 && others[k] !== fixing);
+          });
+          if (kept.length) got = kept;
         } catch {
           // Keep them rather than lose the batch.
         }
-        if (!got.length)
-          throw new Error(
-            "Everything it wrote repeated a question already here. Try saying what you want differently.",
-          );
       }
 
       got = got.slice(0, cap);
@@ -542,7 +548,7 @@ Write questions specifically on that, each with a setup. How many is set by the 
             ? note
             : `${ask.kind === "more" ? "more like" : ask.kind === "version" ? "another version of" : "a fix for"}: "${ask.draft.text.slice(0, 60)}${ask.draft.text.length > 60 ? "…" : ""}"${note ? `, ${note}` : ""}`;
       }
-      const now = current().map((d) => (d.isNew ? { ...d, isNew: false } : d));
+      const now = current();
       if (ask.kind === "batch") {
         // New ones first, where they will be seen; the ones already acted on
         // stay below them; the untouched ones are what this replaces.
@@ -561,7 +567,7 @@ Write questions specifically on that, each with a setup. How many is set by the 
           ...got,
         );
         if (stopped()) return;
-        setDrafts(next, note);
+        setDrafts(next);
       }
     } catch (e) {
       if (!stopped()) toast("error", (e as Error).message);
@@ -595,6 +601,42 @@ Write questions specifically on that, each with a setup. How many is set by the 
       order: place ? place.order : 0,
       source: "ai",
     };
+  }
+
+  function patchDraft(id: string, p: Partial<SourceDraft>) {
+    setDrafts(current().map((x) => (x.id === id ? { ...x, ...p } : x)));
+  }
+
+  /** A setup for a draft that has none, written in place. */
+  async function addSetupTo(d: SourceDraft) {
+    const m = getMeeting();
+    if (!m) return;
+    setBusy(d.id);
+    abort.current = new AbortController();
+    try {
+      const out = await call<{ setups: string[] }>({
+        action: "setups",
+        meeting: meetingPayload(m),
+        kolId: m.kol_id || "",
+        research: withReading("", m),
+        questions: [{ text: d.text, category: d.category, why: d.why }],
+        standing: m.questions?.guidance || "",
+        force: true,
+      });
+      const setup = String(out.setups?.[0] || "");
+      if (stopped()) return;
+      if (!setup) throw new Error("Couldn't write a setup for that one. Try again.");
+      patchDraft(d.id, { setup });
+    } catch (e) {
+      if (!stopped()) toast("error", (e as Error).message);
+    } finally {
+      abort.current = null;
+      setBusy("");
+    }
+  }
+
+  function clearNew() {
+    setDrafts(current().map((x) => (x.isNew ? { ...x, isNew: false } : x)));
   }
 
   function mark(id: string, done: SourceDraft["done"]) {
@@ -708,9 +750,9 @@ Write questions specifically on that, each with a setup. How many is set by the 
         <p className="text-xs font-medium">{PROMPTS[ask.kind]}</p>
         {/* What they asked for before, to see and reuse. Rewriting without
             it meant typing the same correction again from memory. */}
-        {pastAsks.length > 0 && (
+        {ask.kind === "batch" && pastAsks.length > 0 && (
           <div className="text-xs">
-            <p className="text-muted">You asked before:</p>
+            <p className="text-muted">Your earlier requests here:</p>
             <ul className="mt-0.5 space-y-0.5">
               {pastAsks.map((a) => (
                 <li key={a}>
@@ -813,216 +855,333 @@ Write questions specifically on that, each with a setup. How many is set by the 
   const m = getMeeting();
   const byId = new Map(m ? liveQuestions(m).map((q) => [q.id, q]) : []);
   const askingDraft = asking && asking.kind !== "batch" ? asking.draft.id : "";
+  // To review, handled (added, kept, swapped in) and removed, kept apart so
+  // the ones still waiting on a decision are the only ones in full view.
+  const open_ = drafts.filter((d) => !d.done);
+  const handled = drafts.filter((d) => d.done && d.done !== "removed");
+  const removed = drafts.filter((d) => d.done === "removed");
+  const anyNew = drafts.some((d) => d.isNew);
+  // Groups by the batch request each was written for. A version, rewrite or
+  // "more like this" carries a label built from the writer's complaint about
+  // one question; shown as a heading it read their own "question sucks" back
+  // to them, so it joins the group it sits in and wears a small chip instead.
+  const derivedKind = (a: string) =>
+    /^more like/.test(a) ? "More like this" : /^another version/.test(a) ? "Version" : /^a fix for/.test(a) ? "Rewrite" : "";
+  const groups: { ask: string; items: SourceDraft[] }[] = [];
+  let lastKey = "";
+  for (const d of open_) {
+    const a = d.askedFor || "";
+    const key = derivedKind(a) || /^the full article/.test(a) ? lastKey : a;
+    lastKey = key;
+    const g = groups.find((x) => x.ask === key);
+    if (g) g.items.push(d);
+    else groups.push({ ask: key, items: [d] });
+  }
 
-  return (
-    <div className="mt-3 space-y-2 rounded-lg bg-canvas p-3">
-      <p className="text-xs font-semibold">Questions from this</p>
-      <ul className="space-y-4">
-        {drafts.map((d, i) => {
-          const like = d.similarTo ? byId.get(d.similarTo) : undefined;
-          // The request each batch was written for, over its questions, every
-          // time: shown only while they were new, it vanished the moment the
-          // next batch arrived and the writer could not find it again.
-          const heading =
-            d.askedFor && d.askedFor !== drafts[i - 1]?.askedFor
-              ? d.askedFor
-              : "";
-          return (
-            <Fragment key={d.id}>
-              {heading && (
-                <li className="rounded-md bg-surface px-2.5 py-1.5 text-xs">
-                  <span className="font-semibold text-muted">
-                    You asked for:{" "}
-                  </span>
-                  {heading.length > 220 ? (
-                    <details className="inline">
-                      <summary className="inline cursor-pointer text-ink/80">
-                        {heading.slice(0, 200)}…{" "}
-                        <span className="text-[var(--accent)]">show all</span>
-                      </summary>
-                      <span className="text-ink/80">{heading}</span>
-                    </details>
-                  ) : (
-                    <span className="text-ink/80">{heading}</span>
-                  )}
-                </li>
-              )}
-              <li
-                key={d.id}
-                className={`text-sm ${d.done === "kept" ? "opacity-50" : ""} ${
-                  d.isNew ? "-ml-3 border-l-2 border-amber-400 pl-2.5" : ""
-                }`}
-              >
+  const row = (d: SourceDraft) => {
+    const like = d.similarTo ? byId.get(d.similarTo) : undefined;
+    const setup = stripAskedQuestion(d.setup, d.text);
+    if (editing === d.id)
+      return (
+        <li key={d.id} className="rounded-lg border border-[var(--accent)]/40 bg-surface p-3">
+          <EditDraft
+            d={d}
+            onSave={(p) => {
+              patchDraft(d.id, p);
+              setEditing(null);
+            }}
+            onCancel={() => setEditing(null)}
+          />
+        </li>
+      );
+    return (
+      <li
+        key={d.id}
+        className={`rounded-lg border bg-surface p-3 ${d.isNew ? "border-amber-300" : "border-border"}`}
+      >
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            {(d.isNew || derivedKind(d.askedFor || "")) && (
+              <span className="mb-1 flex gap-1">
                 {d.isNew && (
-                  <p className="mb-1 text-[11px] text-amber-800">
-                    <span className="rounded bg-amber-100 px-1.5 py-0.5 font-semibold">
-                      New
-                    </span>
-                  </p>
+                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">New</span>
                 )}
-                {stripAskedQuestion(d.setup, d.text) && (
-                  <p className="mb-1 leading-relaxed text-ink/70">{stripAskedQuestion(d.setup, d.text)}</p>
+                {derivedKind(d.askedFor || "") && (
+                  <span className="rounded bg-canvas px-1.5 py-0.5 text-[10px] font-semibold text-muted">
+                    {derivedKind(d.askedFor || "")}
+                  </span>
                 )}
-                <p className="font-medium">{d.text}</p>
-                {d.followUp && (
-                  <p className="mt-0.5 text-xs italic text-muted">
-                    Probe: {d.followUp}
-                  </p>
-                )}
+              </span>
+            )}
+            <p className="text-[15px] font-medium leading-snug text-ink">{d.text}</p>
+            {setup ? (
+              <Setup text={setup} />
+            ) : (
+              <button
+                type="button"
+                onClick={() => void addSetupTo(d)}
+                disabled={busy === d.id}
+                className="mt-1 text-xs font-medium text-[var(--accent)] hover:underline disabled:opacity-60"
+              >
+                {busy === d.id ? "Writing a setup…" : "Add a setup"}
+              </button>
+            )}
+          </div>
+        </div>
 
-                {/* Asks what one of theirs already asks. Shown before any
-                  button, so the choice is made with both in view. */}
-                {like && !d.done && (
-                  <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2 text-xs text-amber-900">
-                    <p className="font-semibold">
-                      You have one like this
-                      {like.picked ? " in your list" : " in the bank"}:
-                    </p>
-                    {like.setup && (
-                      <p className="mt-0.5 text-amber-900/80">{like.setup}</p>
-                    )}
-                    <p className="mt-0.5">{like.text}</p>
-                  </div>
-                )}
-
-                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                  {d.done ? (
-                    <span className="inline-flex items-center gap-1 text-xs text-emerald-700">
-                      <Check size={12} />
-                      {d.done === "list"
-                        ? "In your list"
-                        : d.done === "bank"
-                          ? "In the bank"
-                          : d.done === "replaced"
-                            ? "Used instead of yours"
-                            : "Kept yours"}
-                    </span>
-                  ) : like ? (
-                    <>
-                      <Button size="sm" onClick={() => replace(d, like)}>
-                        <ArrowLeftRight size={12} /> Use this one instead
-                      </Button>
-                      {/* Keeping both used to put the new one wherever yours
-                        lived, with no say in it. Where it goes is the choice. */}
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => add(d, "list")}
-                      >
-                        <Plus size={12} /> Add to my list too
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => add(d, "bank")}
-                      >
-                        Add to bank
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => mark(d.id, "kept")}
-                      >
-                        Keep mine
-                      </Button>
-                    </>
-                  ) : (
-                    <>
-                      <Button size="sm" onClick={() => add(d, "list")}>
-                        <Plus size={12} /> Add to my list
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => add(d, "bank")}
-                      >
-                        Add to bank
-                      </Button>
-                    </>
-                  )}
-                  {/* Working from this one: more of the kind, another way to
-                    ask it, or a fix for what is wrong with it. */}
-                  {queued.includes(d.id) && (
-                    <span className="inline-flex items-center gap-1 rounded bg-canvas px-1.5 py-0.5 text-[11px] font-medium text-muted">
-                      Queued
-                      <button
-                        type="button"
-                        onClick={() => unqueue(d.id)}
-                        className="underline-offset-2 hover:text-ink hover:underline"
-                      >
-                        cancel
-                      </button>
-                    </span>
-                  )}
-                  {(
-                    <span className="ml-auto flex flex-wrap gap-0.5">
-                      <button
-                        type="button"
-                        onClick={() => openAsk({ kind: "more", draft: d })}
-                        className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs text-muted hover:bg-surface hover:text-ink"
-                      >
-                        <Copy size={12} /> More like this
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => openAsk({ kind: "version", draft: d })}
-                        className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs text-muted hover:bg-surface hover:text-ink"
-                      >
-                        <RefreshCw size={12} /> Another version
-                      </button>
-                      {!d.done && (
-                        <button
-                          type="button"
-                          onClick={() => openAsk({ kind: "fix", draft: d })}
-                          className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs text-muted hover:bg-surface hover:text-ink"
-                        >
-                          <ThumbsDown size={12} /> What&apos;s wrong?
-                        </button>
-                      )}
-                    </span>
-                  )}
-                </div>
-                {askingDraft === d.id && asking && askBox(asking)}
-                {busy === d.id && (
-                  <Working
-                    active
-                    seconds={SECONDS.more}
-                    label="Writing from this question"
-                    onCancel={cancel}
-                    className="mt-2"
-                  />
-                )}
-              </li>
-            </Fragment>
-          );
-        })}
-      </ul>
-
-      {busy === "batch" && (
-        <Working
-          active
-          seconds={SECONDS.batch}
-          label="Writing different ones"
-          onCancel={cancel}
-        />
-      )}
-
-      {asking?.kind === "batch"
-        ? askBox(asking)
-        : !busy && (
-            <div className="flex justify-end gap-2">
-              <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
-                Hide
-              </Button>
+        {/* A sharper question for this setup, offered, not applied. */}
+        {d.suggested && (
+          <div className="mt-2 rounded-md border border-[var(--accent)]/30 bg-[var(--accent-soft)]/30 px-2.5 py-2 text-xs">
+            <p className="font-semibold text-[var(--accent)]">A sharper question for this setup</p>
+            <p className="mt-0.5 text-sm text-ink">{d.suggested.text}</p>
+            <p className="mt-0.5 text-muted">Why: {d.suggested.why}</p>
+            <div className="mt-1.5 flex gap-1.5">
               <Button
                 size="sm"
-                variant="ghost"
-                onClick={() => openAsk({ kind: "batch" })}
+                onClick={() =>
+                  patchDraft(d.id, {
+                    text: d.suggested!.text,
+                    followUp: d.suggested!.followUp || d.followUp,
+                    suggested: undefined,
+                  })
+                }
               >
-                Write different ones
+                Use it
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => patchDraft(d.id, { suggested: undefined })}>
+                Keep mine
               </Button>
             </div>
+          </div>
+        )}
+
+        {/* Asks what one of theirs already asks. */}
+        {like && (
+          <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900">
+            <span className="font-semibold">You have one like this{like.picked ? " in your list" : " in the bank"}: </span>
+            {like.text}
+          </div>
+        )}
+
+        <div className="mt-2 flex flex-wrap items-center gap-1">
+          {like ? (
+            <>
+              <Button size="sm" onClick={() => replace(d, like)}>
+                <ArrowLeftRight size={12} /> Use instead of yours
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => add(d, "list")}>
+                <Plus size={12} /> List too
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => add(d, "bank")}>
+                Bank
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => mark(d.id, "kept")}>
+                Keep mine
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button size="sm" onClick={() => add(d, "list")}>
+                <Plus size={12} /> Add to my list
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => add(d, "bank")}>
+                Bank
+              </Button>
+            </>
           )}
+          {queued.includes(d.id) && (
+            <span className="inline-flex items-center gap-1 rounded bg-canvas px-1.5 py-0.5 text-[11px] font-medium text-muted">
+              Queued
+              <button type="button" onClick={() => unqueue(d.id)} className="hover:text-ink hover:underline">
+                cancel
+              </button>
+            </span>
+          )}
+          <span className="ml-auto flex items-center">
+            <IconAction label="Edit" onClick={() => setEditing(d.id)}>
+              <Pencil size={13} />
+            </IconAction>
+            <IconAction label="More like this" onClick={() => openAsk({ kind: "more", draft: d })}>
+              <Copy size={13} />
+            </IconAction>
+            <IconAction label="Another version" onClick={() => openAsk({ kind: "version", draft: d })}>
+              <RefreshCw size={13} />
+            </IconAction>
+            <IconAction label="What's wrong?" onClick={() => openAsk({ kind: "fix", draft: d })}>
+              <ThumbsDown size={13} />
+            </IconAction>
+            <IconAction label="Remove" onClick={() => mark(d.id, "removed")}>
+              <X size={14} />
+            </IconAction>
+          </span>
+        </div>
+        {askingDraft === d.id && asking && askBox(asking)}
+        {busy === d.id && (
+          <Working active seconds={SECONDS.more} label="Writing from this question" onCancel={cancel} className="mt-2" />
+        )}
+      </li>
+    );
+  };
+
+  return (
+    <div className="mt-3 space-y-3 rounded-lg bg-canvas p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-sm font-semibold">Questions from this</p>
+        <span className="text-xs text-muted">
+          {open_.length} to look at{handled.length ? ` · ${handled.length} done` : ""}
+        </span>
+        <span className="ml-auto flex items-center gap-1">
+          {anyNew && (
+            <Button size="sm" variant="ghost" onClick={clearNew}>
+              Clear New tags
+            </Button>
+          )}
+          <Button size="sm" variant="secondary" onClick={() => openAsk({ kind: "batch" })} disabled={busy === "batch"}>
+            <Plus size={12} /> Write more
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
+            Hide
+          </Button>
+        </span>
+      </div>
+
+      {asking?.kind === "batch" && askBox(asking)}
+      {busy === "batch" && (
+        <Working active seconds={SECONDS.batch} label="Writing questions from this source" onCancel={cancel} />
+      )}
+
+      {groups.map((g, gi) => (
+        <details key={`${g.ask}-${gi}`} open className="group">
+          <summary className="flex cursor-pointer list-none items-start gap-1.5 text-xs text-muted">
+            <span className="mt-0.5 transition group-open:rotate-90">›</span>
+            <span className="min-w-0 flex-1">
+              {g.ask ? (
+                <>
+                  <span className="font-semibold">You asked for: </span>
+                  <span className="text-ink/80">{g.ask.length > 140 ? `${g.ask.slice(0, 140)}…` : g.ask}</span>
+                </>
+              ) : (
+                <span className="font-semibold">From the article</span>
+              )}
+              <span> ({g.items.length})</span>
+            </span>
+          </summary>
+          <ul className="mt-2 space-y-2">{g.items.map(row)}</ul>
+        </details>
+      ))}
+
+      {!open_.length && !busy && (
+        <p className="text-xs text-muted">Nothing left to look at here. Write more, or open what you added below.</p>
+      )}
+
+      {handled.length > 0 && (
+        <details className="text-xs">
+          <summary className="cursor-pointer text-muted">Added or kept ({handled.length})</summary>
+          <ul className="mt-1.5 space-y-1">
+            {handled.map((d) => (
+              <li key={d.id} className="flex items-start gap-2">
+                <Check size={12} className="mt-0.5 shrink-0 text-emerald-600" />
+                <span className="min-w-0 flex-1 text-ink/80">{d.text}</span>
+                <span className="shrink-0 text-muted">
+                  {d.done === "list"
+                    ? "In your list"
+                    : d.done === "bank"
+                      ? "In the bank"
+                      : d.done === "replaced"
+                        ? "Used instead of yours"
+                        : "Kept yours"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+
+      {removed.length > 0 && (
+        <details className="text-xs">
+          <summary className="cursor-pointer text-muted">Removed ({removed.length})</summary>
+          <ul className="mt-1.5 space-y-1">
+            {removed.map((d) => (
+              <li key={d.id} className="flex items-start gap-2">
+                <span className="min-w-0 flex-1 text-muted line-through">{d.text}</span>
+                <button
+                  type="button"
+                  onClick={() => patchDraft(d.id, { done: undefined })}
+                  className="shrink-0 text-[var(--accent)] hover:underline"
+                >
+                  Bring back
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
+  );
+}
+
+/** An icon button with its name on hover and for screen readers. */
+function IconAction({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      className="rounded p-1.5 text-muted transition hover:bg-canvas hover:text-ink"
+    >
+      {children}
+    </button>
+  );
+}
+
+/** The setup under its question: two lines, the rest a click away. */
+function Setup({ text }: { text: string }) {
+  const [full, setFull] = useState(false);
+  const long = text.length > 180;
+  return (
+    <p className="mt-1 text-xs leading-relaxed text-muted">
+      <span className="font-semibold text-ink/60">Setup: </span>
+      {full || !long ? text : `${text.slice(0, 170).replace(/\s+\S*$/, "")}… `}
+      {long && (
+        <button type="button" onClick={() => setFull((v) => !v)} className="text-[var(--accent)] hover:underline">
+          {full ? " less" : "more"}
+        </button>
+      )}
+    </p>
+  );
+}
+
+/** Change a draft by hand before it goes anywhere. */
+function EditDraft({
+  d,
+  onSave,
+  onCancel,
+}: {
+  d: SourceDraft;
+  onSave: (p: Partial<SourceDraft>) => void;
+  onCancel: () => void;
+}) {
+  const [setup, setSetup] = useState(d.setup || "");
+  const [text, setText] = useState(d.text);
+  const [followUp, setFollowUp] = useState(d.followUp || "");
+  return (
+    <div className="space-y-2">
+      <Textarea label="Setup, said before the question" value={setup} onChange={(e) => setSetup(e.target.value)} className="min-h-20 text-sm" />
+      <Textarea label="The question" value={text} onChange={(e) => setText(e.target.value)} className="min-h-14 text-sm" autoFocus />
+      <Input label="Probe, if the answer is thin" value={followUp} onChange={(e) => setFollowUp(e.target.value)} />
+      <div className="flex justify-end gap-2">
+        <Button size="sm" variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button
+          size="sm"
+          disabled={!text.trim()}
+          onClick={() => onSave({ setup: setup.trim(), text: text.trim(), followUp: followUp.trim() })}
+        >
+          Save
+        </Button>
+      </div>
     </div>
   );
 }
