@@ -111,8 +111,13 @@ const INTRODUCES = /\b(?:a|an|one|another|some|recent|new|large|global|\d{4})\b[
 /** The phrase pointing at a document nobody was told about, or null. */
 export function unnamedSource(line: string): string | null {
   const t = String(line || "");
-  const hard = t.match(ALWAYS_UNNAMED);
-  if (hard) return hard[0];
+  // "That guidance" is fine once the same line has already said what the
+  // guidance is ("most AI guidance in pharma covers..."). "The source" never is.
+  for (const hard of t.matchAll(new RegExp(ALWAYS_UNNAMED.source, "gi"))) {
+    const noun = hard[0].split(/\s+/).pop()!.toLowerCase();
+    const before = t.slice(0, hard.index).toLowerCase();
+    if (noun === "source" || noun === "article" || !before.includes(noun)) return hard[0];
+  }
   const soft = t.match(MAYBE_UNNAMED);
   if (soft && soft.index !== undefined && !INTRODUCES.test(t.slice(0, soft.index))) return soft[0];
   return null;
@@ -132,8 +137,21 @@ export function spokenProblem(setup: string, text: string): string | null {
   // question said twice. One rewrite ended by repeating it word for word.
   if (/\?\s*$/.test(setup.trim()) || (text.length > 20 && setup.includes(text.slice(0, Math.min(50, text.length)))))
     return "the setup asks the question itself, so it would be said twice";
-  const unnamed = unnamedSource(setup) || unnamedSource(text);
+  // "The guidance" in the question is fine once the setup has said what the
+  // guidance is. Checked only against the question, a setup could never fix
+  // it, so "Add a setup" failed on every try for two such questions.
+  const inText = unnamedSource(text);
+  const noun = (inText || "").split(/\s+/).pop()?.toLowerCase() || "";
+  // With a setup in front, only a pointer at a document itself ("the
+  // article", "the report") must be named there word for word; "the
+  // guidance" after a setup about the rules for AI reads fine, and the
+  // model judge still reads the pair as a whole.
+  const documentLike = /^(?:source|article|piece|authors?|report|study|survey|paper|document|write-?up|deck|material)$/.test(noun);
+  const introduced = Boolean(inText && setup.trim() && noun && (setup.toLowerCase().includes(noun) || !documentLike));
+  const unnamed = unnamedSource(setup);
   if (unnamed) return `it refers to a document the room has never been told about ("${unnamed}")`;
+  if (inText && !introduced)
+    return `the question says "${inText}" and the setup never says what that is; the setup must say plainly what it is, using the word "${noun}"`;
   const lean = leansOnAnother(setup) || leansOnAnother(text);
   if (lean) return `it depends on something said before it ("${lean}")`;
   if (!setup.trim() && MID_THOUGHT.test(text)) return "the question starts mid-thought with nothing before it";
@@ -1057,7 +1075,7 @@ ${SEAT_RULE}
 
 ${SETUP_RULE}
 
-Write each setup so it leads straight into that exact question as worded. ${STANDALONE_RULE}
+Write each setup so it leads straight into that exact question as worded. If the question refers to something as "the X" (the guidance, the slide, the framework), the setup says plainly what that is, so the question makes sense to a room that has read nothing. ${STANDALONE_RULE}
 
 ${force ? `\nThe writer has asked for a setup on every question below by name, including ones you would normally leave bare. Write one for each: the shortest setup that makes the question land, one or two sentences where that is all it needs. Never return "".\n` : ""}
 When a question already has a setup being replaced, keep every figure and named finding it had ("more than a quarter", "20 percent relative to revenue"): those are why it was written. Draw the substance from the research and reading list below first; where they say nothing on a question, use what you know of the subject, but never invent a figure. A number in a setup must come from the material below.
@@ -1084,14 +1102,19 @@ Return one entry per question, with "index" exactly as given. Plain prose, no ma
   const allow = allowedNames(meeting.attendees);
   const houses = housesIn(research);
   const out = questions.map(() => "");
+  // Asked for by name, a setup that names a source goes back for another
+  // try rather than vanishing: "Add a setup" used to fail outright.
+  const named: { i: number; hit: string }[] = [];
   for (const r of Array.isArray(parsed.setups) ? parsed.setups : []) {
     const i = Number(r?.index);
     const setup = String(r?.setup || "").trim();
     if (!Number.isInteger(i) || i < 0 || i >= out.length || !setup) continue;
     // Said out loud, so the same check every question passes. A setup that
     // names a source is left off rather than said.
-    if (namedSource(setup, allow, houses)) {
+    const name = namedSource(setup, allow, houses);
+    if (name) {
       console.warn(`[setups] named a source, left it off: ${setup.slice(0, 60)}`);
+      if (force && !repairing) named.push({ i, hit: `it names a source aloud (${String(name)}); state the point without saying who published it` });
       continue;
     }
     out[i] = setup;
@@ -1108,27 +1131,38 @@ Return one entry per question, with "index" exactly as given. Plain prose, no ma
       .map((x, i) => ({ i, hit: spokenProblem(x, questions[i].text) || judged.get(i) || "" }))
       // A bare question that is fine bare stays bare.
       .filter((r) => r.hit && (out[r.i] || /mid-thought/.test(r.hit)));
+    leaning.push(...named);
   }
   if (leaning.length) {
     console.warn(`[setups] ${leaning.length} did not stand alone or used filler, rewriting: ${leaning.map((r) => r.hit).join(" | ")}`);
-    const fixed = await Promise.all(
-      leaning.map((r) =>
-        writeSetups({
+    // Asked for one by name ("Add a setup"), it gets a second try: one try
+    // failed about half the time on a question that mentions "the guidance".
+    const tries = force && questions.length === 1 ? 2 : 1;
+    const repair = async (r: { i: number; hit: string }): Promise<string> => {
+      let hit = r.hit;
+      for (let t = 0; t < tries; t++) {
+        const [got = ""] = await writeSetups({
           meeting,
           kolBlock,
           research,
-          questions: [questions[r.i]],
-          standing: `${standing}\nA previous setup for this question said "${r.hit}", which only works if another question was asked first. This one is said on its own: state the finding in full.`.trim(),
+          // The fix rides on the question itself, where the writer reads it:
+          // in the standing note alone it was ignored three times running.
+          questions: [{ ...questions[r.i], why: `${questions[r.i].why || ""} MUST FIX: ${hit}.`.trim() }],
+          standing: `${standing}\nA previous setup for this question had this problem: ${hit}. Write it again without it; it is said on its own, so state the finding in full.`.trim(),
           force: true,
           repairing: true,
-        }).then((x) => x[0] || ""),
-      ),
-    );
-    leaning.forEach((r, k) => {
-      // The full check, not only the leaning one: accepting on leaning
-      // alone let a rewrite through that ended by asking its own question.
-      out[r.i] = fixed[k] && !spokenProblem(fixed[k], questions[r.i].text) ? fixed[k] : "";
-    });
+        });
+        // The full check, not only the leaning one: accepting on leaning
+        // alone let a rewrite through that ended by asking its own question.
+        const still = got ? spokenProblem(got, questions[r.i].text) || namedSource(got, allow, houses) : "came back empty";
+        if (!still) return got;
+        console.warn(`[setups] repair rejected (${still}): ${got.slice(0, 160)}`);
+        hit = still;
+      }
+      return "";
+    };
+    const fixed = await Promise.all(leaning.map(repair));
+    leaning.forEach((r, k) => (out[r.i] = fixed[k]));
   }
   return out.map((x, i) => stripAskedQuestion(x, questions[i].text));
 }

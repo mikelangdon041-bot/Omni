@@ -136,7 +136,9 @@ export function namedSource(text: string, allow: string[] = [], houses: string[]
   }
 
   for (const house of NAMED_HOUSES) {
-    if (!lower.includes(house)) continue;
+    // As a whole word: "informa" sat inside every "information" and threw out
+    // setups that named nobody.
+    if (!new RegExp(`\\b${house.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(lower)) continue;
     // Their own employer is fair game to ask them about.
     if (allowed.some((a) => a.includes(house) || house.includes(a))) continue;
     return house;
