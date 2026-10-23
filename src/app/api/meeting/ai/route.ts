@@ -24,6 +24,7 @@ import { MEETING_TYPES } from "@/lib/meetingprep/types";
 import {
   fillOutQuestion,
   findSimilar,
+  rewriteQuestion,
   writeQuestions,
   writeSetups,
   writeVariants,
@@ -465,6 +466,21 @@ export async function POST(req: Request) {
         force: Boolean(body?.force),
       });
       return NextResponse.json({ setups });
+    }
+
+    // A new question under a setup the writer likes; the setup is not touched.
+    if (action === "rewrite_question") {
+      const meeting: MeetingPayload = body?.meeting || {};
+      const questions = await rewriteQuestion({
+        meeting,
+        setup: String(body?.setup || "").slice(0, 3000),
+        question: String(body?.question || "").slice(0, 1000),
+        complaint: String(body?.complaint || "").slice(0, 1000),
+        kind: body?.kind === "version" ? "version" : "fix",
+        standing: String(body?.standing || "").slice(0, 2000),
+        count: Math.min(4, Math.max(1, Number(body?.count) || 2)),
+      });
+      return NextResponse.json({ questions });
     }
 
     // Which question already in the bank each new one duplicates, if any.

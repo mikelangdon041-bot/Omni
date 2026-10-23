@@ -15,7 +15,7 @@
 // to name it: a new batch, more like one they liked, another version of one,
 // or one fixed for what they did not like.
 
-import { Fragment, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import {
   ArrowLeftRight,
   Check,
@@ -83,6 +83,35 @@ async function fullTextOf(s: ReadingSource, m: MpMeeting): Promise<string> {
   }
 }
 
+/** For a fix or a version: the question only, the setup only, or both. */
+type Part = "question" | "setup" | "both";
+type PartChoice = Part | "auto";
+
+const GOOD = /\b(?:great|good|fine|ok(?:ay)?|love|like|perfect|keep|works|happy with|is right|spot on)\b/i;
+const BAD = /\b(?:bad|wrong|weak|vague|long|short|boring|generic|fake|filler|corporate|off|doesn'?t (?:fit|work|land)|don'?t like|isn'?t|not (?:good|right|great)|hate|change|fix|redo|rewrite)\b/i;
+
+/**
+ * Which part the writer means, from what they wrote, so they do not have to
+ * say it twice: "setup is great but question isn't" is about the question.
+ * Each part is judged on the clause that mentions it; when nothing says, the
+ * question changes and the setup stays, the safer of the two to get wrong.
+ */
+export function inferPart(note: string): { part: Part; why: string } {
+  const t = note.toLowerCase();
+  if (/\b(?:both|start over|whole thing|all of it|everything)\b/.test(t)) return { part: "both", why: "you asked for all of it" };
+  const clauses = t.split(/[.,;!?]|\bbut\b|\band\b|\bwhile\b|\bthough\b/);
+  const about = (word: RegExp) => clauses.filter((c) => word.test(c));
+  const setup = about(/\bsetups?\b|\bintro\b|\bpreamble\b|\blead-?in\b/);
+  const question = about(/\bquestions?\b|\bask\b/);
+  const setupGood = setup.some((c) => GOOD.test(c) && !BAD.test(c.replace(/isn'?t/, "")));
+  const setupBad = setup.some((c) => BAD.test(c) && !GOOD.test(c));
+  const questionBad = question.some((c) => BAD.test(c) || /isn'?t|not/.test(c));
+  if (setupBad && !questionBad) return { part: "setup", why: "you said the setup is the problem" };
+  if (setupBad && questionBad) return { part: "both", why: "you said both need work" };
+  if (setupGood) return { part: "question", why: "you said the setup is fine" };
+  return { part: "question", why: "the setup stays unless you say otherwise" };
+}
+
 /** What the writer asked for. "batch" is a whole new set; the rest are about one draft. */
 type Ask =
   { kind: "batch" } | { kind: "more" | "version" | "fix"; draft: SourceDraft };
@@ -128,6 +157,14 @@ export function SourceQuestions({
   const toast = useToast();
   /** "batch" or the id of the draft being worked on. */
   const [busy, setBusy] = useState<string>("");
+  // Requests made while one is running wait their turn rather than being
+  // refused: the writer works down the list while the first one writes.
+  const running = useRef(false);
+  const queue = useRef<{ ask: Ask; note: string; part: Part }[]>([]);
+  const [queued, setQueued] = useState<string[]>([]);
+  // For a fix or a version: which part to change. A fix used to rewrite the
+  // setup the writer had just said was great.
+  const [part, setPart] = useState<PartChoice>("auto");
   const [open, setOpen] = useState(true);
   /** The feedback box that is open, if any. */
   const [asking, setAsking] = useState<Ask | null>(null);
@@ -241,9 +278,93 @@ Write questions specifically on that, each with a setup. How many is set by the 
     };
   }
 
+  /** Run it now, or after the one that is running. */
+  function request(ask: Ask, note = "", which: Part = "both") {
+    if (running.current) {
+      queue.current.push({ ask, note, part: which });
+      setQueued((q) => [...q, ask.kind === "batch" ? "batch" : ask.draft.id]);
+      toast("info", "Queued. It starts when the current one finishes.");
+      return;
+    }
+    void run(ask, note, which);
+  }
+
+  async function run(ask: Ask, note: string, which: Part) {
+    running.current = true;
+    try {
+      if ((ask.kind === "fix" || ask.kind === "version") && which !== "both")
+        await rewritePart(ask, note, which);
+      else await generate(ask, note);
+    } finally {
+      running.current = false;
+      const next = queue.current.shift();
+      setQueued((q) => q.slice(1));
+      if (next) void run(next.ask, next.note, next.part);
+    }
+  }
+
+  /**
+   * Change one part of a draft and leave the other alone: a new question
+   * under the same setup, or a new setup over the same question. Seconds,
+   * not the best part of a minute, because it is one line on the quick model
+   * rather than the whole question writer.
+   */
+  async function rewritePart(ask: Ask & { draft: SourceDraft }, note: string, which: "question" | "setup") {
+    const m = getMeeting();
+    if (!m) return;
+    setBusy(ask.draft.id);
+    try {
+      const d = ask.draft;
+      let got: SourceDraft[] = [];
+      if (which === "question") {
+        const json = await post<{ questions: { text: string; followUp: string }[] }>({
+          action: "rewrite_question",
+          meeting: meetingPayload(m),
+          setup: d.setup,
+          question: d.text,
+          complaint: note,
+          kind: ask.kind === "version" ? "version" : "fix",
+          standing: m.questions?.guidance || "",
+          count: 2,
+        });
+        got = (json.questions || []).map((q) => ({ ...d, id: newId("sd"), text: q.text, followUp: q.followUp, similarTo: undefined, done: undefined }));
+      } else {
+        const one = () =>
+          post<{ setups: string[] }>({
+            action: "setups",
+            meeting: meetingPayload(m),
+            kolId: m.kol_id || "",
+            research: withReading("", m),
+            questions: [{ text: d.text, category: d.category, why: d.why }],
+            standing: `${m.questions?.guidance || ""}\nThe writer likes this question and wants ${ask.kind === "version" ? "a different setup for it" : "its setup fixed"}${note ? `: ${note}` : ""}.`.trim(),
+            force: true,
+          }).then((x) => String(x.setups?.[0] || ""));
+        const setups = (await Promise.all([one(), one()])).filter((x, i, a) => x && a.indexOf(x) === i);
+        got = setups.map((setup) => ({ ...d, id: newId("sd"), setup, similarTo: undefined, done: undefined }));
+      }
+      if (!got.length) throw new Error("Nothing usable came back. Try saying it differently.");
+      const what = which === "question" ? "the question" : "the setup";
+      for (const g of got) {
+        g.isNew = true;
+        g.askedFor = `${ask.kind === "version" ? "another version of" : "a fix for"} ${what} of: "${d.text.slice(0, 60)}${d.text.length > 60 ? "…" : ""}"${note ? `, ${note}` : ""}`;
+      }
+      const now = current().map((x) => (x.isNew ? { ...x, isNew: false } : x));
+      const at = now.findIndex((x) => x.id === d.id);
+      const next = [...now];
+      // A fix takes the place of what it fixes; versions go beside it.
+      if (ask.kind === "fix") next.splice(at < 0 ? next.length : at, at < 0 ? 0 : 1, ...got);
+      else next.splice(at < 0 ? next.length : at + 1, 0, ...got);
+      setDrafts(next, note);
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function generate(ask: Ask, note = "") {
     const m = getMeeting();
-    if (!m || busy) return;
+    if (!m) return;
     setBusy(ask.kind === "batch" ? "batch" : ask.draft.id);
     setOpen(true);
     try {
@@ -493,6 +614,7 @@ Write questions specifically on that, each with a setup. How many is set by the 
   function openAsk(ask: Ask) {
     setAsking(ask);
     setNote("");
+    setPart("auto");
   }
 
   // The feedback box for whichever request is open. A function that returns
@@ -507,9 +629,53 @@ Write questions specifically on that, each with a setup. How many is set by the 
           e.preventDefault();
           if (required && !note.trim()) return;
           setAsking(null);
-          void generate(ask, note.trim());
+          // Runs on submit, not during render; the rule cannot see that
+          // because the form is built by a helper called from render.
+          // eslint-disable-next-line react-hooks/refs
+          request(
+            ask,
+            note.trim(),
+            ask.kind === "fix" || ask.kind === "version"
+              ? part === "auto"
+                ? inferPart(note).part
+                : part
+              : "both",
+          );
         }}
       >
+        {(ask.kind === "fix" || ask.kind === "version") && (
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="text-muted">Change:</span>
+            {(
+              [
+                ["auto", "Let it decide"],
+                ["question", "The question"],
+                ["setup", "The setup"],
+                ["both", "Both"],
+              ] as const
+            ).map(([k, label]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setPart(k)}
+                className={`rounded-full border px-2.5 py-0.5 ${
+                  part === k
+                    ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
+                    : "border-border text-muted hover:text-ink"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+        {(ask.kind === "fix" || ask.kind === "version") && part === "auto" && note.trim() && (
+          <p className="text-[11px] text-muted">
+            Will change{" "}
+            {{ question: "the question", setup: "the setup", both: "both" }[inferPart(note).part]}:{" "}
+            {inferPart(note).why}.
+          </p>
+        )}
         <p className="text-xs font-medium">{PROMPTS[ask.kind]}</p>
         {/* What they asked for before, to see and reuse. Rewriting without
             it meant typing the same correction again from memory. */}
@@ -568,7 +734,7 @@ Write questions specifically on that, each with a setup. How many is set by the 
           <Button
             type="submit"
             size="sm"
-            disabled={Boolean(busy) || (required && !note.trim())}
+            disabled={required && !note.trim()}
           >
             {ask.kind === "batch"
               ? "Write questions"
@@ -746,7 +912,12 @@ Write questions specifically on that, each with a setup. How many is set by the 
                   )}
                   {/* Working from this one: more of the kind, another way to
                     ask it, or a fix for what is wrong with it. */}
-                  {!busy && (
+                  {queued.includes(d.id) && (
+                    <span className="rounded bg-canvas px-1.5 py-0.5 text-[11px] font-medium text-muted">
+                      Queued
+                    </span>
+                  )}
+                  {(
                     <span className="ml-auto flex flex-wrap gap-0.5">
                       <button
                         type="button"
@@ -775,7 +946,7 @@ Write questions specifically on that, each with a setup. How many is set by the 
                   )}
                 </div>
                 {askingDraft === d.id && asking && askBox(asking)}
-                {busy === d.id && asking === null && (
+                {busy === d.id && (
                   <Working
                     active
                     seconds={SECONDS.more}

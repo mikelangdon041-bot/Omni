@@ -985,3 +985,90 @@ Return a match only when you are confident. Most new questions have none; leave 
   }
   return out;
 }
+
+const REWRITE_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    questions: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: { text: { type: "string" as const }, followUp: { type: "string" as const } },
+        required: ["text", "followUp"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["questions"],
+  additionalProperties: false,
+};
+
+/**
+ * New questions for a setup the writer likes, the setup untouched.
+ *
+ * "Setup is great but question isn't" went through the whole question writer,
+ * which rewrote the setup it had just been told was great, took the best part
+ * of a minute doing it, and still asked "when was the last time" instead of
+ * what the setup was asking for. This writes only the question, on the quick
+ * model, tied to the problem the setup lays out.
+ */
+export async function rewriteQuestion({
+  meeting,
+  setup,
+  question,
+  complaint = "",
+  kind = "fix",
+  standing = "",
+  count = 2,
+}: {
+  meeting: MeetingPayload;
+  setup: string;
+  question: string;
+  /** What the writer said about it. */
+  complaint?: string;
+  /** "fix": they did not like it. "version": they want it asked another way. */
+  kind?: "fix" | "version";
+  standing?: string;
+  count?: number;
+}): Promise<{ text: string; followUp: string }[]> {
+  const res = await anthropic().messages.create({
+    model: CHECK_MODEL,
+    max_tokens: 1500,
+    output_config: { format: { type: "json_schema", schema: REWRITE_SCHEMA } },
+    system: `You write the question that follows a setup someone will say out loud on a panel. The setup stays exactly as it is; you write only the question after it.
+
+${SEAT_RULE}
+
+The question:
+- is about the exact problem or tension the setup lays out, so it lands as the obvious next thing to ask after hearing it. A question about a neighbouring point is wrong however good it is.
+- asks the people answering for what they know from doing the work: how they fix it, what they have tried, what worked and what did not, what they would change, what it cost them. Not "when was the last time", not yes/no, not a trivia question about their process.
+- is short enough to say in one breath and opens something up.
+- never names a consultancy, report, study, survey or author, and never refers to "the source", "the article" or anything the room has not heard.
+${kind === "version" ? "\nThe writer likes the current question and wants other ways of asking the same thing, far enough apart that choosing is a real choice." : "\nThe writer did not like the current question. Fix what they said is wrong with it."}
+${complaint ? `\nWhat the writer said, which outranks every rule above: ${complaint}\n` : ""}${standing.trim() ? `\nTheir standing instruction for how all their questions are written: ${standing.trim()}\n` : ""}
+Write exactly ${count} questions, each with a follow-up probe for when the first answer is thin, written word for word. Plain prose, no quotation marks, never an em dash.`,
+    messages: [
+      {
+        role: "user",
+        content: `${meetingContext({ ...meeting, documents: [] }, "") || "(minimal context)"}\n\nThe setup, which stays:\n${setup || "(none)"}\n\nThe current question:\n${question}`,
+      },
+    ],
+  });
+  if (res.stop_reason === "refusal") return [];
+  const parsed = JSON.parse(firstText(res) || "{}");
+  const allow = allowedNames(meeting.attendees);
+  return (Array.isArray(parsed.questions) ? parsed.questions : [])
+    .map((q: { text?: unknown; followUp?: unknown }) => ({
+      text: String(q?.text || "").trim(),
+      followUp: String(q?.followUp || "").trim(),
+    }))
+    .filter(
+      (q: { text: string }) =>
+        q.text &&
+        q.text.toLowerCase() !== question.trim().toLowerCase() &&
+        !namedSource(q.text, allow) &&
+        !unnamedSource(q.text) &&
+        !leansOnAnother(q.text),
+    )
+    .slice(0, count);
+}
