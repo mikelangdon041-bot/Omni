@@ -27,6 +27,8 @@ import {
   rewriteQuestion,
   sharpenQuestions,
   optionsFor,
+  orderForConversation,
+  placeQuestion,
   writeQuestions,
   writeSetups,
   writeVariants,
@@ -485,6 +487,19 @@ export async function POST(req: Request) {
       return NextResponse.json({ questions });
     }
 
+    // The list in conversation order, in named stretches.
+    if (action === "order") {
+      const meeting: MeetingPayload = body?.meeting || {};
+      const items = (Array.isArray(body?.items) ? body.items : []).slice(0, 80).map(lineIn);
+      return NextResponse.json({ order: await orderForConversation({ meeting, items }) });
+    }
+
+    // Where one new question belongs in the running order.
+    if (action === "place") {
+      const items = (Array.isArray(body?.items) ? body.items : []).slice(0, 80).map(lineIn);
+      return NextResponse.json(await placeQuestion({ items, question: lineIn(body?.question || {}) }));
+    }
+
     // Other ways to ask each question under its setup, to choose from.
     if (action === "options") {
       const meeting: MeetingPayload = body?.meeting || {};
@@ -805,4 +820,15 @@ ${OUTLINE_RULE}`,
     const message = err instanceof Error ? err.message : "AI request failed";
     return NextResponse.json({ error: message }, { status: 500 });
   }
+}
+
+/** One question of a list, as sent for ordering or placing. */
+function lineIn(x: { text?: unknown; setup?: unknown; forWhom?: unknown; askWho?: unknown; section?: unknown }) {
+  return {
+    text: String(x?.text || "").slice(0, 1000),
+    setup: String(x?.setup || "").slice(0, 600),
+    forWhom: String(x?.forWhom || "").slice(0, 100),
+    askWho: String(x?.askWho || "").slice(0, 60),
+    section: String(x?.section || "").slice(0, 80),
+  };
 }

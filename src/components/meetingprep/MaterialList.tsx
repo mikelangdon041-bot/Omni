@@ -36,6 +36,9 @@ export function MaterialList({
   onAdd: () => void;
 }) {
   const docs = m.documents || [];
+  // What the search found lives on the Reading tab, not here, and the writer
+  // read "only one article" as the rest missing. Listed, so they are seen.
+  const found = (m.reading?.sources || []).filter((s) => s.kind === "found");
   const setDoc = (id: string, partial: Partial<MpDocument>) =>
     save({ documents: docs.map((d) => (d.id === id ? { ...d, ...partial } : d)) });
 
@@ -92,6 +95,26 @@ export function MaterialList({
             </li>
           ))}
         </ul>
+      )}
+      {found.length > 0 && (
+        <div className="rounded-lg border border-dashed border-border p-3">
+          <p className="text-xs font-semibold">From your reading list ({found.length})</p>
+          <p className="text-[11px] text-muted">
+            Found and read in full on the Reading tab, and already used for your questions. Add one here only to tell me
+            to use it for something in particular.
+          </p>
+          <ul className="mt-1.5 space-y-1">
+            {found.map((s) => (
+              <li key={s.id} className="flex items-center gap-1.5 text-sm">
+                <Link2 size={13} className="shrink-0 text-muted" />
+                <a href={s.url} target="_blank" rel="noopener noreferrer" className="truncate hover:text-[var(--accent)]">
+                  {s.title}
+                </a>
+                {s.outlet && <span className="shrink-0 text-[11px] text-muted">{s.outlet}</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );

@@ -224,6 +224,25 @@ export function useMpMeeting(id: string, userId: string | null) {
     if (userId) setCached(`mtg:${userId}:${id}`, { _t: Date.now(), row });
   }, [flush, id, userId]);
 
+  // Coming back to the tab reads the row again. Anything written while the
+  // tab sat open (the chat, another tab, a fix run from outside) was being
+  // overwritten by this tab's older copy on the next click: setup fixes,
+  // labelled findings and panel tags all came back undone that way.
+  useEffect(() => {
+    let last = 0;
+    const onBack = () => {
+      if (document.visibilityState !== "visible" || Date.now() - last < 5000) return;
+      last = Date.now();
+      void reload();
+    };
+    window.addEventListener("focus", onBack);
+    document.addEventListener("visibilitychange", onBack);
+    return () => {
+      window.removeEventListener("focus", onBack);
+      document.removeEventListener("visibilitychange", onBack);
+    };
+  }, [reload]);
+
   // Deleting from the meeting itself, rather than only from the list. A
   // recording that turned out to be the wrong meeting, or one you did not
   // mean to keep, is discovered on this page — the recorder opens straight to

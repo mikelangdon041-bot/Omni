@@ -4,8 +4,9 @@
 // kind of question for one setup and another for the next, and said another
 // person might choose differently again, so the versions are offered side by
 // side and picking one swaps it in. The one it replaces stays as an option.
-// Sometimes they like two: "Keep both" holds the second as a backup question,
-// said if the first one falls flat, and it travels with the question.
+// Sometimes they like two: "Keep both" holds the second under the first, to
+// ask if the first falls flat, and it travels with the question. (Not
+// "backup": in the list that already means a question held in reserve.)
 
 import { useState } from "react";
 import type { QuestionOption, SharperQuestion } from "@/lib/meetingprep/types";
@@ -78,7 +79,7 @@ export function QuestionChoices({
           {kept.map((o) => (
             <li key={o.text} className="text-sm">
               <p className="text-ink">
-                <span className="mr-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">Backup</span>
+                <span className="mr-1.5 text-[11px] font-semibold text-muted">If that falls flat:</span>
                 {o.text}
               </p>
               <div className="mt-0.5 flex gap-3 text-xs">
@@ -120,7 +121,7 @@ export function QuestionChoices({
       ) : (
         <div className="mt-2 rounded-md bg-canvas px-2.5 py-2">
           <div className="flex items-center">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Or ask it this way</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Other ways to ask it</p>
             {x.optionChosen && (
               <button type="button" onClick={() => setShown(false)} className="ml-auto text-xs text-muted hover:text-ink hover:underline">
                 Hide
@@ -132,6 +133,13 @@ export function QuestionChoices({
           <ul className="mt-1 divide-y divide-border">
             {rest.map((o) => (
               <li key={o.text} className="py-2 first:pt-1 last:pb-0">
+                {/* A version rewritten for particular panelists says so:
+                    without it, it read as the same question reworded. */}
+                {o.kind.startsWith("For ") && (
+                  <p className="mb-0.5 text-[11px] font-semibold text-[var(--accent)]">Reworked {o.kind.replace(/^For /, "for ")}
+                    {o.note && <span className="font-normal text-muted">: {o.note}</span>}
+                  </p>
+                )}
                 <p className="text-sm leading-snug text-ink">{o.text}</p>
                 <div className="mt-1 flex gap-3 text-xs font-medium">
                   <button
@@ -148,7 +156,7 @@ export function QuestionChoices({
                     type="button"
                     onClick={() => onPick(keepOption(x, o, true))}
                     className="text-muted hover:text-ink hover:underline"
-                    title="Keep this one too, as a backup question under the same setup"
+                    title="Keep this one too, under the first, to ask if the first falls flat"
                   >
                     Keep both
                   </button>
@@ -159,5 +167,67 @@ export function QuestionChoices({
         </div>
       )}
     </>
+  );
+}
+
+/** Who a question is for, at a glance. */
+export function ForChip({ who }: { who: string }) {
+  if (!who.trim()) return null;
+  return (
+    <span className="rounded bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--accent)]">
+      {/^for\b/i.test(who) ? who : `For ${who}`}
+    </span>
+  );
+}
+
+/** First names of the people in the room, for the chips. */
+export function panelNames(attendees: { name: string }[] = []): string[] {
+  return attendees.map((a) => a.name.trim().split(/[\s,]+/)[0]).filter(Boolean);
+}
+
+/** The panelists a "for" line names; everyone when it says so, or says nothing. */
+export function namesIn(forWhom: string, panel: string[]): string[] {
+  const named = panel.filter((n) => new RegExp(`\\b${n}\\b`, "i").test(forWhom));
+  return named.length ? named : panel;
+}
+
+/**
+ * Who to put it to. The chips are the panelists it works for; one click
+ * assigns it to that one, so the writer can plan who speaks when. Those it
+ * does not suit are left off rather than greyed, so the choice is real.
+ */
+export function AskWho({
+  forWhom,
+  panel,
+  value,
+  onChange,
+}: {
+  forWhom: string;
+  panel: string[];
+  value?: string;
+  onChange: (who: string) => void;
+}) {
+  if (!panel.length) return <ForChip who={forWhom} />;
+  const names = namesIn(forWhom, panel);
+  const general = names.length === panel.length;
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1">
+      <span className="text-[10px] font-semibold text-muted">{general ? "Ask anyone:" : "Works for:"}</span>
+      {names.map((n) => (
+        <button
+          key={n}
+          type="button"
+          onClick={() => onChange(value === n ? "" : n)}
+          title={value === n ? `Assigned to ${n}. Click to unassign.` : `Put this one to ${n}`}
+          className={`rounded px-1.5 py-0.5 text-[10px] font-semibold transition ${
+            value === n
+              ? "bg-[var(--accent)] text-[var(--accent-fg)]"
+              : "bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)]/20"
+          }`}
+        >
+          {value === n ? `Ask ${n}` : n}
+        </button>
+      ))}
+    </span>
   );
 }

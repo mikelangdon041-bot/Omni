@@ -337,6 +337,10 @@ export interface IdeaSuggestion {
 // regenerate adds to the list rather than replacing it.
 export interface QuestionItem {
   id: string;
+  /** The one panelist the writer will put it to, of those it works for. */
+  askWho?: string;
+  /** The stretch of the conversation it belongs to, when the list is ordered. */
+  section?: string;
   /**
    * Said before the question: two to four sentences laying out the argument,
    * finding or tension it stands on, the way Ezra Klein sets a question up.
@@ -405,6 +409,8 @@ export interface QuestionOption {
   followUp: string;
   /** Kept beside the main question as a backup, not just a version. */
   keep?: boolean;
+  /** For a version reworked for particular panelists: what it changes. */
+  note?: string;
 }
 
 export interface SharperQuestion {

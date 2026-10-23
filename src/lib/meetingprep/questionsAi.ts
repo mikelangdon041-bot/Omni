@@ -789,7 +789,7 @@ Where that rule says the source goes in "why", in this call it goes in "sourceNo
 Fields:
 - followUp: the probe for when the first answer is thin or too comfortable, written word for word, exactly as it would be said, short enough to say in one breath. It asks for the part a comfortable answer leaves out: the example, the number, the time it did not work. Never a rephrasing of their question, never a second question about something else. Never empty.
 - why: at most 15 words on what this question gets them. Not a restatement of the question.
-- forWhom: who to put it to, when the context names someone it obviously belongs to. A name or a role, at most four words, because it is read at a glance beside the question. Never an instruction about how to ask it. Empty string whenever it is for everyone, which is the usual answer.
+- forWhom: who to put it to. When the context names the people in the room, their first names ("Ajay and Eleonora"), only those who can answer it from their own work, or "Everyone" when all of them truly can; never a description like "the most digitally focused panelist", which the writer cannot act on. With no names, a role at most four words, or "" when it is for everyone. Never an instruction about how to ask it.
 - sourceNote: one line of backing drawn from the research notes below, and from nowhere else. The finding first, in the writer's own terms, then the source and year in brackets. Under 25 words. This one is read by the writer and never said out loud, so the name belongs in it. Return an empty string unless the notes carry something that genuinely bears on THIS question: no research, nothing relevant, or a match that is only thematic all mean an empty string. Never reach into your own memory for a source, and never stretch a real one to fit, because they may cite it in the room.
 ${standing.trim() ? `\nTHE WRITER'S OWN INSTRUCTION ON HOW THEIR QUESTIONS ARE WRITTEN. It applies to the probe, and it outranks every rule above:\n${standing.trim()}\n` : ""}
 Plain prose. No markdown, no quotation marks around the question. Never an em dash or en dash.`;
@@ -923,7 +923,7 @@ Fields:
 - category: which part of the conversation it belongs to. Name it the way you would say it to a colleague: plain, literal, two to four words, describing what the questions in it are about or when they get asked. "Opening questions", "How it works in practice", "The uncomfortable ones", "Measuring it", "To close on". Never a colon, never a label with a clever subtitle after it, never a word nobody would say out loud. When categories are given below, use those exact names; only invent a new one for a question that genuinely belongs nowhere in them, and never a near-synonym of one that exists. Otherwise invent 4 to 6 that fit this meeting's arc (one to open with, two or three on the substance, one on the harder ground, one to close with). Use identical wording for every question in a category.
 - why: at most 15 words on what it gets you — the reason to pick this one, plus where the material came from when it came from the research. Not a restatement of the question.
 - followUp: the probe to use when the first answer is thin or too comfortable, also written word for word. Never empty.
-- forWhom: who to put it to, when that matters — a name from the context, or a role ("the most operational panelist", "the CFO"). Empty string when it is for everyone or for the only other person in the room.
+- forWhom: who to put it to. When the context names the people in the room, their first names, only those who can answer it from their own work ("Ajay and Eleonora"), or "Everyone" when all of them truly can. Never a description like "the most operational panelist", which the writer cannot act on. With no names, a role ("the CFO"), or "" for the only other person in the room.
 - rank: 1 is the strongest question in the whole list, then 2, and so on, every number used once. Rank on what would most move this meeting, not on category order.
 
 Plain prose. No markdown, no bold, no emoji, no quotation marks around the question. Never an em dash or en dash; use a comma or a full stop.
@@ -1442,6 +1442,104 @@ export async function optionsFor({
  * to the writer rather than applied: the list and the bank are theirs.
  * Returns, per item, the suggestion or null.
  */
+const ORDER_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    order: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: { index: { type: "number" as const }, section: { type: "string" as const } },
+        required: ["index", "section"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["order"],
+  additionalProperties: false,
+};
+
+type ListLine = { text: string; setup?: string; forWhom?: string; askWho?: string; section?: string };
+const lineOf = (q: ListLine, i: number) =>
+  `${i}. ${q.text}${q.askWho ? ` [asked of ${q.askWho}]` : q.forWhom ? ` [for ${q.forWhom}]` : ""}${q.setup ? `\n   (setup: ${q.setup.slice(0, 200)})` : ""}`;
+
+/**
+ * The list in the order a conversation would run, in a few named stretches.
+ * The writer: group similar questions and put them in an order that makes
+ * sense for a conversation. Every question is kept; only the order and the
+ * stretch it sits in change.
+ */
+export async function orderForConversation({
+  meeting,
+  items,
+}: {
+  meeting: MeetingPayload;
+  items: ListLine[];
+}): Promise<{ index: number; section: string }[]> {
+  if (items.length < 2) return items.map((_, index) => ({ index, section: "" }));
+  const res = await anthropic().messages.create({
+    model: CHECK_MODEL,
+    max_tokens: 3000,
+    output_config: { format: { type: "json_schema", schema: ORDER_SCHEMA } },
+    system: `A moderator's list of questions for a panel. Put them in the order the conversation should run and group them into 3 to 6 stretches.
+- Open with what frames the subject (defining the terms, a question everyone answers), close with a forward-looking or call-to-action question.
+- Keep questions on the same theme together, so the conversation builds instead of jumping around, and put the one that sets up a theme before the ones that go deeper into it.
+- Spread the panelists: avoid putting several questions in a row to the same person when another order works as well.
+- section: a short plain name for the stretch, two to five words ("Defining value", "Measuring the field", "Publications and evidence", "Where this goes next"). Questions in the same stretch share the exact same name.
+Return every index exactly once.`,
+    messages: [
+      {
+        role: "user",
+        content: `${meetingContext({ ...meeting, documents: [] }, "") || "(minimal context)"}\n\nThe list:\n${items.map(lineOf).join("\n")}`,
+      },
+    ],
+  });
+  const parsed = JSON.parse(firstText(res) || "{}");
+  const seen = new Set<number>();
+  const out: { index: number; section: string }[] = [];
+  for (const o of Array.isArray(parsed.order) ? parsed.order : []) {
+    const i = Number(o?.index);
+    if (!Number.isInteger(i) || i < 0 || i >= items.length || seen.has(i)) continue;
+    seen.add(i);
+    out.push({ index: i, section: String(o?.section || "").trim() });
+  }
+  // Anything the model dropped stays, at the end of the stretch it was in.
+  items.forEach((q, i) => !seen.has(i) && out.push({ index: i, section: q.section || out[out.length - 1]?.section || "" }));
+  return out;
+}
+
+const PLACE_SCHEMA = {
+  type: "object" as const,
+  properties: { after: { type: "number" as const }, section: { type: "string" as const } },
+  required: ["after", "section"],
+  additionalProperties: false,
+};
+
+/** Where a new question belongs in the running order: after which one (-1 for first), and in which stretch. */
+export async function placeQuestion({
+  items,
+  question,
+}: {
+  items: ListLine[];
+  question: ListLine;
+}): Promise<{ after: number; section: string }> {
+  if (!items.length) return { after: -1, section: "" };
+  try {
+    const res = await anthropic().messages.create({
+      model: CHECK_MODEL,
+      max_tokens: 300,
+      output_config: { format: { type: "json_schema", schema: PLACE_SCHEMA } },
+      system: `A moderator's questions for a panel, in the order the conversation runs, some marked with the stretch of the conversation they sit in. Say where the new question fits best: after: the index of the question it should follow (-1 to open with it), next to the questions on the same theme. section: the stretch it joins, copied exactly from the list, or "" if the list has none.`,
+      messages: [{ role: "user", content: `The list:\n${items.map((q, i) => `${lineOf(q, i)}${q.section ? `\n   [stretch: ${q.section}]` : ""}`).join("\n")}\n\nThe new question:\n${question.text}` }],
+    });
+    const p = JSON.parse(firstText(res) || "{}");
+    const after = Math.max(-1, Math.min(items.length - 1, Math.round(Number(p.after))));
+    return { after: Number.isFinite(after) ? after : items.length - 1, section: String(p.section || "") };
+  } catch {
+    return { after: items.length - 1, section: items[items.length - 1]?.section || "" };
+  }
+}
+
 export async function sharpenQuestions({
   meeting,
   items,

@@ -28,7 +28,7 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
-import { QuestionChoices } from "@/components/meetingprep/QuestionChoices";
+import { ForChip, QuestionChoices } from "@/components/meetingprep/QuestionChoices";
 import { Input, Textarea } from "@/components/ui/Input";
 import { Working } from "@/components/ui/Progress";
 import { useToast } from "@/components/ui/Feedback";
@@ -604,7 +604,7 @@ Write questions specifically on that, each with a setup. How many is set by the 
       asked: false,
       order: place ? place.order : 0,
       source: "ai",
-      // The versions and any backup question go with it into the list.
+      // The versions and any second question go with it into the list.
       options: d.options,
       optionChosen: d.optionChosen,
     };
@@ -692,6 +692,42 @@ Write questions specifically on that, each with a setup. How many is set by the 
     }
     save({ questions: { ...(m.questions || {}), items: [...items, item] } });
     mark(d.id, where);
+    if (where === "list") void placeInList(item.id);
+  }
+
+  /**
+   * Moves a question just added to the list next to the ones on the same
+   * theme, instead of leaving it at the bottom. It goes in at the end first,
+   * so it is in the list straight away; this follows a second or two later.
+   */
+  async function placeInList(id: string) {
+    const m = getMeeting();
+    if (!m) return;
+    const list = (m.questions?.items || []).filter((q) => q.picked && !q.deleted && q.id !== id).sort((a, b) => a.order - b.order);
+    const q = (m.questions?.items || []).find((x) => x.id === id);
+    if (!q || list.length < 2) return;
+    try {
+      const { after, section } = await post<{ after: number; section: string }>({
+        action: "place",
+        items: list.map((x) => ({ text: x.text, setup: x.setup, forWhom: x.forWhom, section: x.section })),
+        question: { text: q.text, setup: q.setup, forWhom: q.forWhom },
+      });
+      const now = getMeeting();
+      if (!now) return;
+      const ordered = [...list.slice(0, after + 1).map((x) => x.id), id, ...list.slice(after + 1).map((x) => x.id)];
+      const pos = new Map(ordered.map((x, k) => [x, k]));
+      save({
+        questions: {
+          ...(now.questions || {}),
+          items: (now.questions?.items || []).map((x) =>
+            pos.has(x.id) ? { ...x, order: pos.get(x.id)!, ...(x.id === id && section ? { section } : {}) } : x,
+          ),
+        },
+      });
+      toast("success", after + 1 < list.length ? `Added to your list, after "${list[after]?.text.slice(0, 50) || "the start"}…"` : "Added to the end of your list.");
+    } catch {
+      // It stays at the end, which is where it already is.
+    }
   }
 
   /** The new one takes the old one's place: its slot in the list, its order. */
@@ -935,8 +971,9 @@ Write questions specifically on that, each with a setup. How many is set by the 
       >
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
-            {(d.isNew || derivedKind(d.askedFor || "")) && (
-              <span className="mb-1 flex gap-1">
+            {(d.isNew || derivedKind(d.askedFor || "") || d.forWhom) && (
+              <span className="mb-1 flex flex-wrap gap-1">
+                <ForChip who={d.forWhom || ""} />
                 {d.isNew && (
                   <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">New</span>
                 )}

@@ -34,11 +34,12 @@ import {
   Trash2,
   Undo2,
   Wand2,
-  X,
   BookOpen,
+  Archive,
+  ListOrdered,
 } from "lucide-react";
 import { AskMode } from "@/components/meetingprep/AskMode";
-import { QuestionChoices } from "@/components/meetingprep/QuestionChoices";
+import { AskWho, QuestionChoices, panelNames } from "@/components/meetingprep/QuestionChoices";
 import { ReviewPanel } from "@/components/meetingprep/ReviewPanel";
 import { useReview } from "@/lib/meetingprep/useReview";
 import { Button } from "@/components/ui/Button";
@@ -323,6 +324,51 @@ export function QuestionsTab({
   function pick(q: QuestionItem) {
     const maxOrder = picked.length ? Math.max(...picked.map((p) => p.order)) : -1;
     patch(q.id, { picked: true, order: maxOrder + 1 });
+  }
+
+  const panel = panelNames(m.attendees);
+  const [ordering, setOrdering] = useState(false);
+  const [undoOrder, setUndoOrder] = useState<{ id: string; order: number; section?: string }[] | null>(null);
+
+  /** The list in conversation order, in named stretches; the old order kept for Undo. */
+  async function orderList() {
+    const list = picked;
+    setOrdering(true);
+    try {
+      const res = await fetch("/api/meeting/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          action: "order",
+          meeting: payloadOf(m),
+          items: list.map((q) => ({ text: q.text, setup: q.setup, forWhom: q.forWhom, askWho: q.askWho, section: q.section })),
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "Could not order the list");
+      const order: { index: number; section: string }[] = json.order || [];
+      const at = new Map(order.map((o, k) => [list[o.index]?.id, { order: k, section: o.section }]));
+      setUndoOrder(list.map((q) => ({ id: q.id, order: q.order, section: q.section })));
+      const fresh = latest.current.questions?.items || [];
+      save({
+        questions: {
+          ...latest.current.questions,
+          items: fresh.map((x) => (at.has(x.id) ? { ...x, order: at.get(x.id)!.order, section: at.get(x.id)!.section || undefined } : x)),
+        },
+      });
+      toast("success", "Ordered for the conversation. Drag anything to move it, or Undo.");
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setOrdering(false);
+    }
+  }
+  function undoOrdering() {
+    if (!undoOrder) return;
+    const was = new Map(undoOrder.map((u) => [u.id, u]));
+    setItems(items.map((x) => (was.has(x.id) ? { ...x, order: was.get(x.id)!.order, section: was.get(x.id)!.section } : x)));
+    setUndoOrder(null);
   }
 
   function unpick(q: QuestionItem) {
@@ -1015,6 +1061,24 @@ export function QuestionsTab({
             {picked.length}
           </span>
           <span className="flex-1" />
+          {picked.length > 2 && (
+            <span className="flex items-center gap-1">
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={ordering}
+                onClick={() => void orderList()}
+                title="Groups similar questions and puts them in the order the conversation should run"
+              >
+                <ListOrdered size={14} /> {ordering ? "Ordering…" : "Order for the conversation"}
+              </Button>
+              {undoOrder && (
+                <Button size="sm" variant="ghost" onClick={undoOrdering}>
+                  <Undo2 size={13} /> Undo
+                </Button>
+              )}
+            </span>
+          )}
           {picked.length ? (
             <RunTime
               asking={askingCount}
@@ -1039,16 +1103,30 @@ export function QuestionsTab({
           </p>
         ) : (
           <ol className="space-y-2">
+            {panel.length > 0 && (
+              <li className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-xs text-muted">
+                <span className="font-semibold">Assigned:</span>
+                {panel.map((n) => (
+                  <span key={n}>
+                    {n} {picked.filter((q) => q.askWho === n).length}
+                  </span>
+                ))}
+                <span>Not yet {picked.filter((q) => !q.askWho || !panel.includes(q.askWho)).length}</span>
+              </li>
+            )}
             {picked.map((q, i) => (
               <li
                 key={q.id}
                 data-qrow={q.id}
+                data-section={q.section && q.section !== picked[i - 1]?.section ? q.section : undefined}
                 onPointerMove={(e) => {
                   if (!dragId || dragId === q.id) return;
                   e.preventDefault();
                   reorder(dragId, i);
                 }}
-                className={`group/row flex items-start gap-2 rounded-xl border bg-surface p-2.5 transition ${
+                className={`group/row relative flex items-start gap-2 rounded-xl border bg-surface p-2.5 transition ${
+                  q.section && q.section !== picked[i - 1]?.section ? "mt-7 before:absolute before:-top-6 before:left-1 before:text-xs before:font-semibold before:uppercase before:tracking-wide before:text-[var(--accent)] before:content-[attr(data-section)]" : ""
+                } ${
                   dragId === q.id
                     ? "border-[var(--accent)] opacity-60 shadow-sm"
                     : "border-border hover:border-[var(--accent)]/40"
@@ -1129,7 +1207,12 @@ export function QuestionsTab({
                             Backup
                           </span>
                         )}
-                        {q.forWhom && <span>For: {q.forWhom}</span>}
+                        <AskWho
+                          forWhom={q.forWhom || ""}
+                          panel={panel}
+                          value={q.askWho}
+                          onChange={(who) => patch(q.id, { askWho: who || undefined })}
+                        />
                       </div>
                       <ProbeLine
                         q={q}
@@ -1178,8 +1261,14 @@ export function QuestionsTab({
                   >
                     <Pencil size={13} />
                   </IconBtn>
-                  <IconBtn label="Take out of my list" onClick={() => unpick(q)}>
-                    <X size={14} />
+                  <IconBtn
+                    label="Move to the bank"
+                    onClick={() => {
+                      unpick(q);
+                      toast("info", "Moved to the bank.");
+                    }}
+                  >
+                    <Archive size={13} />
                   </IconBtn>
                 </div>
               </li>
@@ -1284,9 +1373,14 @@ export function QuestionsTab({
                         versioning={versioningIds.includes(q.id)}
                         onWriteVersions={() => void sharpen([q])}
                       />
-                          <p className="mt-0.5 text-xs text-muted">
+                          <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted">
+                            <AskWho
+                          forWhom={q.forWhom || ""}
+                          panel={panel}
+                          value={q.askWho}
+                          onChange={(who) => patch(q.id, { askWho: who || undefined })}
+                        />
                             {q.why}
-                            {q.forWhom ? ` · For: ${q.forWhom}` : ""}
                           </p>
                           <ProbeLine
                             q={q}
