@@ -76,26 +76,28 @@ export function QuestionChoices({
       {kept.length > 0 && (
         <ul className="mt-1.5 space-y-1">
           {kept.map((o) => (
-            <li key={o.text} className="flex items-start gap-2 text-sm">
-              <span className="min-w-0 flex-1 text-ink">
+            <li key={o.text} className="text-sm">
+              <p className="text-ink">
                 <span className="mr-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">Backup</span>
                 {o.text}
-              </span>
-              <button
-                type="button"
-                onClick={() => onPick(pickOption(x, o))}
-                className="shrink-0 pt-0.5 text-xs text-muted hover:text-ink hover:underline"
-                title="Make this the main question"
-              >
-                Make main
-              </button>
-              <button
-                type="button"
-                onClick={() => onPick(keepOption(x, o, false))}
-                className="shrink-0 pt-0.5 text-xs text-muted hover:text-ink hover:underline"
-              >
-                Drop
-              </button>
+              </p>
+              <div className="mt-0.5 flex gap-3 text-xs">
+                <button
+                  type="button"
+                  onClick={() => onPick(pickOption(x, o))}
+                  className="text-muted hover:text-ink hover:underline"
+                  title="Make this the main question"
+                >
+                  Make main
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onPick(keepOption(x, o, false))}
+                  className="text-muted hover:text-ink hover:underline"
+                >
+                  Drop
+                </button>
+              </div>
             </li>
           ))}
         </ul>
@@ -125,28 +127,32 @@ export function QuestionChoices({
               </button>
             )}
           </div>
-          <ul className="mt-1 space-y-1.5">
+          {/* The question first, full width; what to do with it underneath,
+              so the eye reads the question rather than a column of links. */}
+          <ul className="mt-1 divide-y divide-border">
             {rest.map((o) => (
-              <li key={o.text} className="flex items-start gap-2">
-                <span className="min-w-0 flex-1 px-1 py-0.5 text-sm text-ink">{o.text}</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShown(false);
-                    onPick(pickOption(x, o));
-                  }}
-                  className="shrink-0 pt-0.5 text-xs font-medium text-[var(--accent)] hover:underline"
-                >
-                  Use this
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onPick(keepOption(x, o, true))}
-                  className="shrink-0 pt-0.5 text-xs font-medium text-[var(--accent)] hover:underline"
-                  title="Keep this one too, as a backup question under the same setup"
-                >
-                  Keep both
-                </button>
+              <li key={o.text} className="py-2 first:pt-1 last:pb-0">
+                <p className="text-sm leading-snug text-ink">{o.text}</p>
+                <div className="mt-1 flex gap-3 text-xs font-medium">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShown(false);
+                      onPick(pickOption(x, o));
+                    }}
+                    className="text-[var(--accent)] hover:underline"
+                  >
+                    Use this instead
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onPick(keepOption(x, o, true))}
+                    className="text-muted hover:text-ink hover:underline"
+                    title="Keep this one too, as a backup question under the same setup"
+                  >
+                    Keep both
+                  </button>
+                </div>
               </li>
             ))}
           </ul>
