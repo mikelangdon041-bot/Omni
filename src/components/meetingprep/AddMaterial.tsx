@@ -64,6 +64,8 @@ function Body({
   const [purpose, setPurpose] = useState<MaterialPurpose | null>(initialPurpose || null);
   const [note, setNote] = useState("");
   const [stage, setStage] = useState("");
+  // So Cancel can stop it: nothing is saved once it is pressed.
+  const [ctrl, setCtrl] = useState<AbortController | null>(null);
 
   const p = MATERIAL_PURPOSES.find((x) => x.key === purpose);
   const hasContent = how === "file" ? Boolean(file) : how === "url" ? /^https?:\/\/\S+\.\S+/.test(url.trim()) : Boolean(text.trim());
@@ -84,12 +86,16 @@ function Body({
     const input: MaterialInput =
       how === "file" ? { kind: "file", file: file! } : how === "url" ? { kind: "url", url } : { kind: "paste", text, name };
     try {
-      const msg = await addMaterial({ input, purpose, note, getMeeting, save, onStage: setStage });
+      const c = new AbortController();
+      setCtrl(c);
+      const msg = await addMaterial({ input, purpose, note, getMeeting, save, onStage: setStage, signal: c.signal });
       toast("success", msg);
       onClose();
     } catch (e) {
-      toast("error", (e as Error).message);
+      if ((e as Error).name !== "AbortError") toast("error", (e as Error).message);
       setStage("");
+    } finally {
+      setCtrl(null);
     }
   }
 
@@ -99,7 +105,16 @@ function Body({
         <Loader2 size={22} className="animate-spin text-[var(--accent)]" />
         <p className="text-sm font-medium">{stage}</p>
         {/* Measured: an agenda read in 13s; a long PDF or a photo can take longer. */}
-        <Working active seconds={20} label="Reading it" className="w-full max-w-xs text-left" />
+        <Working
+          active
+          seconds={20}
+          label="Reading it"
+          className="w-full max-w-xs text-left"
+          onCancel={() => {
+            ctrl?.abort();
+            toast("info", "Cancelled. Nothing was added.");
+          }}
+        />
         <p className="max-w-xs text-xs text-muted">
           You can close this. It keeps going, and tells you when it&apos;s done.
         </p>

@@ -36,19 +36,21 @@ import {
   type GetMeeting,
   type SaveMeeting,
 } from "@/lib/meetingprep/material";
-import type {
-  MpMeeting,
-  QuestionItem,
-  ReadingSource,
-  SourceDraft,
+import {
+  stripAskedQuestion,
+  type MpMeeting,
+  type QuestionItem,
+  type ReadingSource,
+  type SourceDraft,
 } from "@/lib/meetingprep/types";
 
-async function post<T>(body: unknown): Promise<T> {
+async function post<T>(body: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch("/api/meeting/ai", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",
     body: JSON.stringify(body),
+    signal,
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(json.error || "Something went wrong");
@@ -65,7 +67,7 @@ const liveQuestions = (m: MpMeeting) =>
  * would ride along on every load of every meeting. "" when it cannot be
  * read, and the batch is written from the summary instead.
  */
-async function fullTextOf(s: ReadingSource, m: MpMeeting): Promise<string> {
+async function fullTextOf(s: ReadingSource, m: MpMeeting, signal?: AbortSignal): Promise<string> {
   const docId = s.fullDocId || s.docId;
   if (docId) return (m.documents || []).find((d) => d.id === docId)?.text || "";
   if (!s.url) return "";
@@ -75,6 +77,7 @@ async function fullTextOf(s: ReadingSource, m: MpMeeting): Promise<string> {
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
       body: JSON.stringify({ url: s.url }),
+      signal,
     });
     const json = await res.json().catch(() => ({}));
     return res.ok ? String(json.text || "") : "";
@@ -160,6 +163,11 @@ export function SourceQuestions({
   // Requests made while one is running wait their turn rather than being
   // refused: the writer works down the list while the first one writes.
   const running = useRef(false);
+  // The request in flight, so Cancel can stop waiting for it. The server
+  // finishes what it started; the answer is simply not used.
+  const abort = useRef<AbortController | null>(null);
+  const call = <T,>(body: unknown) => post<T>(body, abort.current?.signal);
+  const stopped = () => Boolean(abort.current?.signal.aborted);
   const queue = useRef<{ ask: Ask; note: string; part: Part }[]>([]);
   const [queued, setQueued] = useState<string[]>([]);
   // For a fix or a version: which part to change. A fix used to rewrite the
@@ -291,16 +299,34 @@ Write questions specifically on that, each with a setup. How many is set by the 
 
   async function run(ask: Ask, note: string, which: Part) {
     running.current = true;
+    abort.current = new AbortController();
     try {
       if ((ask.kind === "fix" || ask.kind === "version") && which !== "both")
         await rewritePart(ask, note, which);
       else await generate(ask, note);
     } finally {
       running.current = false;
+      abort.current = null;
       const next = queue.current.shift();
       setQueued((q) => q.slice(1));
       if (next) void run(next.ask, next.note, next.part);
     }
+  }
+
+  function cancel() {
+    abort.current?.abort();
+    toast("info", "Cancelled.");
+  }
+
+  /** Take a queued request back off the queue before it starts. */
+  function unqueue(id: string) {
+    const at = queue.current.findIndex((x) => (x.ask.kind === "batch" ? "batch" : x.ask.draft.id) === id);
+    if (at < 0) return;
+    queue.current.splice(at, 1);
+    setQueued((q) => {
+      const i = q.indexOf(id);
+      return i < 0 ? q : [...q.slice(0, i), ...q.slice(i + 1)];
+    });
   }
 
   /**
@@ -317,7 +343,7 @@ Write questions specifically on that, each with a setup. How many is set by the 
       const d = ask.draft;
       let got: SourceDraft[] = [];
       if (which === "question") {
-        const json = await post<{ questions: { text: string; followUp: string }[] }>({
+        const json = await call<{ questions: { text: string; followUp: string }[] }>({
           action: "rewrite_question",
           meeting: meetingPayload(m),
           setup: d.setup,
@@ -330,7 +356,7 @@ Write questions specifically on that, each with a setup. How many is set by the 
         got = (json.questions || []).map((q) => ({ ...d, id: newId("sd"), text: q.text, followUp: q.followUp, similarTo: undefined, done: undefined }));
       } else {
         const one = () =>
-          post<{ setups: string[] }>({
+          call<{ setups: string[] }>({
             action: "setups",
             meeting: meetingPayload(m),
             kolId: m.kol_id || "",
@@ -354,9 +380,10 @@ Write questions specifically on that, each with a setup. How many is set by the 
       // A fix takes the place of what it fixes; versions go beside it.
       if (ask.kind === "fix") next.splice(at < 0 ? next.length : at, at < 0 ? 0 : 1, ...got);
       else next.splice(at < 0 ? next.length : at + 1, 0, ...got);
+      if (stopped()) return;
       setDrafts(next, note);
     } catch (e) {
-      toast("error", (e as Error).message);
+      if (!stopped()) toast("error", (e as Error).message);
     } finally {
       setBusy("");
     }
@@ -377,14 +404,14 @@ Write questions specifically on that, each with a setup. How many is set by the 
       ]
         .filter(Boolean)
         .join("\n");
-      const sourceText = await fullTextOf(s, m);
+      const sourceText = await fullTextOf(s, m, abort.current?.signal);
       if (!sourceText && s.url)
         toast(
           "info",
           "Couldn't open the document at that link, so these are written from its summary.",
         );
       const { focus, count } = focusFor(ask, note, seen, Boolean(sourceText));
-      const json = await post<{ questions: Partial<SourceDraft>[] }>({
+      const json = await call<{ questions: Partial<SourceDraft>[] }>({
         action: "questions",
         meeting: meetingPayload(m),
         kolId: m.kol_id || "",
@@ -424,7 +451,7 @@ Write questions specifically on that, each with a setup. How many is set by the 
       // keep what came back rather than nothing.
       if (ask.kind === "fix" && got.length > 1) {
         try {
-          const { matches } = await post<{ matches: number[] }>({
+          const { matches } = await call<{ matches: number[] }>({
             action: "similar",
             drafts: got.map((d) => d.text),
             existing: [ask.draft.text],
@@ -440,7 +467,7 @@ Write questions specifically on that, each with a setup. How many is set by the 
       // Not for versions, which are meant to be the same question.
       if (got.length > 1 && (ask.kind === "batch" || ask.kind === "more")) {
         try {
-          const { matches } = await post<{ matches: number[] }>({
+          const { matches } = await call<{ matches: number[] }>({
             action: "similar",
             drafts: got.map((d) => d.text),
             existing: got.map((d) => d.text),
@@ -464,7 +491,7 @@ Write questions specifically on that, each with a setup. How many is set by the 
       const others = seen.map((d) => d.text);
       if (got.length && others.length && ask.kind !== "version") {
         try {
-          const { matches } = await post<{ matches: number[] }>({
+          const { matches } = await call<{ matches: number[] }>({
             action: "similar",
             drafts: got.map((d) => d.text),
             existing: others,
@@ -490,7 +517,7 @@ Write questions specifically on that, each with a setup. How many is set by the 
       // Which question already in the bank each one repeats, so it can say so.
       if (live.length) {
         try {
-          const { matches } = await post<{ matches: number[] }>({
+          const { matches } = await call<{ matches: number[] }>({
             action: "similar",
             drafts: got.map((d) => d.text),
             existing: live.map((q) => q.text),
@@ -521,6 +548,7 @@ Write questions specifically on that, each with a setup. How many is set by the 
         // stay below them; the untouched ones are what this replaces.
         // Nothing is thrown away: asked for more, the writer used to lose
         // every question they had not acted on yet.
+        if (stopped()) return;
         setDrafts([...got, ...now], note);
       } else {
         // Next to the one they came from. A fix takes its place.
@@ -532,10 +560,11 @@ Write questions specifically on that, each with a setup. How many is set by the 
           at < 0 ? 0 : 1 - keep,
           ...got,
         );
+        if (stopped()) return;
         setDrafts(next, note);
       }
     } catch (e) {
-      toast("error", (e as Error).message);
+      if (!stopped()) toast("error", (e as Error).message);
     } finally {
       setBusy("");
     }
@@ -757,6 +786,7 @@ Write questions specifically on that, each with a setup. How many is set by the 
             active
             seconds={SECONDS.batch}
             label="Writing questions from this source"
+            onCancel={cancel}
           />
         ) : asking?.kind === "batch" ? (
           askBox(asking)
@@ -830,8 +860,8 @@ Write questions specifically on that, each with a setup. How many is set by the 
                     </span>
                   </p>
                 )}
-                {d.setup && (
-                  <p className="mb-1 leading-relaxed text-ink/70">{d.setup}</p>
+                {stripAskedQuestion(d.setup, d.text) && (
+                  <p className="mb-1 leading-relaxed text-ink/70">{stripAskedQuestion(d.setup, d.text)}</p>
                 )}
                 <p className="font-medium">{d.text}</p>
                 {d.followUp && (
@@ -913,8 +943,15 @@ Write questions specifically on that, each with a setup. How many is set by the 
                   {/* Working from this one: more of the kind, another way to
                     ask it, or a fix for what is wrong with it. */}
                   {queued.includes(d.id) && (
-                    <span className="rounded bg-canvas px-1.5 py-0.5 text-[11px] font-medium text-muted">
+                    <span className="inline-flex items-center gap-1 rounded bg-canvas px-1.5 py-0.5 text-[11px] font-medium text-muted">
                       Queued
+                      <button
+                        type="button"
+                        onClick={() => unqueue(d.id)}
+                        className="underline-offset-2 hover:text-ink hover:underline"
+                      >
+                        cancel
+                      </button>
                     </span>
                   )}
                   {(
@@ -951,6 +988,7 @@ Write questions specifically on that, each with a setup. How many is set by the 
                     active
                     seconds={SECONDS.more}
                     label="Writing from this question"
+                    onCancel={cancel}
                     className="mt-2"
                   />
                 )}
@@ -965,6 +1003,7 @@ Write questions specifically on that, each with a setup. How many is set by the 
           active
           seconds={SECONDS.batch}
           label="Writing different ones"
+          onCancel={cancel}
         />
       )}
 

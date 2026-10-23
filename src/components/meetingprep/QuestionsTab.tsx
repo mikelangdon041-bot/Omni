@@ -12,7 +12,7 @@
 // backup, asked and order — so generating more questions only ever appends,
 // and never disturbs a list someone has arranged.
 
-import { createContext, useContext, useMemo, useState } from "react";
+import { createContext, useContext, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -59,6 +59,7 @@ import {
   engineBehind,
   meetingTypeLabel,
   setupFingerprint,
+  stripAskedQuestion,
   type MpMeeting,
   type QuestionItem,
   type ReviewNote,
@@ -179,6 +180,8 @@ export function QuestionsTab({
     return { where: "the bank" as const, qs: bank.slice(0, 40) };
   }, [picked, live]);
   const [settingUpId, setSettingUpId] = useState<string | null>(null);
+  // So Cancel can stop waiting for a setups request.
+  const setupAbort = useRef<AbortController | null>(null);
   const [settingUp, setSettingUp] = useState(false);
 
 
@@ -433,6 +436,7 @@ export function QuestionsTab({
   async function addSetups(only?: QuestionItem) {
     const targets = only ? [only] : setupTargets.qs;
     if (!targets.length) return;
+    setupAbort.current = new AbortController();
     if (only) setSettingUpId(only.id);
     else setSettingUp(true);
     try {
@@ -451,6 +455,7 @@ export function QuestionsTab({
           // have been left bare.
           force: Boolean(only),
         }),
+        signal: setupAbort.current.signal,
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || "Could not write the background");
@@ -473,8 +478,9 @@ export function QuestionsTab({
             : "None of these needed a setup.",
       );
     } catch (e) {
-      toast("error", (e as Error).message);
+      if (!setupAbort.current?.signal.aborted) toast("error", (e as Error).message);
     } finally {
+      setupAbort.current = null;
       setSettingUp(false);
       setSettingUpId(null);
     }
@@ -830,6 +836,10 @@ export function QuestionsTab({
         active={settingUp}
         seconds={10 + setupTargets.qs.length}
         label="Writing setups"
+        onCancel={() => {
+          setupAbort.current?.abort();
+          toast("info", "Cancelled.");
+        }}
         className="px-0.5"
       />
       {fillingAll && (
@@ -1576,7 +1586,9 @@ function SpokenQuestion({
 }) {
   return (
     <>
-      {q.setup && <p className="mb-1 text-sm leading-relaxed text-ink/70">{q.setup}</p>}
+      {stripAskedQuestion(q.setup, q.text) && (
+        <p className="mb-1 text-sm leading-relaxed text-ink/70">{stripAskedQuestion(q.setup, q.text)}</p>
+      )}
       <p className={`text-sm text-ink ${q.setup ? "font-medium" : ""}`}>{q.text}</p>
       {/* Left bare on purpose ("") is a judgement, and the writer may not
           share it. One click overrules it. */}

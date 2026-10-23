@@ -72,6 +72,12 @@ export function ReadingTab({
   const [ask, setAsk] = useState("");
   const [steerOpen, setSteerOpen] = useState(false);
   const busyRef = useRef(false);
+  // The search in flight, so Cancel can stop waiting for it.
+  const abort = useRef<AbortController | null>(null);
+  function cancel() {
+    abort.current?.abort();
+    toast("info", "Cancelled.");
+  }
 
   const stale = Boolean(reading.at && reading.fingerprint && reading.fingerprint !== setupFingerprint(m));
   const built = Boolean(reading.at);
@@ -93,6 +99,7 @@ export function ReadingTab({
         rejected: r.rejected || [],
         ...body,
       }),
+      signal: abort.current?.signal,
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(json.error || "The search failed");
@@ -104,6 +111,7 @@ export function ReadingTab({
   async function build() {
     if (busyRef.current) return;
     busyRef.current = true;
+    abort.current = new AbortController();
     setBusy("build");
     try {
       // A rebuild replaces what the search found, never what the writer
@@ -125,9 +133,10 @@ export function ReadingTab({
         },
       });
     } catch (e) {
-      toast("error", (e as Error).message);
+      if (!abort.current?.signal.aborted) toast("error", (e as Error).message);
     } finally {
       busyRef.current = false;
+      abort.current = null;
       setBusy("");
     }
   }
@@ -135,6 +144,7 @@ export function ReadingTab({
   async function findMore(request: string, count = 4, replacing?: string) {
     if (busyRef.current) return;
     busyRef.current = true;
+    abort.current = new AbortController();
     setBusy(replacing || "more");
     try {
       const out = await call({ more: true, ask: request, count });
@@ -157,9 +167,10 @@ export function ReadingTab({
       setAsk("");
       setMoreOpen(false);
     } catch (e) {
-      toast("error", (e as Error).message);
+      if (!abort.current?.signal.aborted) toast("error", (e as Error).message);
     } finally {
       busyRef.current = false;
+      abort.current = null;
       setBusy("");
     }
   }
@@ -248,7 +259,13 @@ export function ReadingTab({
           </Button>
         </div>
         {/* Measured: a full list ran 72-87s on the writer's panel. */}
-        <Working active={busy === "build"} seconds={120} label="Searching and reading every source" className="text-left" />
+        <Working
+          active={busy === "build"}
+          seconds={120}
+          label="Searching and reading every source"
+          className="text-left"
+          onCancel={cancel}
+        />
       </div>
     );
 
@@ -297,12 +314,13 @@ export function ReadingTab({
 
       {/* Measured on the panel: a full list 72-87s, find more 14-34s. */}
       {/* Search, then open and read every piece in full. */}
-      <Working active={busy === "build"} seconds={120} label="Searching and reading every source" />
-      <Working active={busy === "more"} seconds={55} label="Searching and reading the new ones" />
+      <Working active={busy === "build"} seconds={120} label="Searching and reading every source" onCancel={cancel} />
+      <Working active={busy === "more"} seconds={55} label="Searching and reading the new ones" onCancel={cancel} />
       <Working
         active={Boolean(busy) && busy !== "build" && busy !== "more"}
         seconds={25}
         label="Finding a replacement"
+        onCancel={cancel}
       />
 
       {steerOpen && <SteerBox value={reading.steer || ""} onChange={setSteer} open />}

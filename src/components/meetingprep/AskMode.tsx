@@ -8,7 +8,7 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, ListChecks, Star, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
-import type { QuestionItem } from "@/lib/meetingprep/types";
+import { stripAskedQuestion, type QuestionItem } from "@/lib/meetingprep/types";
 
 /**
  * Ask mode: the view you have open while the meeting is happening.
@@ -158,9 +158,9 @@ export function AskMode({
 
             {/* Said first, so it reads first, a size down: the question is
                 the line that has to survive a glance. */}
-            {cur.setup && (
+            {stripAskedQuestion(cur.setup, cur.text) && (
               <p className={`mt-5 text-lg leading-relaxed text-ink/75 sm:text-xl ${cur.asked ? "opacity-40" : ""}`}>
-                {cur.setup}
+                {stripAskedQuestion(cur.setup, cur.text)}
               </p>
             )}
             <p
@@ -316,8 +316,8 @@ function AskRow({
         {q.asked ? <Check size={15} /> : (n ?? <Star size={13} className="fill-current" />)}
       </button>
       <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
-        {q.setup && !q.asked && (
-          <span className="mb-0.5 block text-sm leading-snug text-muted">{q.setup}</span>
+        {stripAskedQuestion(q.setup, q.text) && !q.asked && (
+          <span className="mb-0.5 block text-sm leading-snug text-muted">{stripAskedQuestion(q.setup, q.text)}</span>
         )}
         <span
           className={`block text-base leading-snug sm:text-lg ${

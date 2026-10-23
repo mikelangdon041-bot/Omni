@@ -9,6 +9,7 @@
 
 import { anthropic, CHECK_MODEL, WRITER_MODEL } from "@/lib/anthropic";
 import { DOMAIN_RULE, SEAT_RULE, meetingContext, type MeetingPayload } from "./briefAi";
+import { stripAskedQuestion } from "./types";
 import { allowedNames, housesIn, namedSource } from "./spokenSources";
 
 export interface WrittenQuestion {
@@ -774,6 +775,7 @@ ${instructionBlock(guidance.trim(), coverage.trim(), focus.trim())}`,
   // A question that still only makes sense after something else is dropped:
   // the writer cannot ask it without the thing it leans on.
   return clean
+    .map((q) => ({ ...q, setup: stripAskedQuestion(q.setup, q.text) }))
     .filter((q) => !(spokenProblem(q.setup, q.text) || "").startsWith("the question starts") && !leansOnAnother(q.text))
     .sort((a, b) => a.rank - b.rank);
 }
@@ -905,10 +907,12 @@ Return one entry per question, with "index" exactly as given. Plain prose, no ma
       ),
     );
     leaning.forEach((r, k) => {
-      out[r.i] = fixed[k] && !leansOnAnother(fixed[k]) ? fixed[k] : "";
+      // The full check, not only the leaning one: accepting on leaning
+      // alone let a rewrite through that ended by asking its own question.
+      out[r.i] = fixed[k] && !spokenProblem(fixed[k], questions[r.i].text) ? fixed[k] : "";
     });
   }
-  return out;
+  return out.map((x, i) => stripAskedQuestion(x, questions[i].text));
 }
 
 const SIMILAR_SCHEMA = {

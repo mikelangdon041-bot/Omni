@@ -6,7 +6,13 @@
 import { Document, HeadingLevel, Packer, Paragraph, TextRun } from "docx";
 import { saveBlob } from "@/lib/conference/exports";
 import { htmlToPlain } from "@/lib/writer/types";
-import { meetingTypeLabel, sectionTitle, type BriefSection, type MpMeeting } from "./types";
+import {
+  meetingTypeLabel,
+  sectionTitle,
+  stripAskedQuestion,
+  type BriefSection,
+  type MpMeeting,
+} from "./types";
 
 // HTML section content → docx paragraphs: bullets become real bullets,
 // everything else becomes plain paragraphs.
@@ -99,10 +105,10 @@ export async function exportBriefDocx(m: MpMeeting): Promise<void> {
       new Paragraph({ text: heading, heading: HeadingLevel.HEADING_1, spacing: { before: 280 } }),
     );
     for (const q of list) {
-      if (q.setup)
+      if (stripAskedQuestion(q.setup, q.text))
         children.push(
           new Paragraph({
-            children: [new TextRun({ text: q.setup, color: "444444" })],
+            children: [new TextRun({ text: stripAskedQuestion(q.setup, q.text), color: "444444" })],
             spacing: { before: 120 },
           }),
         );

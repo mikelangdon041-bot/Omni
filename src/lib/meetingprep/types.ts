@@ -847,3 +847,30 @@ export const DEFAULT_BRIEF_SECTIONS: { key: string; title: string; prompt: strin
     prompt: "What to send or do within 48 hours after the meeting, depending on how it goes.",
   },
 ];
+
+/**
+ * A setup with its own question taken back out of it.
+ *
+ * The setup is the run-up and the question is said after it, so a setup that
+ * ends by asking the question has the room hear it twice ("...what are you
+ * actually managing? If you can't measure the one thing that matters most,
+ * what are you actually managing?"). Checks upstream rewrite these; this is
+ * the guarantee, run wherever a setup is written or shown: the question's
+ * own words are removed, and a setup never ends on a question of its own.
+ */
+export function stripAskedQuestion(setup: string | undefined, text: string): string {
+  let s = String(setup || "").trim();
+  const q = String(text || "").trim();
+  if (!s) return "";
+  if (q.length > 20) {
+    const at = s.toLowerCase().indexOf(q.toLowerCase());
+    if (at >= 0) s = `${s.slice(0, at)}${s.slice(at + q.length)}`.trim();
+  }
+  // Drop trailing sentences that are questions; keep at least one sentence.
+  for (let i = 0; i < 3 && /\?\s*$/.test(s); i++) {
+    const cut = s.replace(/[^.!?]*\?\s*$/, "").trim();
+    if (!cut) break;
+    s = cut;
+  }
+  return s.replace(/\s{2,}/g, " ").trim();
+}

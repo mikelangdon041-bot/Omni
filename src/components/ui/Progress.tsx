@@ -70,11 +70,14 @@ export function Working({
   seconds,
   label,
   className = "",
+  onCancel,
 }: {
   active: boolean;
   seconds: number;
   label: string;
   className?: string;
+  /** Offered beside the bar: stop waiting for this. */
+  onCancel?: () => void;
 }) {
   const pct = useProgress(active, seconds * 1000);
   const [started, setStarted] = useState(0);
@@ -94,11 +97,24 @@ export function Working({
   }, [active]);
   if (!active) return null;
   const left = Math.round(seconds - (now - started) / 1000);
-  return (
+  const bar = (
     <ProgressBar
       pct={pct}
       label={`${label} · ${left > 3 ? `about ${left}s left` : "nearly done…"}`}
-      className={className}
+      className={onCancel ? "min-w-0 flex-1" : className}
     />
+  );
+  if (!onCancel) return bar;
+  return (
+    <div className={`flex items-end gap-2 ${className}`}>
+      {bar}
+      <button
+        type="button"
+        onClick={onCancel}
+        className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-muted hover:bg-canvas hover:text-ink"
+      >
+        Cancel
+      </button>
+    </div>
   );
 }

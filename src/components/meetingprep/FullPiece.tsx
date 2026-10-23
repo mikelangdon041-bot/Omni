@@ -29,17 +29,25 @@ export function FullPiece({
   const [file, setFile] = useState<File | null>(null);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [ctrl, setCtrl] = useState<AbortController | null>(null);
 
   async function submit() {
     const m = getMeeting();
     if (!m || (!file && !text.trim())) return;
+    const c = new AbortController();
+    setCtrl(c);
     setBusy(true);
     try {
       let full = text.trim();
       if (file) {
         const form = new FormData();
         form.append("file", file);
-        const res = await fetch("/api/meeting/extract", { method: "POST", credentials: "same-origin", body: form });
+        const res = await fetch("/api/meeting/extract", {
+          method: "POST",
+          credentials: "same-origin",
+          body: form,
+          signal: c.signal,
+        });
         const json = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(json.error || "Could not read that file");
         full = String(json.text || "");
@@ -49,6 +57,7 @@ export function FullPiece({
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
         body: JSON.stringify({ action: "readsource", meeting: meetingPayload(m), source: s, text: full }),
+        signal: c.signal,
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || "Could not read it");
@@ -87,9 +96,10 @@ export function FullPiece({
       setFile(null);
       setText("");
     } catch (e) {
-      toast("error", (e as Error).message);
+      if (!c.signal.aborted) toast("error", (e as Error).message);
     } finally {
       setBusy(false);
+      setCtrl(null);
     }
   }
 
@@ -124,7 +134,15 @@ export function FullPiece({
         />
       )}
       {busy ? (
-        <Working active seconds={30} label="Reading the whole article" />
+        <Working
+          active
+          seconds={30}
+          label="Reading the whole article"
+          onCancel={() => {
+            ctrl?.abort();
+            toast("info", "Cancelled.");
+          }}
+        />
       ) : (
         <div className="flex justify-end gap-2">
           <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>

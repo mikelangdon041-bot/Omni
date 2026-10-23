@@ -231,15 +231,19 @@ export function PersonLookup({
 }) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
+  const [ctrl, setCtrl] = useState<AbortController | null>(null);
   if (!name.trim()) return null;
 
   async function run() {
+    const c = new AbortController();
+    setCtrl(c);
     setBusy(true);
     await lookUpPeople({
       names: [name],
       getMeeting,
       save,
-      onEach: (_, ok) => !ok && toast("error", `Couldn't find anything solid on ${name}.`),
+      signal: c.signal,
+      onEach: (_, ok) => !ok && !c.signal.aborted && toast("error", `Couldn't find anything solid on ${name}.`),
     });
     setBusy(false);
   }
@@ -247,7 +251,16 @@ export function PersonLookup({
   return (
     <div className="text-xs">
       {/* Measured: 7s for one person. */}
-      <Working active={busy} seconds={10} label={`Looking up ${name}`} className="mb-1" />
+      <Working
+        active={busy}
+        seconds={10}
+        label={`Looking up ${name}`}
+        className="mb-1"
+        onCancel={() => {
+          ctrl?.abort();
+          setBusy(false);
+        }}
+      />
       {profile?.text ? (
         <details>
           <summary className="cursor-pointer font-medium text-[var(--accent)]">

@@ -50,12 +50,13 @@ export function meetingPayload(m: MpMeeting) {
 
 export const newId = (p: string) => `${p}${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
 
-async function post<T>(url: string, body: unknown): Promise<T> {
+async function post<T>(url: string, body: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",
     body: JSON.stringify(body),
+    signal,
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(json.error || "Something went wrong");
@@ -68,14 +69,17 @@ export type MaterialInput =
   | { kind: "paste"; text: string; name: string };
 
 /** Step 1: plain text out of whatever was handed over. */
-export async function readMaterial(input: MaterialInput): Promise<{ text: string; name: string; url?: string }> {
+export async function readMaterial(
+  input: MaterialInput,
+  signal?: AbortSignal,
+): Promise<{ text: string; name: string; url?: string }> {
   if (input.kind === "paste") {
     const text = input.text.trim();
     if (!text) throw new Error("Nothing pasted yet.");
     return { text, name: input.name.trim() || "Pasted text" };
   }
   if (input.kind === "url") {
-    const out = await post<{ text: string; name: string }>("/api/meeting/extract", { url: input.url });
+    const out = await post<{ text: string; name: string }>("/api/meeting/extract", { url: input.url }, signal);
     return { ...out, url: input.url.trim() };
   }
   const form = new FormData();
@@ -84,6 +88,7 @@ export async function readMaterial(input: MaterialInput): Promise<{ text: string
     method: "POST",
     credentials: "same-origin",
     body: form,
+    signal,
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(json.error || "Could not read that document");
@@ -116,6 +121,7 @@ export async function addMaterial({
   getMeeting,
   save,
   onStage,
+  signal,
 }: {
   input: MaterialInput;
   purpose: MaterialPurpose;
@@ -123,10 +129,12 @@ export async function addMaterial({
   getMeeting: GetMeeting;
   save: SaveMeeting;
   onStage?: (s: string) => void;
+  /** Cancel: stop waiting, and save nothing. */
+  signal?: AbortSignal;
 }): Promise<string> {
   if (!note.trim()) throw new Error("Say what this is and what you want out of it.");
   onStage?.(input.kind === "url" ? "Opening the page…" : "Reading it…");
-  const read = await readMaterial(input);
+  const read = await readMaterial(input, signal);
   const start = getMeeting();
   if (!start) throw new Error("The meeting isn't loaded yet.");
 
@@ -135,7 +143,7 @@ export async function addMaterial({
     action: "material",
     meeting: meetingPayload(start),
     doc: { name: read.name, text: read.text, purpose, note, url: read.url },
-  });
+  }, signal);
 
   const m = getMeeting() || start;
   const docId = newId("d");
@@ -212,13 +220,17 @@ export async function lookUpPeople({
   getMeeting,
   save,
   onEach,
+  signal,
 }: {
   names: string[];
   getMeeting: GetMeeting;
   save: SaveMeeting;
   onEach?: (name: string, ok: boolean) => void;
+  /** Cancel: stop after the person in flight, and save nothing more. */
+  signal?: AbortSignal;
 }) {
   for (const name of names) {
+    if (signal?.aborted) return;
     const m = getMeeting();
     const a = m?.attendees?.find((x) => sameName(x.name, name));
     if (!m || !a) continue;
@@ -226,6 +238,7 @@ export async function lookUpPeople({
       const out = await post<{ text: string; sources: { title: string; url: string }[] }>(
         "/api/meeting/ai",
         { action: "person", person: a, subject: m.topic || m.title },
+        signal,
       );
       const now = getMeeting();
       if (!now || !out.text) {
