@@ -1218,7 +1218,7 @@ export function QuestionsTab({
                           forWhom={q.forWhom || ""}
                           panel={panel}
                           value={q.askWho}
-                          onChange={(who) => patch(q.id, { askWho: who || undefined })}
+                          onChange={(who, fw) => patch(q.id, { askWho: who || undefined, ...(fw !== undefined ? { forWhom: fw } : {}) })}
                         />
                       </div>
                       <ProbeLine
@@ -1385,7 +1385,7 @@ export function QuestionsTab({
                           forWhom={q.forWhom || ""}
                           panel={panel}
                           value={q.askWho}
-                          onChange={(who) => patch(q.id, { askWho: who || undefined })}
+                          onChange={(who, fw) => patch(q.id, { askWho: who || undefined, ...(fw !== undefined ? { forWhom: fw } : {}) })}
                         />
                             {q.why}
                           </p>

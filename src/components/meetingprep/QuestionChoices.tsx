@@ -213,29 +213,45 @@ export function AskWho({
   forWhom: string;
   panel: string[];
   value?: string;
-  onChange: (who: string) => void;
+  /** The panelist chosen, and the new "for" line when it adds someone not suggested. */
+  onChange: (who: string, forWhom?: string) => void;
 }) {
   if (!panel.length) return <ForChip who={forWhom} />;
-  const names = namesIn(forWhom, panel);
-  const general = names.length === panel.length;
+  const fits = namesIn(forWhom, panel);
+  const general = fits.length === panel.length;
+  // Everyone on the panel is offered: the writer may know better than the
+  // suggestion. The ones it was not suggested for are outlined, not hidden.
   return (
     <span className="inline-flex flex-wrap items-center gap-1">
       <span className="text-[10px] font-semibold text-muted">{general ? "Ask anyone:" : "Works for:"}</span>
-      {names.map((n) => (
-        <button
-          key={n}
-          type="button"
-          onClick={() => onChange(value === n ? "" : n)}
-          title={value === n ? `Assigned to ${n}. Click to unassign.` : `Put this one to ${n}`}
-          className={`rounded px-1.5 py-0.5 text-[10px] font-semibold transition ${
-            value === n
-              ? "bg-[var(--accent)] text-[var(--accent-fg)]"
-              : "bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)]/20"
-          }`}
-        >
-          {value === n ? `Ask ${n}` : n}
-        </button>
-      ))}
+      {panel.map((n) => {
+        const fit = fits.includes(n);
+        const chosen = value === n;
+        return (
+          <button
+            key={n}
+            type="button"
+            onClick={() => {
+              if (chosen) return onChange("");
+              const named = panel.filter((x) => x === n || fits.includes(x));
+              const line = named.length === panel.length ? "Everyone" : named.length < 2 ? named.join("") : `${named.slice(0, -1).join(", ")} and ${named[named.length - 1]}`;
+              onChange(n, fit ? undefined : line);
+            }}
+            title={
+              chosen ? `Assigned to ${n}. Click to unassign.` : fit ? `Put this one to ${n}` : `Not suggested for ${n}. Click to put it to them anyway.`
+            }
+            className={`rounded px-1.5 py-0.5 text-[10px] font-semibold transition ${
+              chosen
+                ? "bg-[var(--accent)] text-[var(--accent-fg)]"
+                : fit
+                  ? "bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)]/20"
+                  : "border border-dashed border-border text-muted hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            }`}
+          >
+            {chosen ? `Ask ${n}` : n}
+          </button>
+        );
+      })}
     </span>
   );
 }

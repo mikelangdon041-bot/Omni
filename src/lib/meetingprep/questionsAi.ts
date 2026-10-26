@@ -363,6 +363,66 @@ Ordinary vocabulary of the field (KOL, MSL, KPI, HCP, field team, scorecard, med
   return out;
 }
 
+const REPEATS_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    items: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: { index: { type: "number" as const }, repeats: { type: "boolean" as const }, what: { type: "string" as const } },
+        required: ["index", "repeats", "what"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["items"],
+  additionalProperties: false,
+};
+
+/**
+ * Setups that make the question's own point again. The writer's own
+ * questions often carry a lead-in ("This session is about communicating
+ * value, so let's first define it"), and the setup written for them said the
+ * same thing first ("I want to pin down what we're talking about"). The
+ * general judge, asked only for failures, passed all of them; this one has
+ * to answer for every item.
+ */
+export async function setupRepeats(items: { setup: string; text: string }[]): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  // Only a setup that announces the moderator's own intent can repeat one
+  // the question announces too. Asked of every setup, the model called any
+  // setup that introduces the question's topic a repeat, which is what a
+  // setup is for.
+  const META = /\b(?:I want to|I'm after|I am after|I'd like to|let's|let us|before we (?:get|go|dig|start)|to start|I want us)\b/i;
+  const idx = items.map((x, i) => (x.setup.trim() && META.test(x.setup) ? i : -1)).filter((i) => i >= 0);
+  const chunks: number[][] = [];
+  for (let k = 0; k < idx.length; k += 12) chunks.push(idx.slice(k, k + 12));
+  await Promise.all(
+    chunks.map(async (chunk) => {
+      try {
+        const res = await anthropic().messages.create({
+          model: CHECK_MODEL,
+          max_tokens: 2000,
+          output_config: { format: { type: "json_schema", schema: REPEATS_SCHEMA } },
+          system: `Each item is a setup a moderator says out loud, then the question that follows it. For every item, answer: does the moderator announce the same intention twice, once in the setup and again in the question? Yes: "I want to get past the mission-statement language" then "not the mission-statement version, the one you'd defend"; "before we get into it, I want to pin down what we mean" then "so let's first define what value is". No: a setup that lays out facts, a finding or a tension that the question then asks about; that is what a setup is for, even when they share a topic. what: the repeated intention in a few words, or "".`,
+          messages: [{ role: "user", content: chunk.map((i, k) => `${k}. SETUP: ${items[i].setup}\nQUESTION: ${items[i].text}`).join("\n\n") }],
+        });
+        const parsed = JSON.parse(firstText(res) || "{}");
+        for (const x of Array.isArray(parsed.items) ? parsed.items : []) {
+          const k = Number(x?.index);
+          if (x?.repeats && Number.isInteger(k) && k >= 0 && k < chunk.length)
+            out.set(chunk[k], `the setup says what the question already says (${String(x.what || "the same point")}); give the setup substance the question does not have, and drop the repeated framing`);
+        }
+      } catch (e) {
+        console.warn("[repeats] check failed", (e as Error).message);
+        // Unchecked; the rest still stand.
+      }
+    }),
+  );
+  return out;
+}
+
 export async function judgeSpoken(items: { setup: string; text: string }[]): Promise<Map<number, string>> {
   const out = new Map<number, string>();
   if (!items.length) return out;
@@ -416,6 +476,7 @@ What a good setup does, in his manner:
 - Uses a concrete figure or example in place of an abstraction. "Nine in ten organisations still measure field teams by how many meetings they log" rather than "metrics remain activity-based".
 - Opens with the substance itself: the finding, the argument, the number, the example. Plain and conversational, the way a well-read person talks, not a briefing read off a slide.
 - Ends by handing over to the question; the question is the last thing said, and it is short.
+- Never says what the question already says. Some questions carry their own lead-in ("This session is about communicating value, so let's first define it", "Not the mission-statement version, the one you'd actually defend"); the setup then adds substance the question does not have, a fact, a tension, the different ways people see it, and never makes the question's point again in other words.
 
 The question after a setup:
 - asks about the specific problem, tension or finding the setup just laid out, so it is the obvious next thing to ask the moment the setup ends. A question about a neighbouring point wastes the setup.
@@ -1126,7 +1187,9 @@ Return one entry per question, with "index" exactly as given. Plain prose, no ma
   // setup is fine; one that starts mid-thought is not.
   let leaning: { i: number; hit: string }[] = [];
   if (!repairing) {
-    const judged = await judgeSpoken(out.map((x, i) => ({ setup: x, text: questions[i].text })));
+    const pairs = out.map((x, i) => ({ setup: x, text: questions[i].text }));
+    const [judged, repeats] = await Promise.all([judgeSpoken(pairs), setupRepeats(pairs)]);
+    for (const [i, why] of repeats) if (!judged.has(i)) judged.set(i, why);
     leaning = out
       .map((x, i) => ({ i, hit: spokenProblem(x, questions[i].text) || judged.get(i) || "" }))
       // A bare question that is fine bare stays bare.
