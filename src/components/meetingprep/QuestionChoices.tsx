@@ -14,6 +14,7 @@ import type { QuestionOption, SharperQuestion } from "@/lib/meetingprep/types";
 type Holder = {
   text: string;
   followUp: string;
+  forWhom?: string;
   options?: QuestionOption[];
   suggested?: SharperQuestion;
   optionChosen?: boolean;
@@ -34,13 +35,17 @@ export function backupsOf(x: { options?: QuestionOption[] }): QuestionOption[] {
 
 /** What to save when an option is picked: it becomes the question, and the old question becomes an option. */
 export function pickOption(x: Holder, o: QuestionOption) {
+  // A version written for particular panelists makes the question theirs:
+  // picking one used to leave the old names on it.
+  const who = o.forWhom ?? (o.kind.startsWith("For ") ? o.kind.slice(4) : x.forWhom);
   return {
     text: o.text,
     followUp: o.followUp || x.followUp,
+    forWhom: who || "",
     suggested: undefined,
     optionChosen: true,
     options: [
-      { kind: "Yours before", text: x.text, followUp: x.followUp },
+      { kind: "Yours before", text: x.text, followUp: x.followUp, forWhom: x.forWhom || "" },
       ...choicesOf(x).filter((c) => c.text !== o.text && c.text !== x.text),
     ],
   };
@@ -122,11 +127,14 @@ export function QuestionChoices({
         <div className="mt-2 rounded-md bg-canvas px-2.5 py-2">
           <div className="flex items-center">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Other ways to ask it</p>
-            {x.optionChosen && (
-              <button type="button" onClick={() => setShown(false)} className="ml-auto text-xs text-muted hover:text-ink hover:underline">
-                Hide
-              </button>
-            )}
+            {/* Liking the one you have is a choice too: it folds the rest away. */}
+            <button
+              type="button"
+              onClick={() => (x.optionChosen ? setShown(false) : onPick({ optionChosen: true }))}
+              className="ml-auto text-xs font-medium text-muted hover:text-ink hover:underline"
+            >
+              {x.optionChosen ? "Hide" : "Keep mine, hide these"}
+            </button>
           </div>
           {/* The question first, full width; what to do with it underneath,
               so the eye reads the question rather than a column of links. */}
@@ -230,4 +238,9 @@ export function AskWho({
       ))}
     </span>
   );
+}
+
+/** Whether a "for" line covers this panelist: named, or "Everyone". */
+export function fitsPanelist(forWhom: string, name: string): boolean {
+  return /^(?:for )?everyone\b/i.test(forWhom.trim()) || new RegExp(`\\b${name}\\b`, "i").test(forWhom);
 }

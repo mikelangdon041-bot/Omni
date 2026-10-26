@@ -39,7 +39,7 @@ import {
   ListOrdered,
 } from "lucide-react";
 import { AskMode } from "@/components/meetingprep/AskMode";
-import { AskWho, QuestionChoices, panelNames } from "@/components/meetingprep/QuestionChoices";
+import { AskWho, QuestionChoices, fitsPanelist, panelNames } from "@/components/meetingprep/QuestionChoices";
 import { ReviewPanel } from "@/components/meetingprep/ReviewPanel";
 import { useReview } from "@/lib/meetingprep/useReview";
 import { Button } from "@/components/ui/Button";
@@ -1105,13 +1105,20 @@ export function QuestionsTab({
           <ol className="space-y-2">
             {panel.length > 0 && (
               <li className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-xs text-muted">
-                <span className="font-semibold">Assigned:</span>
+                {/* How the list spreads across the panel: how many each
+                    person could take, and how many are put to them. */}
+                <span className="font-semibold">Per panelist:</span>
                 {panel.map((n) => (
                   <span key={n}>
-                    {n} {picked.filter((q) => q.askWho === n).length}
+                    {n}{" "}
+                    <span className="tabular-nums text-ink">{picked.filter((q) => fitsPanelist(q.forWhom || "", n)).length}</span>
+                    {" "}fit
+                    {picked.some((q) => q.askWho === n) && `, ${picked.filter((q) => q.askWho === n).length} assigned`}
                   </span>
                 ))}
-                <span>Not yet {picked.filter((q) => !q.askWho || !panel.includes(q.askWho)).length}</span>
+                <span>
+                  For nobody yet {picked.filter((q) => !panel.some((n) => fitsPanelist(q.forWhom || "", n))).length}
+                </span>
               </li>
             )}
             {picked.map((q, i) => (

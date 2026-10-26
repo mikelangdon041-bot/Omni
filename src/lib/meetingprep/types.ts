@@ -411,6 +411,8 @@ export interface QuestionOption {
   keep?: boolean;
   /** For a version reworked for particular panelists: what it changes. */
   note?: string;
+  /** Who it is for, so picking it carries that over to the question. */
+  forWhom?: string;
 }
 
 export interface SharperQuestion {
