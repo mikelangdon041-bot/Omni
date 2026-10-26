@@ -415,6 +415,8 @@ export interface QuestionOption {
   note?: string;
   /** Who it is for, so picking it carries that over to the question. */
   forWhom?: string;
+  /** Its own setup, for a version that needs a different lead-in. */
+  setup?: string;
 }
 
 export interface SharperQuestion {

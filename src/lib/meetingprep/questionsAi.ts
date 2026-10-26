@@ -233,7 +233,9 @@ Never:
 - "make the case", or anything that asks them to pick a side ("A, or B?", "data or gut?", "where do you come down?"): forcing people to take a side is strange on a panel;
 - a frequency, count, share or estimate ("how often", "how many", "what share"), a fact check ("is there real data behind that"), or "when was the last time";
 - "be honest", or anything that implies they otherwise would not be;
-- the same opening for every question.`;
+- the same opening for every question.
+
+When the context names the people in the room, ask each of them about their own work as their role and the notes describe it. Never say "your team", "your field team" or "your MSLs" to someone who does not lead one; a field MSL is asked about what they do themselves ("when you..."). Trust the notes over a title: "director" in a field or account role is often a senior individual, not a manager. A question meant for everyone has to work from every one of their seats.`;
 
 /** Openings handed out in turn when many questions are rewritten at once. */
 const OPENERS = [
@@ -417,6 +419,58 @@ export async function setupRepeats(items: { setup: string; text: string }[]): Pr
       } catch (e) {
         console.warn("[repeats] check failed", (e as Error).message);
         // Unchecked; the rest still stand.
+      }
+    }),
+  );
+  return out;
+}
+
+const ANSWERS_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    items: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: { index: { type: "number" as const }, answers: { type: "boolean" as const }, what: { type: "string" as const } },
+        required: ["index", "answers", "what"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["items"],
+  additionalProperties: false,
+};
+
+/**
+ * Setups that answer the question they lead into. "A meaningful outcome is
+ * the change in how a physician treats or how a patient does", then "define
+ * a meaningful outcome": the writer said the question was no longer open.
+ * Laying out the competing answers is fine; settling on one is not.
+ */
+export async function setupAnswers(items: { setup: string; text: string }[]): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  const idx = items.map((x, i) => (x.setup.trim() ? i : -1)).filter((i) => i >= 0);
+  const chunks: number[][] = [];
+  for (let k = 0; k < idx.length; k += 12) chunks.push(idx.slice(k, k + 12));
+  await Promise.all(
+    chunks.map(async (chunk) => {
+      try {
+        const res = await anthropic().messages.create({
+          model: CHECK_MODEL,
+          max_tokens: 8000,
+          output_config: { format: { type: "json_schema", schema: ANSWERS_SCHEMA } },
+          system: `Each item is a setup a moderator says out loud, then the question that follows it. For every item, answer: does the setup already give THE answer to the question, so the question is no longer open? Yes: a setup that defines the very term the question asks the panel to define, or states as settled the conclusion the question asks them to reach. No: a setup that lays out several competing answers, a finding, a tension or the stakes; that is what a setup is for. what: the answer the setup gives away, in a few words, or "".`,
+          messages: [{ role: "user", content: chunk.map((i, k) => `${k}. SETUP: ${items[i].setup}\nQUESTION: ${items[i].text}`).join("\n\n") }],
+        });
+        const parsed = JSON.parse(firstText(res) || "{}");
+        for (const x of Array.isArray(parsed.items) ? parsed.items : []) {
+          const k = Number(x?.index);
+          if (x?.answers && Number.isInteger(k) && k >= 0 && k < chunk.length)
+            out.set(chunk[k], `the setup answers the question before it is asked (${String(x.what || "it settles the answer")}); lay out the competing views or the stakes instead, and leave the answer to the panel`);
+        }
+      } catch (e) {
+        console.warn("[answers] check failed", (e as Error).message);
       }
     }),
   );
@@ -1212,8 +1266,8 @@ Return one entry per question, with "index" exactly as given. Plain prose, no ma
   let leaning: { i: number; hit: string }[] = [];
   if (!repairing) {
     const pairs = out.map((x, i) => ({ setup: x, text: questions[i].text }));
-    const [judged, repeats] = await Promise.all([judgeSpoken(pairs), setupRepeats(pairs)]);
-    for (const [i, why] of repeats) if (!judged.has(i)) judged.set(i, why);
+    const [judged, repeats, answers] = await Promise.all([judgeSpoken(pairs), setupRepeats(pairs), setupAnswers(pairs)]);
+    for (const [i, why] of [...repeats, ...answers]) if (!judged.has(i)) judged.set(i, why);
     leaning = out
       .map((x, i) => ({ i, hit: spokenProblem(x, questions[i].text) || judged.get(i) || "" }))
       // A bare question that is fine bare stays bare.

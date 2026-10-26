@@ -15,6 +15,7 @@ type Holder = {
   text: string;
   followUp: string;
   forWhom?: string;
+  setup?: string;
   options?: QuestionOption[];
   suggested?: SharperQuestion;
   optionChosen?: boolean;
@@ -42,10 +43,12 @@ export function pickOption(x: Holder, o: QuestionOption) {
     text: o.text,
     followUp: o.followUp || x.followUp,
     forWhom: who || "",
+    // A version with its own lead-in brings it; the old one goes with the old question.
+    ...(o.setup ? { setup: o.setup } : {}),
     suggested: undefined,
     optionChosen: true,
     options: [
-      { kind: "Yours before", text: x.text, followUp: x.followUp, forWhom: x.forWhom || "" },
+      { kind: "Yours before", text: x.text, followUp: x.followUp, forWhom: x.forWhom || "", ...(o.setup ? { setup: x.setup || "" } : {}) },
       ...choicesOf(x).filter((c) => c.text !== o.text && c.text !== x.text),
     ],
   };
@@ -148,6 +151,7 @@ export function QuestionChoices({
                     {o.note && <span className="font-normal text-muted">: {o.note}</span>}
                   </p>
                 )}
+                {o.setup && <p className="mb-0.5 text-sm leading-relaxed text-ink/65">{o.setup}</p>}
                 <p className="text-sm leading-snug text-ink">{o.text}</p>
                 {/* Who this version suits, so a version that opens the
                     question to another panelist says so. */}
@@ -179,6 +183,15 @@ export function QuestionChoices({
               </li>
             ))}
           </ul>
+          {!x.optionChosen && (
+            <button
+              type="button"
+              onClick={() => onPick({ optionChosen: true })}
+              className="mt-2 text-xs font-medium text-muted hover:text-ink hover:underline"
+            >
+              None of these, hide them
+            </button>
+          )}
         </div>
       )}
     </>
