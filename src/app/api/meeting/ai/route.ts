@@ -437,12 +437,15 @@ export async function POST(req: Request) {
           why: String(q?.why || "").slice(0, 500),
           followUp: String(q?.followUp || "").slice(0, 1000),
           category: String(q?.category || "").slice(0, 120),
+          setup: String(q?.setup || "").slice(0, 3000),
         },
         others: Array.isArray(body?.others)
           ? body.others.map(String).slice(0, 60)
           : [],
         guidance: String(body?.guidance || "").slice(0, 2000),
         standing: String(body?.standing || "").slice(0, 2000),
+        count: Math.min(8, Math.max(1, Number(body?.count) || 3)),
+        avoid: Array.isArray(body?.avoid) ? body.avoid.map(String).slice(0, 30) : [],
       });
       return NextResponse.json({ variants });
     }

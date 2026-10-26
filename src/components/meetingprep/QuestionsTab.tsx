@@ -40,7 +40,7 @@ import {
   CirclePause,
 } from "lucide-react";
 import { AskMode } from "@/components/meetingprep/AskMode";
-import { AskWho, QuestionChoices, fitsPanelist, panelNames } from "@/components/meetingprep/QuestionChoices";
+import { AskWho, ForChip, QuestionChoices, fitsPanelist, panelNames } from "@/components/meetingprep/QuestionChoices";
 import { ReviewPanel } from "@/components/meetingprep/ReviewPanel";
 import { useReview } from "@/lib/meetingprep/useReview";
 import { Button } from "@/components/ui/Button";
@@ -1546,12 +1546,12 @@ export function QuestionsTab({
         q={live.find((x) => x.id === reworkId) || null}
         standing={guidance}
         onClose={() => setReworkId(null)}
-        onApply={(text, followUp) => {
-          if (reworkId) patch(reworkId, { text, followUp });
+        onApply={(text, followUp, setup, forWho) => {
+          if (reworkId) patch(reworkId, { text, followUp, ...(setup ? { setup } : {}), ...(forWho ? { forWhom: forWho } : {}) });
           setReworkId(null);
           toast("success", "Swapped in");
         }}
-        onAdd={(text, followUp) => {
+        onAdd={(text, followUp, setup, forWho) => {
           const from = live.find((x) => x.id === reworkId);
           const maxOrder = picked.length ? Math.max(...picked.map((p) => p.order)) : -1;
           setItems([
@@ -1562,7 +1562,8 @@ export function QuestionsTab({
               category: from?.category || "Mine",
               why: from?.why || "",
               followUp,
-              forWhom: from?.forWhom || "",
+              setup: setup || from?.setup,
+              forWhom: forWho || from?.forWhom || "",
               rank: 0,
               // Straight into the list: they said they wanted this one, so
               // making them go and find it in the suggestions is a step for
@@ -1576,7 +1577,7 @@ export function QuestionsTab({
           ]);
           toast("success", "Added to your list");
         }}
-        fetchVariants={async (q, instruction) => {
+        fetchVariants={async (q, instruction, extra) => {
           const res = await fetch("/api/meeting/ai", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1588,13 +1589,20 @@ export function QuestionsTab({
               research: withReading(m.brief?.research?.notes || "", m),
               question: {
                 text: q.text,
+                setup: stripAskedQuestion(q.setup || "", q.text),
                 why: q.why,
                 followUp: q.followUp,
                 category: q.category,
               },
-              // The rest of the bank, so "combine this with the next one" is
-              // an instruction it can follow rather than guess at.
-              others: live.filter((x) => x.id !== q.id).map((x) => x.text),
+              // Their list numbered as on screen, so "question four" means
+              // their number 4, then the bank. Numbered from the bank, as it
+              // was, "question four" pointed at some other question.
+              others: [
+                ...picked.map((x, i) => `${i + 1}. ${x.text}${x.id === q.id ? "  (THIS ONE)" : ""}`),
+                ...live.filter((x) => !x.picked && x.id !== q.id).map((x) => `Bank: ${x.text}`),
+              ],
+              count: extra?.count || 3,
+              avoid: extra?.avoid || [],
               guidance: instruction,
               standing: guidance,
             }),
@@ -1998,10 +2006,10 @@ function ReworkModal({
   /** Their standing instruction, shown so they know it is still on. */
   standing: string;
   onClose: () => void;
-  onApply: (text: string, followUp: string) => void;
+  onApply: (text: string, followUp: string, setup?: string, forWhom?: string) => void;
   /** Keep a version as well as, rather than instead of, what is there. */
-  onAdd: (text: string, followUp: string) => void;
-  fetchVariants: (q: QuestionItem, instruction: string) => Promise<QuestionVariant[]>;
+  onAdd: (text: string, followUp: string, setup?: string, forWhom?: string) => void;
+  fetchVariants: (q: QuestionItem, instruction: string, extra?: { count?: number; avoid?: string[] }) => Promise<QuestionVariant[]>;
 }) {
   const [instruction, setInstruction] = useState("");
   const [options, setOptions] = useState<QuestionVariant[]>([]);
@@ -2010,15 +2018,31 @@ function ReworkModal({
   const [error, setError] = useState("");
   const pct = useProgress(busy, 20000);
 
-  async function run() {
+  /** "Give me five", "six more": the number they asked for, if any. */
+  function askedCount(t: string): number | undefined {
+    const w: Record<string, number> = { two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8 };
+    const m = t.toLowerCase().match(/\b(\d+|two|three|four|five|six|seven|eight)\s+(?:more\s+)?(?:versions?|questions?|ways|options|more|of them)\b/);
+    if (!m) return undefined;
+    const n = Number(m[1]) || w[m[1]];
+    return n ? Math.min(8, Math.max(1, n)) : undefined;
+  }
+
+  /** more: keep what is showing and add new ones underneath. */
+  async function run(more = false) {
     if (!q) return;
     setBusy(true);
     setError("");
     try {
-      const got = await fetchVariants(q, instruction.trim());
+      const got = await fetchVariants(q, instruction.trim(), {
+        count: askedCount(instruction) || 3,
+        avoid: more ? options.map((o) => o.text) : [],
+      });
       if (!got.length) throw new Error("Nothing usable came back — try saying it differently.");
-      setOptions(got);
-      setAdded([]);
+      if (more) setOptions((o) => [...o, ...got]);
+      else {
+        setOptions(got);
+        setAdded([]);
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -2027,12 +2051,14 @@ function ReworkModal({
   }
 
   return (
-    <Modal open={Boolean(q)} onClose={onClose} title="Say this one another way" movable>
+    <Modal open={Boolean(q)} onClose={onClose} title="Say this one another way" movable resizable size="lg">
       {q && (
         <>
-          <p className="rounded-lg border border-border bg-canvas/60 px-3 py-2 text-sm text-ink">
-            {q.text}
-          </p>
+          {/* The setup too: sometimes it is the setup that needs the work. */}
+          <div className="rounded-lg border border-border bg-canvas/60 px-3 py-2 text-sm">
+            {q.setup && <p className="leading-relaxed text-ink/70">{stripAskedQuestion(q.setup, q.text)}</p>}
+            <p className={`font-medium text-ink ${q.setup ? "mt-1.5" : ""}`}>{q.text}</p>
+          </div>
 
           <div className="mt-3">
             <Textarea
@@ -2040,7 +2066,7 @@ function ReworkModal({
               autoFocus
               value={instruction}
               onChange={(e) => setInstruction(e.target.value)}
-              placeholder={`e.g. "too long to say out loud" or "make it land harder" or "ask it without the jargon"`}
+              placeholder={`e.g. "too long to say out loud", "the setup is too abstract", "make it work for Roman and Mark", "combine it with question 4", "give me five"`}
               className="min-h-16"
             />
             {standing && (
@@ -2065,9 +2091,16 @@ function ReworkModal({
                     key={i}
                     className="rounded-xl border border-border bg-surface p-3 transition hover:border-[var(--accent)]/60"
                   >
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--accent)]">
-                      {v.angle}
+                    <span className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--accent)]">{v.angle}</span>
+                      {v.forWhom && <ForChip who={v.forWhom} />}
                     </span>
+                    {v.setup && (
+                      <span className="mt-1 block text-sm leading-relaxed text-ink/70">
+                        <span className="mr-1 text-[10px] font-semibold uppercase tracking-wide text-muted">New setup</span>
+                        {v.setup}
+                      </span>
+                    )}
                     <span className="mt-1 block text-sm font-medium text-ink">{v.text}</span>
                     {v.followUp && (
                       <span className="mt-1 block text-xs italic text-muted">
@@ -2078,7 +2111,7 @@ function ReworkModal({
                       <Button
                         size="sm"
                         variant="secondary"
-                        onClick={() => onApply(v.text, v.followUp || q.followUp)}
+                        onClick={() => onApply(v.text, v.followUp || q.followUp, v.setup, v.forWhom)}
                       >
                         Use instead
                       </Button>
@@ -2087,7 +2120,7 @@ function ReworkModal({
                         variant="ghost"
                         disabled={added.includes(i)}
                         onClick={() => {
-                          onAdd(v.text, v.followUp || "");
+                          onAdd(v.text, v.followUp || "", v.setup || q.setup, v.forWhom);
                           setAdded((a) => [...a, i]);
                         }}
                       >
@@ -2118,6 +2151,11 @@ function ReworkModal({
             <Button variant="ghost" onClick={onClose}>
               Keep it as it is
             </Button>
+            {options.length > 0 && (
+              <Button variant="secondary" disabled={busy} onClick={() => void run(true)} title="Keeps these and adds new ones underneath">
+                <Plus size={14} /> More
+              </Button>
+            )}
             <Button disabled={busy} onClick={() => void run()}>
               <Wand2 size={14} />
               {busy

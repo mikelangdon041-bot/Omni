@@ -149,6 +149,13 @@ export function QuestionChoices({
                   </p>
                 )}
                 <p className="text-sm leading-snug text-ink">{o.text}</p>
+                {/* Who this version suits, so a version that opens the
+                    question to another panelist says so. */}
+                {o.forWhom && !o.kind.startsWith("For ") && (
+                  <p className="mt-0.5">
+                    <ForChip who={o.forWhom} />
+                  </p>
+                )}
                 <div className="mt-1 flex gap-3 text-xs font-medium">
                   <button
                     type="button"

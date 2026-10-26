@@ -278,7 +278,7 @@ export async function judgeFit(items: { setup: string; text: string }[]): Promis
       try {
         const res = await anthropic().messages.create({
           model: CHECK_MODEL,
-          max_tokens: 2500,
+          max_tokens: 8000,
           output_config: { format: { type: "json_schema", schema: FIT_SCHEMA } },
           system: `Each item is a setup a panel moderator says, then the question they ask after it. The setups are good. Score only the QUESTION, 1 to 5, on whether it makes the most of its setup.
 
@@ -335,7 +335,7 @@ export async function outsideTerms(items: { setup: string; text: string }[]): Pr
       try {
         const res = await anthropic().messages.create({
           model: CHECK_MODEL,
-          max_tokens: 1500,
+          max_tokens: 8000,
           output_config: { format: { type: "json_schema", schema: JUDGE_SCHEMA } },
           system: `Each item is a setup a panel moderator says out loud, then a question asked after it. Nobody in the room has read anything.
 
@@ -403,7 +403,7 @@ export async function setupRepeats(items: { setup: string; text: string }[]): Pr
       try {
         const res = await anthropic().messages.create({
           model: CHECK_MODEL,
-          max_tokens: 2000,
+          max_tokens: 8000,
           output_config: { format: { type: "json_schema", schema: REPEATS_SCHEMA } },
           system: `Each item is a setup a moderator says out loud, then the question that follows it. For every item, answer: does the moderator announce the same intention twice, once in the setup and again in the question? Yes: "I want to get past the mission-statement language" then "not the mission-statement version, the one you'd defend"; "before we get into it, I want to pin down what we mean" then "so let's first define what value is". No: a setup that lays out facts, a finding or a tension that the question then asks about; that is what a setup is for, even when they share a topic. what: the repeated intention in a few words, or "".`,
           messages: [{ role: "user", content: chunk.map((i, k) => `${k}. SETUP: ${items[i].setup}\nQUESTION: ${items[i].text}`).join("\n\n") }],
@@ -429,7 +429,7 @@ export async function judgeSpoken(items: { setup: string; text: string }[]): Pro
   try {
     const res = await anthropic().messages.create({
       model: CHECK_MODEL,
-      max_tokens: 2000,
+      max_tokens: 8000,
       output_config: { format: { type: "json_schema", schema: JUDGE_SCHEMA } },
       system: `Each item below is what someone will say out loud in a panel: a setup, then a question. They may ask any of them in any order and skip the rest, so each must work as the first and only thing they say.
 
@@ -584,7 +584,7 @@ async function scrubNamedSources(
 
     const res = await anthropic().messages.create({
       model: WRITER_MODEL,
-      max_tokens: 4000,
+      max_tokens: 8000,
       output_config: { format: { type: "json_schema", schema: REPAIR_SCHEMA } },
       system: `You are fixing questions that broke one rule, and nothing else about them.
 
@@ -671,8 +671,10 @@ const VARIANTS_SCHEMA = {
           angle: { type: "string" as const },
           text: { type: "string" as const },
           followUp: { type: "string" as const },
+          setup: { type: "string" as const },
+          forWhom: { type: "string" as const },
         },
-        required: ["angle", "text", "followUp"],
+        required: ["angle", "text", "followUp", "setup", "forWhom"],
         additionalProperties: false,
       },
     },
@@ -686,6 +688,10 @@ export interface QuestionVariant {
   angle: string;
   text: string;
   followUp: string;
+  /** A new setup when this version is better with one; "" keeps the current one. */
+  setup?: string;
+  /** The panelists it works for, by first name. */
+  forWhom?: string;
 }
 
 /**
@@ -705,11 +711,13 @@ export async function writeVariants({
   others = [],
   guidance = "",
   standing = "",
+  count = 3,
+  avoid = [],
 }: {
   meeting: MeetingPayload;
   kolBlock?: string;
   research?: string;
-  question: { text: string; why?: string; followUp?: string; category?: string };
+  question: { text: string; why?: string; followUp?: string; category?: string; setup?: string };
   /**
    * The rest of the bank. Without it "combine this with the next one" is a
    * sentence the model cannot act on, because it has never been shown the
@@ -720,19 +728,23 @@ export async function writeVariants({
   guidance?: string;
   /** Their standing instruction about how every question must be written. */
   standing?: string;
+  /** How many to write; the writer can ask for more than three. */
+  count?: number;
+  /** Versions already on screen, so "more" brings new ones. */
+  avoid?: string[];
 }): Promise<QuestionVariant[]> {
   const res = await anthropic().messages.create({
     // Three short rewrites of a sentence the writer already likes. The heavy
     // model was spending the better part of a minute on it while they sat
     // watching a progress bar, and the work does not need it.
     model: CHECK_MODEL,
-    max_tokens: 2000,
+    max_tokens: 16000,
     output_config: { format: { type: "json_schema", schema: VARIANTS_SCHEMA } },
     system: `You are rewriting one question for someone who is going to ask it out loud. They like it. They do not like how it lands.
 
-Give exactly three versions of THIS question. Not three new questions: three ways of asking the same thing, far enough apart that choosing between them is a real choice. One might be blunter, one might come at it sideways, one might put a number or a scenario in front of it. Never three rewordings of the same sentence.
+Give exactly ${count} versions of THIS question, unless what the writer wants below asks for new questions rather than versions, in which case give ${count} of those. Not new questions by default: ways of asking the same thing, far enough apart that choosing between them is a real choice. One might be blunter, one might come at it sideways, one might put a number or a scenario in front of it. Never three rewordings of the same sentence.
 
-The writer may keep more than one of your three, so make each one able to stand on its own in a running order next to the others, rather than three mutually exclusive takes on one slot.
+The writer may keep more than one of them, so make each one able to stand on its own in a running order next to the others, rather than three mutually exclusive takes on one slot.
 
 ${SEAT_RULE}
 
@@ -742,11 +754,15 @@ Every version:
 - is written word for word, exactly as it would be said, short enough to say in one breath.
 - keeps the job the original was doing in the conversation. If the writer's instruction below changes that job, the instruction wins.
 - opens something up rather than closing it down.
+
+${OPEN_QUESTION_RULE}
 ${guidance ? `\nWHAT THE WRITER WANTS DIFFERENT ABOUT THIS ONE. This outranks every rule above:\n${guidance}\n` : ""}${standing ? `\nTheir standing instruction about how all their questions must be written, which still applies:\n${standing}\n` : ""}
 Fields:
 - angle: three or four words on what this version does differently, so they can choose at a glance. "Blunter", "Puts a number on it", "Through a scenario". Not a description of the question.
 - text: the question.
 - followUp: the probe for when the answer is thin, written word for word.
+- setup: the question is said after a setup (given below when there is one). When this version needs a different lead-in, or what the writer wants different is about the setup, write the new setup in full, two to four spoken sentences that lay out the substance, never pointing at a document the room has not heard of, never saying what the question says. Otherwise "", and the current setup stays.
+- forWhom: When the context names the people in the room, forWhom is the first names of those who can answer THIS version from their own direct work, strictly: a question about managing MSLs fits nobody who does not manage MSLs, a question about KOL meetings does not fit people who never meet KOLs, a question about hiring fits only people who hire. "Everyone" only when all of them truly can. "" when it fits none of them, or when no names are given.
 
 Plain prose. No markdown, no quotation marks around the question. Never an em dash or en dash.`,
     messages: [
@@ -756,32 +772,40 @@ Plain prose. No markdown, no quotation marks around the question. Never an em da
           research ? `\n\nThe research this meeting was prepared from:\n${research.slice(0, 8000)}` : ""
         }${
           others.length
-            ? `\n\nThe rest of the bank, for reference only. You are rewriting ONE question, not these. They are here so that an instruction like "combine this with the one about measurement" or "make sure it does not overlap the others" is something you can act on rather than guess at:\n${others
-                .map((o, i) => `${i + 1}. ${o}`)
+            ? `\n\nThe writer's other questions, for reference only, numbered exactly as the writer sees them: "question four" means the line marked 4 in their list. You are rewriting ONE question, not these. They are here so an instruction like "combine this with question four" or "make sure it does not overlap the others" is something you can act on rather than guess at:\n${others
                 .join("\n")
-                .slice(0, 6000)}`
+                .slice(0, 8000)}`
             : ""
-        }\n\nThe question to rework${question.category ? `, filed under "${question.category}"` : ""}:\n${question.text}${
+        }${
+          avoid.length ? `\n\nVersions the writer has already seen; write new ones, not these again:\n${avoid.map((a) => `- ${a}`).join("\n")}` : ""
+        }${question.setup ? `\n\nThe setup said before it now:\n${question.setup}` : ""}\n\nThe question to rework${question.category ? `, filed under "${question.category}"` : ""}:\n${question.text}${
           question.why ? `\nWhy it was picked: ${question.why}` : ""
         }${question.followUp ? `\nIts current probe: ${question.followUp}` : ""}`,
       },
     ],
   });
   if (res.stop_reason === "refusal") return [];
+  if (res.stop_reason === "max_tokens") console.warn("[variants] ran out of room before answering");
 
   const parsed = JSON.parse(firstText(res) || "{}");
   const allow = allowedNames(meeting.attendees);
   const houses = housesIn(research);
   const out: QuestionVariant[] = [];
   for (const v of Array.isArray(parsed.variants) ? parsed.variants : []) {
-    const text = String(v?.text || "").trim();
+    // "Quietly" is a word the writer has banned from anything said aloud.
+    const text = String(v?.text || "").replace(/\s*\bquietly\b/gi, "").trim();
     // The same guard every question goes through. An alternative that names a
     // source is not an alternative.
-    if (!text || namedSource(text, allow, houses)) continue;
+    // A version that closes the question down is not offered either.
+    if (!text || namedSource(text, allow, houses) || closedQuestion(text)) continue;
+    const setup = String(v?.setup || "").trim();
     out.push({
       angle: String(v?.angle || "").trim() || "Another way",
       text,
       followUp: String(v?.followUp || "").trim(),
+      // A new setup is held to the same checks as every other one.
+      setup: setup && !spokenProblem(setup, text) && !namedSource(setup, allow, houses) ? setup : "",
+      forWhom: String(v?.forWhom || "").trim(),
     });
   }
   return out;
@@ -874,7 +898,7 @@ Plain prose. No markdown, no quotation marks around the question. Never an em da
     const dirty = attempt ? namedSource(out.followUp, allow, houses) : null;
     const res = await anthropic().messages.create({
       model: WRITER_MODEL,
-      max_tokens: 1200,
+      max_tokens: 8000,
       output_config: { format: { type: "json_schema", schema: FILL_SCHEMA } },
       system,
       messages: [
@@ -1273,7 +1297,7 @@ export async function findSimilar({
   if (!drafts.length || !existing.length) return out;
   const res = await anthropic().messages.create({
     model: CHECK_MODEL,
-    max_tokens: 1500,
+    max_tokens: 8000,
     output_config: { format: { type: "json_schema", schema: SIMILAR_SCHEMA } },
     system: `You compare new interview questions against the ones the writer already has, so they never end up asking the same thing twice.
 
@@ -1355,7 +1379,7 @@ export async function rewriteQuestion({
 }): Promise<{ text: string; followUp: string }[]> {
   const res = await anthropic().messages.create({
     model: CHECK_MODEL,
-    max_tokens: 1500,
+    max_tokens: 8000,
     output_config: { format: { type: "json_schema", schema: REWRITE_SCHEMA } },
     system: `You write the question that follows a setup someone will say out loud on a panel. The setup stays exactly as it is; you write only the question after it.
 
@@ -1409,8 +1433,9 @@ const OPTIONS_SCHEMA = {
           kind: { type: "string" as const, enum: ["Where they sit", "And how they fix it", "A push back"] },
           text: { type: "string" as const },
           followUp: { type: "string" as const },
+          forWhom: { type: "string" as const },
         },
-        required: ["kind", "text", "followUp"],
+        required: ["kind", "text", "followUp", "forWhom"],
         additionalProperties: false,
       },
     },
@@ -1435,10 +1460,10 @@ export async function questionOptions({
   setup: string;
   question: string;
   standing?: string;
-}): Promise<{ kind: string; text: string; followUp: string }[]> {
+}): Promise<{ kind: string; text: string; followUp: string; forWhom?: string }[]> {
   const res = await anthropic().messages.create({
     model: CHECK_MODEL,
-    max_tokens: 1500,
+    max_tokens: 8000,
     output_config: { format: { type: "json_schema", schema: OPTIONS_SCHEMA } },
     system: `You write three ways to ask the question that follows a setup a moderator will say out loud on a panel. The setup stays exactly as it is. The writer picks one, so write one of each kind, each a real choice:
 - "Where they sit": how the problem the setup lays out actually works, or shows up, in the panelist's own organisation. The writer's favourite kind.
@@ -1451,7 +1476,9 @@ ${OPEN_QUESTION_RULE}
 
 Use the words people in the field actually say, never a term or image the setup borrowed from a document. Never name a consultancy, report, study, survey or author, never refer to "the source" or anything the room has not heard.
 ${standing.trim() ? `\nThe writer's standing instruction for how all their questions are written: ${standing.trim()}\n` : ""}
-Each one is short enough to say in one breath and ends with a question mark, with a follow-up probe for when the first answer is thin, written word for word. Plain prose, no quotation marks, never an em dash.`,
+Each one is short enough to say in one breath and ends with a question mark, with a follow-up probe for when the first answer is thin, written word for word. Plain prose, no quotation marks, never an em dash.
+
+forWhom, for each: When the context names the people in the room, forWhom is the first names of those who can answer THIS version from their own direct work, strictly: a question about managing MSLs fits nobody who does not manage MSLs, a question about KOL meetings does not fit people who never meet KOLs, a question about hiring fits only people who hire. "Everyone" only when all of them truly can. "" when it fits none of them, or when no names are given.`,
     messages: [
       {
         role: "user",
@@ -1463,8 +1490,9 @@ Each one is short enough to say in one breath and ends with a question mark, wit
   const parsed = JSON.parse(firstText(res) || "{}");
   const allow = allowedNames(meeting.attendees);
   const kept = (Array.isArray(parsed.options) ? parsed.options : [])
-    .map((q: { kind?: unknown; text?: unknown; followUp?: unknown }) => ({
+    .map((q: { kind?: unknown; text?: unknown; followUp?: unknown; forWhom?: unknown }) => ({
       kind: String(q?.kind || ""),
+      forWhom: String(q?.forWhom || "").trim(),
       text: String(q?.text || "").trim().replace(/\bquietly\s+/gi, "").replace(/[\s.,;:]*$/, "").replace(/([^?])$/, "$1?"),
       followUp: String(q?.followUp || "").trim(),
     }))
@@ -1473,7 +1501,7 @@ Each one is short enough to say in one breath and ends with a question mark, wit
       if (namedSource(q.text, allow) || unnamedSource(q.text) || leansOnAnother(q.text)) return false;
       const closed = closedQuestion(q.text);
       return !closed || (q.kind === "A push back" && closed === "it can be answered yes or no");
-    });
+    }) as { kind: string; text: string; followUp: string; forWhom: string }[];
   // Versions that only make sense to someone who read the source.
   const bad = await outsideTerms(kept.map((q: { text: string }) => ({ setup, text: q.text })));
   return kept.filter((_: unknown, i: number) => !bad.has(i));
@@ -1488,8 +1516,8 @@ export async function optionsFor({
   meeting: MeetingPayload;
   items: { setup: string; text: string }[];
   standing?: string;
-}): Promise<{ kind: string; text: string; followUp: string }[][]> {
-  const out: { kind: string; text: string; followUp: string }[][] = items.map(() => []);
+}): Promise<{ kind: string; text: string; followUp: string; forWhom?: string }[][]> {
+  const out: { kind: string; text: string; followUp: string; forWhom?: string }[][] = items.map(() => []);
   for (let k = 0; k < items.length; k += 6)
     await Promise.all(
       items.slice(k, k + 6).map(async (x, j) => {
@@ -1594,7 +1622,7 @@ export async function placeQuestion({
   try {
     const res = await anthropic().messages.create({
       model: CHECK_MODEL,
-      max_tokens: 6000,
+      max_tokens: 8000,
       output_config: { format: { type: "json_schema", schema: PLACE_SCHEMA } },
       system: `A moderator's questions for a panel, in the order the conversation runs, some marked with the stretch of the conversation they sit in. Say where the new question fits best: after: the index of the question it should follow (-1 to open with it), next to the questions on the same theme. section: the stretch it joins, copied exactly from the list, or "" if the list has none.`,
       messages: [{ role: "user", content: `The list:\n${items.map((q, i) => `${lineOf(q, i)}${q.section ? `\n   [stretch: ${q.section}]` : ""}`).join("\n")}\n\nThe new question:\n${question.text}` }],

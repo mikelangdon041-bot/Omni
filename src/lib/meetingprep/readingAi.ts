@@ -440,7 +440,7 @@ export async function digestMaterial({
 }): Promise<MaterialOut> {
   const res = await anthropic().messages.create({
     model: RESEARCH_MODEL,
-    max_tokens: 4000,
+    max_tokens: 8000,
     output_config: { format: { type: "json_schema", schema: MATERIAL_SCHEMA } },
     system: `The writer added a piece of material to their meeting prep and told you why. Read it for that reason.
 
@@ -589,7 +589,7 @@ export async function commonGround({
   try {
     const res = await anthropic().messages.create({
       model: RESEARCH_MODEL,
-      max_tokens: 1500,
+      max_tokens: 8000,
       output_config: { format: { type: "json_schema", schema: AGREED_SCHEMA } },
       system: `Below are notes on several pieces someone is reading before a meeting. Write down what they broadly agree on: 2 to 4 points that at least two of the pieces state or clearly share, each as one plain sentence saying the point itself, and who holds it (the outlets or authors, by name). Nothing only one piece says, nothing they disagree on, nothing so general it would be true of any subject. If they agree on nothing worth saying, return []. Plain text, no markdown, no em dashes.`,
       messages: [
@@ -630,7 +630,7 @@ export async function readText(s: FoundSource, meeting: MeetingPayload, text: st
   try {
     const res = await anthropic().messages.create({
       model: RESEARCH_MODEL,
-      max_tokens: 3000,
+      max_tokens: 8000,
       output_config: { format: { type: "json_schema", schema: READ_SCHEMA } },
       system: `You have just read the whole of one piece someone is reading before a meeting. Write down what it actually says, so they could discuss it without having read it, and so nothing in your notes is something the piece does not say.
 

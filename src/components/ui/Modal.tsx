@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { GripHorizontal, X } from "lucide-react";
 
 export function Modal({
@@ -10,6 +11,7 @@ export function Modal({
   children,
   size = "md",
   movable = false,
+  resizable = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -22,6 +24,8 @@ export function Modal({
    * cannot write an instruction about a question you can no longer see.
    */
   movable?: boolean;
+  /** Lets the writer drag the corner to make it bigger, for long answers. */
+  resizable?: boolean;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -39,17 +43,21 @@ export function Modal({
   const width =
     size === "lg" ? "max-w-3xl" : size === "sm" ? "max-w-sm" : "max-w-xl";
 
-  return (
+  // Rendered on the page itself, not where it is used: inside anything with
+  // a transform, "fixed" is fixed to that box, and the dialog for question 15
+  // opened over questions 1 and 2 instead of over the screen.
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-end justify-center bg-ink/40 sm:items-start sm:overflow-y-auto sm:p-8"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
       {/* Panel is its own component so that it mounts fresh every time the
           dialog opens, which is what resets a dragged position. */}
-      <Panel width={width} title={title} onClose={onClose} movable={movable}>
+      <Panel width={width} title={title} onClose={onClose} movable={movable} resizable={resizable}>
         {children}
       </Panel>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -60,12 +68,14 @@ function Panel({
   title,
   onClose,
   movable,
+  resizable = false,
   children,
 }: {
   width: string;
   title?: string;
   onClose: () => void;
   movable: boolean;
+  resizable?: boolean;
   children: React.ReactNode;
 }) {
   const [off, setOff] = useState({ x: 0, y: 0 });
@@ -93,6 +103,8 @@ function Panel({
     <div
       style={movable ? { transform: `translate(${off.x}px, ${off.y}px)` } : undefined}
       className={`flex max-h-[92dvh] w-full ${width} flex-col rounded-t-2xl border border-border bg-surface shadow-xl sm:max-h-none sm:rounded-2xl ${
+        resizable ? "sm:h-[80vh] sm:min-h-72 sm:min-w-[22rem] sm:max-w-[95vw] sm:resize sm:overflow-hidden" : ""
+      } ${
         dragging ? "select-none" : ""
       }`}
     >
