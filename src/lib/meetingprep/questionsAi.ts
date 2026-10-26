@@ -1542,7 +1542,7 @@ export async function orderForConversation({
   if (items.length < 2) return items.map((_, index) => ({ index, section: "" }));
   const res = await anthropic().messages.create({
     model: CHECK_MODEL,
-    max_tokens: 3000,
+    max_tokens: 16000,
     output_config: { format: { type: "json_schema", schema: ORDER_SCHEMA } },
     system: `A moderator's list of questions for a panel. Put them in the order the conversation should run and group them into 3 to 6 stretches.
 - Open with what frames the subject (defining the terms, a question everyone answers), close with a forward-looking or call-to-action question.
@@ -1557,6 +1557,7 @@ Return every index exactly once.`,
       },
     ],
   });
+  if (res.stop_reason === "max_tokens") console.warn("[order] ran out of room before answering");
   const parsed = JSON.parse(firstText(res) || "{}");
   const seen = new Set<number>();
   const out: { index: number; section: string }[] = [];
@@ -1568,7 +1569,10 @@ Return every index exactly once.`,
   }
   // Anything the model dropped stays, at the end of the stretch it was in.
   items.forEach((q, i) => !seen.has(i) && out.push({ index: i, section: q.section || out[out.length - 1]?.section || "" }));
-  return out;
+  // A stretch is one run: questions given the same name sit together, in
+  // the order the stretches first appear, whatever order they came back in.
+  const runs = [...new Set(out.map((o) => o.section))];
+  return runs.flatMap((r) => out.filter((o) => o.section === r));
 }
 
 const PLACE_SCHEMA = {
@@ -1590,7 +1594,7 @@ export async function placeQuestion({
   try {
     const res = await anthropic().messages.create({
       model: CHECK_MODEL,
-      max_tokens: 300,
+      max_tokens: 6000,
       output_config: { format: { type: "json_schema", schema: PLACE_SCHEMA } },
       system: `A moderator's questions for a panel, in the order the conversation runs, some marked with the stretch of the conversation they sit in. Say where the new question fits best: after: the index of the question it should follow (-1 to open with it), next to the questions on the same theme. section: the stretch it joins, copied exactly from the list, or "" if the list has none.`,
       messages: [{ role: "user", content: `The list:\n${items.map((q, i) => `${lineOf(q, i)}${q.section ? `\n   [stretch: ${q.section}]` : ""}`).join("\n")}\n\nThe new question:\n${question.text}` }],

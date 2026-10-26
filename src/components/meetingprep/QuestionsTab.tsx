@@ -37,6 +37,7 @@ import {
   BookOpen,
   Archive,
   ListOrdered,
+  CirclePause,
 } from "lucide-react";
 import { AskMode } from "@/components/meetingprep/AskMode";
 import { AskWho, QuestionChoices, fitsPanelist, panelNames } from "@/components/meetingprep/QuestionChoices";
@@ -163,8 +164,6 @@ export function QuestionsTab({
   // Moderating means asking one question and getting several answers, so the
   // cost of a question is the answers it draws, not one answer.
   const voices = m.questions?.voicesPerQ || (m.meeting_type === "panel" ? 2 : 1);
-  const askingCount = useMemo(() => picked.filter((q) => !q.backup).length, [picked]);
-  const backupCount = picked.length - askingCount;
 
   // Questions that went in without a probe. In practice these are the ones
   // the writer typed: everything the model writes comes with one.
@@ -327,6 +326,12 @@ export function QuestionsTab({
   }
 
   const panel = panelNames(m.attendees);
+  const timing: Timing = {
+    pace,
+    reactions: m.questions?.reactions ?? 1,
+    qaMin: m.questions?.qaMin ?? (m.meeting_type === "panel" ? 5 : 0),
+    introMin: m.questions?.introMin ?? (m.meeting_type === "panel" ? 1 : 0),
+  };
   const [ordering, setOrdering] = useState(false);
   const [undoOrder, setUndoOrder] = useState<{ id: string; order: number; section?: string }[] | null>(null);
 
@@ -1079,21 +1084,18 @@ export function QuestionsTab({
               )}
             </span>
           )}
-          {picked.length ? (
-            <RunTime
-              asking={askingCount}
-              backups={backupCount}
-              pace={pace}
-              voices={voices}
-              slot={m.duration_min}
-              onPace={(n) => save({ questions: { ...m.questions, paceMin: n } })}
-              onVoices={(n) => save({ questions: { ...m.questions, voicesPerQ: n } })}
-              onUseAsSlot={(mins) => save({ duration_min: mins })}
-            />
-          ) : (
-            <span className="hidden text-xs text-muted sm:block">Nothing picked yet</span>
-          )}
+          {!picked.length && <span className="hidden text-xs text-muted sm:block">Nothing picked yet</span>}
         </div>
+        {picked.length > 0 && (
+          <TimeBudget
+            list={picked}
+            panelSize={panel.length || voices}
+            timing={timing}
+            slot={m.duration_min}
+            onTiming={(p) => save({ questions: { ...m.questions, ...p } })}
+            onUseAsSlot={(mins) => save({ duration_min: mins })}
+          />
+        )}
         <div className="p-3">
         {picked.length === 0 ? (
           <p className="px-1 py-2 text-sm text-muted">
@@ -1209,9 +1211,17 @@ export function QuestionsTab({
                             sign of it was the greyed text above — which
                             reads as a glitch, not a state, when the star
                             that explains it only appears on hover. */}
+                        {q.mustAsk && (
+                          <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+                            Must ask
+                          </span>
+                        )}
+                        <span className="tabular-nums" title="Setup, the first answer and the others coming in on it">
+                          ~{fmtMin(minutesFor(q, panel.length, timing))} min
+                        </span>
                         {q.backup && (
                           <span className="rounded-full bg-canvas px-1.5 py-0.5 text-[10px] font-medium">
-                            Backup
+                            In reserve
                           </span>
                         )}
                         <AskWho
@@ -1240,12 +1250,22 @@ export function QuestionsTab({
                     one, and a soft grey keeps that at bay without hiding the
                     row's actions from the person looking for them. */}
                 <div className="flex shrink-0 items-center gap-0.5 opacity-60 transition focus-within:opacity-100 group-hover/row:opacity-100 max-sm:opacity-100">
+                  {/* The star reads as "my favourite, make sure I get to it",
+                      so that is what it means. Holding one in reserve is its
+                      own button, said in words. */}
                   <IconBtn
-                    label={q.backup ? "Not a backup" : "Hold as a backup"}
-                    active={q.backup}
-                    onClick={() => patch(q.id, { backup: !q.backup })}
+                    label={q.mustAsk ? "No longer a must-ask" : "Must ask: make sure I get to this one"}
+                    active={q.mustAsk}
+                    onClick={() => patch(q.id, { mustAsk: !q.mustAsk, ...(q.mustAsk ? {} : { backup: false }) })}
                   >
-                    <Star size={14} className={q.backup ? "fill-current" : ""} />
+                    <Star size={14} className={q.mustAsk ? "fill-amber-400 text-amber-500" : ""} />
+                  </IconBtn>
+                  <IconBtn
+                    label={q.backup ? "Back into the running order" : "Hold in reserve: only if there's time"}
+                    active={q.backup}
+                    onClick={() => patch(q.id, { backup: !q.backup, ...(q.backup ? {} : { mustAsk: false }) })}
+                  >
+                    <CirclePause size={14} />
                   </IconBtn>
                   <IconBtn
                     label={q.note ? "Your note on this one" : "Add a note of your own"}
@@ -1643,83 +1663,123 @@ interface WrittenShape {
  * four and a one to one are different meetings, and a number nobody can see
  * is a number nobody can disagree with.
  */
-function RunTime({
-  asking,
-  backups,
-  pace,
-  voices,
+type Timing = { pace: number; reactions: number; qaMin: number; introMin: number };
+
+const words = (t?: string) => (t || "").split(/\s+/).filter(Boolean).length;
+const fmtMin = (n: number) => (Math.round(n * 2) / 2).toString();
+
+/**
+ * How long one question really takes on a panel: saying the setup and the
+ * question (about 150 words a minute), the first answer, then the others
+ * who come in on it at about a minute and a half each. A question put to
+ * everyone ("to all in turn", or for Everyone and not assigned) is everyone
+ * answering. The moderator saw a list run long the moment one answer drew
+ * two more, and asked for the number that allows for it.
+ */
+function minutesFor(q: QuestionItem, panelSize: number, t: Timing): number {
+  const say = (words(q.setup) + words(q.text)) / 150;
+  const toAll = !q.askWho && (/^(?:for )?everyone$/i.test((q.forWhom || "").trim()) || /\b(to all in turn|each of you|go down the line|all of you)\b/i.test(q.text));
+  const others = toAll ? Math.max(0, panelSize - 1) : t.reactions;
+  return say + t.pace + others * 1.5;
+}
+
+function TimeBudget({
+  list,
+  panelSize,
+  timing,
   slot,
-  onPace,
-  onVoices,
+  onTiming,
   onUseAsSlot,
 }: {
-  asking: number;
-  backups: number;
-  pace: number;
-  /** People who answer a typical question. On a panel this is never one. */
-  voices: number;
-  /** The session length off Setup, when the writer has given one. */
+  list: QuestionItem[];
+  panelSize: number;
+  timing: Timing;
   slot?: number | null;
-  onPace: (minutes: number) => void;
-  onVoices: (n: number) => void;
+  onTiming: (p: Partial<Timing & { paceMin: number }>) => void;
   onUseAsSlot: (minutes: number) => void;
 }) {
-  const perQuestion = pace * voices;
-  const total = asking * perQuestion;
-  const over = Boolean(slot && total > slot);
+  const asking = list.filter((q) => !q.backup);
+  const must = asking.filter((q) => q.mustAsk);
+  const cost = (qs: QuestionItem[]) => qs.reduce((n, q) => n + minutesFor(q, panelSize, timing), 0);
+  const intros = timing.introMin * panelSize;
+  const openClose = slot ? 2 : 0;
+  const budget = slot ? Math.max(0, slot - intros - openClose - timing.qaMin) : 0;
+  // What fits: the must-asks first, then the rest in running order.
+  let used = cost(must);
+  let fit = must.length;
+  for (const q of asking.filter((x) => !x.mustAsk)) {
+    const c = minutesFor(q, panelSize, timing);
+    if (used + c > budget) break;
+    used += c;
+    fit++;
+  }
+  const total = cost(asking);
+  const sel =
+    "rounded-md border border-border bg-surface px-1.5 py-0.5 text-xs text-muted outline-none focus:border-[var(--accent)]";
   return (
-    <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 text-xs">
-      <span className={over ? "font-semibold text-amber-700" : "font-medium text-ink"}>
-        about {total} min{slot ? ` of your ${slot}` : ""}
-        {over ? ` — ${total - slot!} over` : ""}
-      </span>
-      {/* The sum, in the open. A moderator told "about 33 min" for eleven
-          questions is being quoted a one-to-one meeting's arithmetic, and
-          cannot tell that from the number alone. */}
-      <span className="text-muted">
-        {asking} × {pace}
-        {voices > 1 ? ` × ${voices}` : ""}
-      </span>
-      {backups > 0 && (
-        <span className="text-muted" title="Backups are not in the total">
-          +{backups * perQuestion} held back
-        </span>
+    <div className="space-y-1.5 border-b border-[var(--accent)]/20 px-4 py-2.5 text-xs">
+      {slot ? (
+        <>
+          <p className="text-muted">
+            <span className="font-semibold text-ink">{fmtMin(budget)} min for questions</span> out of your {slot}: {fmtMin(intros)} for
+            introductions, {openClose} to open and close, {timing.qaMin} for audience questions.
+          </p>
+          {must.length > 0 && (
+            <p className={cost(must) > budget ? "font-semibold text-amber-700" : "text-ink"}>
+              Your {must.length} must-ask {must.length === 1 ? "question takes" : "questions take"} about {fmtMin(cost(must))} min
+              {cost(must) > budget ? `, ${fmtMin(cost(must) - budget)} more than you have` : `, leaving ${fmtMin(budget - cost(must))}`}.
+            </p>
+          )}
+          <p className={total > budget ? "text-amber-700" : "text-ink"}>
+            All {asking.length} in the running order take about {fmtMin(total)} min.{" "}
+            <span className="font-semibold">About {fit} fit</span>
+            {must.length ? ", your must-asks first, then the rest in order" : ", in this order"}.
+          </p>
+        </>
+      ) : (
+        <p className="text-ink">
+          All {asking.length} take about {fmtMin(total)} min.{" "}
+          <button type="button" onClick={() => onUseAsSlot(Math.round(total))} className="font-medium text-[var(--accent)] hover:underline">
+            Use as the meeting length
+          </button>
+        </p>
       )}
-      <select
-        value={pace}
-        onChange={(e) => onPace(Number(e.target.value))}
-        title="How long you expect one answer to run"
-        className="rounded-md border border-border bg-surface px-1.5 py-0.5 text-xs text-muted outline-none focus:border-[var(--accent)]"
-      >
-        {[1, 2, 3, 4, 5].map((n) => (
-          <option key={n} value={n}>
-            {n} min an answer
-          </option>
-        ))}
-      </select>
-      <select
-        value={voices}
-        onChange={(e) => onVoices(Number(e.target.value))}
-        title="How many people answer a typical question"
-        className="rounded-md border border-border bg-surface px-1.5 py-0.5 text-xs text-muted outline-none focus:border-[var(--accent)]"
-      >
-        {[1, 2, 3, 4, 5].map((n) => (
-          <option key={n} value={n}>
-            {n === 1 ? "one answers each" : `${n} answer each`}
-          </option>
-        ))}
-      </select>
-      {/* Nothing to measure against until the slot length is known, and this
-          is the moment they know it. */}
-      {!slot && total > 0 && (
-        <button
-          type="button"
-          onClick={() => onUseAsSlot(total)}
-          className="rounded-md px-1.5 py-0.5 font-medium text-[var(--accent)] transition hover:bg-[var(--accent-soft)]"
-        >
-          Use as the meeting length
-        </button>
-      )}
+      {/* The assumptions, in the open and adjustable, so the total can be
+          checked against how this panel actually runs. */}
+      <div className="flex flex-wrap items-center gap-1.5 text-muted">
+        <span>First answer</span>
+        <select value={timing.pace} onChange={(e) => onTiming({ paceMin: Number(e.target.value) })} className={sel}>
+          {[1.5, 2, 2.5, 3, 4, 5].map((n) => (
+            <option key={n} value={n}>
+              {n} min
+            </option>
+          ))}
+        </select>
+        <span>then</span>
+        <select value={timing.reactions} onChange={(e) => onTiming({ reactions: Number(e.target.value) })} className={sel}>
+          {[0, 1, 2, 3].map((n) => (
+            <option key={n} value={n}>
+              {n === 0 ? "nobody else" : `${n} more`}
+            </option>
+          ))}
+        </select>
+        <span>come in (1.5 min each). Audience questions</span>
+        <select value={timing.qaMin} onChange={(e) => onTiming({ qaMin: Number(e.target.value) })} className={sel}>
+          {[0, 5, 10, 15].map((n) => (
+            <option key={n} value={n}>
+              {n} min
+            </option>
+          ))}
+        </select>
+        <span>Introductions</span>
+        <select value={timing.introMin} onChange={(e) => onTiming({ introMin: Number(e.target.value) })} className={sel}>
+          {[0, 0.5, 1, 2].map((n) => (
+            <option key={n} value={n}>
+              {n} min each
+            </option>
+          ))}
+        </select>
+      </div>
     </div>
   );
 }

@@ -339,6 +339,8 @@ export interface QuestionItem {
   id: string;
   /** The one panelist the writer will put it to, of those it works for. */
   askWho?: string;
+  /** Starred: one the writer wants to be sure to get to. */
+  mustAsk?: boolean;
   /** The stretch of the conversation it belongs to, when the list is ordered. */
   section?: string;
   /**
@@ -448,6 +450,12 @@ export interface QuestionBank {
   // eleven questions that they had half an hour of material when they had
   // closer to an hour of it.
   voicesPerQ?: number;
+  // A panel question is one answer, then others come in on it. How many
+  // usually do, and the time taken off the slot before any question is
+  // asked: audience questions, and the panel introducing themselves.
+  reactions?: number;
+  qaMin?: number;
+  introMin?: number;
 }
 
 // One piece of advice from a read-through of the whole prep pack. The point
