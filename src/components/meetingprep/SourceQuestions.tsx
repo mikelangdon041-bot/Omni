@@ -1004,7 +1004,7 @@ Write questions specifically on that, each with a setup. How many is set by the 
                 forWhom={d.forWhom || ""}
                 panel={panel}
                 value={d.askWho}
-                onChange={(who, fw) => patchDraft(d.id, { askWho: who || undefined, ...(fw !== undefined ? { forWhom: fw } : {}) })}
+                onChange={(who) => patchDraft(d.id, { askWho: who || undefined })}
               />
             </div>
           </div>

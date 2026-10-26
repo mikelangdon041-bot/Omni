@@ -67,18 +67,22 @@ export function QuestionChoices({
   busy = false,
   onPick,
   onWrite,
+  fold = false,
 }: {
   x: Holder;
   busy?: boolean;
   onPick: (patch: Partial<Holder>) => void;
   /** Writes options for a question that has none. */
   onWrite?: () => void;
+  /** Keep the versions behind a button until asked for. On the list eight
+   *  open versions under one question were most of the page. */
+  fold?: boolean;
 }) {
   const opts = choicesOf(x);
   const kept = opts.filter((o) => o.keep);
   const rest = opts.filter((o) => !o.keep);
   const [shown, setShown] = useState(false);
-  const open = shown || !x.optionChosen;
+  const open = shown || (!fold && !x.optionChosen);
 
   return (
     <>
@@ -123,8 +127,12 @@ export function QuestionChoices({
       ) : !rest.length ? null : !open ? (
         // Once one is chosen the rest are kept, folded away: the writer said
         // the one they picked should stand alone with the others a click off.
-        <button type="button" onClick={() => setShown(true)} className="mt-1.5 text-xs text-muted hover:text-ink hover:underline">
-          Other versions ({rest.length})
+        <button
+          type="button"
+          onClick={() => setShown(true)}
+          className="mt-1.5 rounded-md border border-border px-2 py-0.5 text-xs font-medium text-ink/80 transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+        >
+          {rest.length} other {rest.length === 1 ? "way" : "ways"} to ask it
         </button>
       ) : (
         <div className="mt-2 rounded-md bg-canvas px-2.5 py-2">
@@ -133,10 +141,10 @@ export function QuestionChoices({
             {/* Liking the one you have is a choice too: it folds the rest away. */}
             <button
               type="button"
-              onClick={() => (x.optionChosen ? setShown(false) : onPick({ optionChosen: true }))}
+              onClick={() => (x.optionChosen || fold ? setShown(false) : onPick({ optionChosen: true }))}
               className="ml-auto text-xs font-medium text-muted hover:text-ink hover:underline"
             >
-              {x.optionChosen ? "Hide" : "Keep mine, hide these"}
+              {x.optionChosen || fold ? "Hide" : "Keep mine, hide these"}
             </button>
           </div>
           {/* The question first, full width; what to do with it underneath,
@@ -183,15 +191,13 @@ export function QuestionChoices({
               </li>
             ))}
           </ul>
-          {!x.optionChosen && (
-            <button
-              type="button"
-              onClick={() => onPick({ optionChosen: true })}
-              className="mt-2 text-xs font-medium text-muted hover:text-ink hover:underline"
-            >
-              None of these, hide them
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => (x.optionChosen || fold ? setShown(false) : onPick({ optionChosen: true }))}
+            className="mt-2 text-xs font-medium text-muted hover:text-ink hover:underline"
+          >
+            None of these, hide them
+          </button>
         </div>
       )}
     </>
@@ -219,23 +225,18 @@ export function namesIn(forWhom: string, panel: string[]): string[] {
   return named.length ? named : panel;
 }
 
-/**
- * Who to put it to. The chips are the panelists it works for; one click
- * assigns it to that one, so the writer can plan who speaks when. Those it
- * does not suit are left off rather than greyed, so the choice is real.
- */
 /** The panelists a question is put to, from its comma-separated askWho. */
 export function askList(askWho?: string): string[] {
   return (askWho || "").split(/\s*,\s*/).filter(Boolean);
 }
 
-const joinNames = (xs: string[], all: number) =>
-  xs.length === all && all > 1 ? "Everyone" : xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
-
 /**
  * Who to put it to. Every panelist is offered and any number can be picked:
- * the ones it was written for are filled, the rest are there to add, so the
- * writer can disagree with the suggestion or split a question between two.
+ * the ones it was written for are filled, the rest are dashed "+ Name", so
+ * the writer can disagree with the suggestion or split a question between
+ * two. Picking someone is only a choice of who to ask: it does not rewrite
+ * who the question was written for, so taking them off puts them back as
+ * they were.
  */
 export function AskWho({
   forWhom,
@@ -246,7 +247,7 @@ export function AskWho({
   forWhom: string;
   panel: string[];
   value?: string;
-  /** The panelists chosen, and the new "for" line when it adds someone not suggested. */
+  /** The panelists chosen, comma separated, or "" for nobody. */
   onChange: (who: string, forWhom?: string) => void;
 }) {
   if (!panel.length) return <ForChip who={forWhom} />;
@@ -262,18 +263,14 @@ export function AskWho({
           <button
             key={n}
             type="button"
-            onClick={() => {
-              const next = on ? chosen.filter((x) => x !== n) : panel.filter((x) => x === n || chosen.includes(x));
-              const widened = !on && !fit ? joinNames(panel.filter((x) => x === n || fits.includes(x)), panel.length) : undefined;
-              onChange(next.join(", "), widened);
-            }}
-            title={on ? `Asking ${n}. Click to take them off.` : fit ? `Ask ${n}` : `Not suggested for ${n}, but you can ask them anyway`}
+            onClick={() => onChange((on ? chosen.filter((x) => x !== n) : panel.filter((x) => x === n || chosen.includes(x))).join(", "))}
+            title={on ? `Asking ${n}. Click to take them off.` : fit ? `Ask ${n}` : `Not written for ${n}, but you can ask them anyway`}
             className={`rounded px-1.5 py-0.5 text-[10px] font-semibold transition ${
               on
-                ? "bg-[var(--accent)] text-[var(--accent-fg)]"
+                ? "border border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-fg)]"
                 : fit
-                  ? "bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)]/20"
-                  : "border border-border bg-surface text-ink/70 hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                  ? "border border-transparent bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)]/20"
+                  : "border border-dashed border-border text-muted hover:border-[var(--accent)] hover:text-[var(--accent)]"
             }`}
           >
             {on ? `✓ ${n}` : fit ? n : `+ ${n}`}

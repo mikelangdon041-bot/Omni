@@ -12,7 +12,7 @@
 // backup, asked and order — so generating more questions only ever appends,
 // and never disturbs a list someone has arranged.
 
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -38,9 +38,15 @@ import {
   Archive,
   ListOrdered,
   CirclePause,
+  ArrowDown,
+  ArrowDownToLine,
+  ArrowUp,
+  ArrowUpToLine,
+  Ellipsis,
+  SlidersHorizontal,
 } from "lucide-react";
 import { AskMode } from "@/components/meetingprep/AskMode";
-import { AskWho, ForChip, QuestionChoices, askList, fitsPanelist, panelNames } from "@/components/meetingprep/QuestionChoices";
+import { AskWho, ForChip, QuestionChoices, askList, choicesOf, panelNames } from "@/components/meetingprep/QuestionChoices";
 import { ReviewPanel } from "@/components/meetingprep/ReviewPanel";
 import { useReview } from "@/lib/meetingprep/useReview";
 import { Button } from "@/components/ui/Button";
@@ -131,6 +137,39 @@ export function QuestionsTab({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [openCats, setOpenCats] = useState<Set<string>>(new Set());
   const [dragId, setDragId] = useState<string | null>(null);
+  // Short rows (the question, who, how long) or every row open. Short is the
+  // default: the list with every setup, probe and version showing was a wall
+  // of text the writer could not plan from. Remembered per browser.
+  // The tab only renders once the meeting has loaded in the browser, so
+  // reading storage here does not differ from a server render.
+  const [compact, setCompact] = useState(() => {
+    try {
+      return localStorage.getItem("mp:list-view") !== "full";
+    } catch {
+      return true;
+    }
+  });
+  const setView = (short: boolean) => {
+    setCompact(short);
+    try {
+      localStorage.setItem("mp:list-view", short ? "short" : "full");
+    } catch {}
+  };
+  const [openRows, setOpenRows] = useState<Set<string>>(new Set());
+  const toggleRow = (id: string) =>
+    setOpenRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  // One panelist's share of the list, or the questions nobody has yet.
+  const [whoFilter, setWhoFilter] = useState<string | null>(null);
+  const [moveMenu, setMoveMenu] = useState<string | null>(null);
+  const [showTools, setShowTools] = useState(false);
+  // Dragging near the edge scrolls, so a question can go from 22 to 1 in
+  // one drag instead of a screenful at a time.
+  const drag = useRef<{ x: number; y: number; timer: number | null; scroller: HTMLElement | null }>({ x: 0, y: 0, timer: null, scroller: null });
   // The one question having its probe written, so that row can say so.
   const [fillingId, setFillingId] = useState<string | null>(null);
   // Writing every missing probe at once, and how many are home.
@@ -155,12 +194,16 @@ export function QuestionsTab({
     () => live.filter((q) => q.picked).sort((a, b) => a.order - b.order),
     [live],
   );
+  const pickedRef = useRef(picked);
+  useEffect(() => {
+    pickedRef.current = picked;
+  }, [picked]);
 
   // How long the list runs. Backups are left out of it on purpose: they are
   // the ones held back for if the room goes quiet, so counting them would
   // time a session where everything went wrong, which is not the number
   // anyone is standing there trying to work out.
-  const pace = m.questions?.paceMin || 3;
+  const pace = m.questions?.paceMin || (m.meeting_type === "panel" ? 2.5 : 3);
   // Moderating means asking one question and getting several answers, so the
   // cost of a question is the answers it draws, not one answer.
   const voices = m.questions?.voicesPerQ || (m.meeting_type === "panel" ? 2 : 1);
@@ -597,18 +640,83 @@ export function QuestionsTab({
     }
   }
 
-  /** Move a picked question onto another's position. */
-  function reorder(id: string, toIndex: number) {
+  /**
+   * Move a picked question onto another's position. It joins the section of
+   * the question it lands on, so a question moved to the top opens the panel
+   * rather than sitting above the first heading with none of its own.
+   */
+  function reorder(id: string, toIndex: number, section?: string) {
     const list = [...picked];
     const from = list.findIndex((q) => q.id === id);
     if (from < 0) return;
     const clamped = Math.max(0, Math.min(list.length - 1, toIndex));
+    if (clamped === from && section === undefined) return;
     const [moved] = list.splice(from, 1);
     list.splice(clamped, 0, moved);
+    const landedOn = clamped < from ? list[clamped + 1] : list[clamped - 1];
+    const nextSection =
+      section !== undefined ? section : landedOn && list.some((q) => q.section) ? landedOn.section : moved.section;
     const orderById = new Map(list.map((q, i) => [q.id, i]));
     setItems(
-      items.map((q) => (orderById.has(q.id) ? { ...q, order: orderById.get(q.id)! } : q)),
+      items.map((q) =>
+        q.id === id
+          ? { ...q, order: orderById.get(q.id)!, section: nextSection || undefined }
+          : orderById.has(q.id)
+            ? { ...q, order: orderById.get(q.id)! }
+            : q,
+      ),
     );
+  }
+  const reorderRef = useRef(reorder);
+  useEffect(() => {
+    reorderRef.current = reorder;
+  });
+
+  /** The move menu: to the top, one up or down, the bottom, a number, or a section. */
+  function moveTo(id: string, where: MoveTarget) {
+    const from = picked.findIndex((q) => q.id === id);
+    if (from < 0) return;
+    if (typeof where === "object") {
+      const at = picked.map((q) => q.section).lastIndexOf(where.section);
+      reorder(id, at < 0 ? 0 : at >= from ? at : at + 1, where.section);
+    } else {
+      reorder(
+        id,
+        where === "top" ? 0 : where === "bottom" ? picked.length - 1 : where === "up" ? from - 1 : where === "down" ? from + 1 : where - 1,
+      );
+    }
+    setMoveMenu(null);
+    requestAnimationFrame(() =>
+      document.querySelector(`[data-qrow="${id}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }),
+    );
+  }
+
+  function startDrag(id: string, el: HTMLElement, x: number, y: number) {
+    setDragId(id);
+    let p: HTMLElement | null = el.parentElement;
+    while (p && !(/(auto|scroll)/.test(getComputedStyle(p).overflowY) && p.scrollHeight > p.clientHeight)) p = p.parentElement;
+    const d = drag.current;
+    d.scroller = p;
+    d.x = x;
+    d.y = y;
+    if (d.timer) window.clearInterval(d.timer);
+    d.timer = window.setInterval(() => {
+      const box = d.scroller ? d.scroller.getBoundingClientRect() : { top: 0, bottom: window.innerHeight };
+      const step = d.y < box.top + 70 ? -14 : d.y > box.bottom - 70 ? 14 : 0;
+      if (!step) return;
+      if (d.scroller) d.scroller.scrollBy(0, step);
+      else window.scrollBy(0, step);
+      const over = document.elementFromPoint(d.x, d.y)?.closest("[data-qrow]")?.getAttribute("data-qrow");
+      if (over && over !== id) {
+        const to = pickedRef.current.findIndex((q) => q.id === over);
+        if (to >= 0) reorderRef.current(id, to);
+      }
+    }, 30);
+  }
+  function endDrag() {
+    if (drag.current.timer) window.clearInterval(drag.current.timer);
+    drag.current.timer = null;
+    setDragId(null);
   }
 
   /**
@@ -878,6 +986,26 @@ export function QuestionsTab({
         <Button size="sm" variant="secondary" onClick={() => setShowAdd(true)}>
           <Pencil size={14} /> Type one of my own
         </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => setShowTools((v) => !v)}
+          title="Setups, probes, other ways to ask, a rewrite and a read-through"
+        >
+          <Ellipsis size={14} /> {showTools ? "Fewer tools" : "More tools"}
+        </Button>
+        <span className="flex-1" />
+        <Button
+          size="sm"
+          variant={picked.length ? "primary" : "secondary"}
+          disabled={!picked.length}
+          title={picked.length ? "Open the big view for during the meeting" : "Pick some questions first"}
+          onClick={() => setShowAsk(true)}
+        >
+          <Play size={14} /> Ask mode
+        </Button>
+        {showTools && (
+          <div className="flex w-full flex-wrap items-center gap-2 border-t border-border pt-2">
         {/* Only while there is something to do, so it takes itself off the
             bar once every question has a probe. */}
         {/* Only for questions written before setups existed, or typed by
@@ -937,16 +1065,8 @@ export function QuestionsTab({
               ? "Check it again"
               : "Check it over"}
         </Button>
-        <span className="flex-1" />
-        <Button
-          size="sm"
-          variant={picked.length ? "primary" : "secondary"}
-          disabled={!picked.length}
-          title={picked.length ? "Open the big view for during the meeting" : "Pick some questions first"}
-          onClick={() => setShowAsk(true)}
-        >
-          <Play size={14} /> Ask mode
-        </Button>
+          </div>
+        )}
       </div>
 
       {busy && <ProgressBar pct={pct} label={`${busyLabel}…`} className="px-0.5" />}
@@ -1058,14 +1178,29 @@ export function QuestionsTab({
       )}
 
       {/* Your list — the questions you carry in, in your order. */}
-      <section className="overflow-hidden rounded-xl border border-[var(--accent)]/30 bg-surface">
-        <div className="flex flex-wrap items-center gap-2 border-b border-[var(--accent)]/20 bg-gradient-to-r from-[var(--accent-soft)]/70 to-transparent px-4 py-3">
+      <section className="rounded-xl border border-[var(--accent)]/30 bg-surface">
+        <div className="flex flex-wrap items-center gap-2 rounded-t-xl border-b border-[var(--accent)]/20 bg-gradient-to-r from-[var(--accent-soft)]/70 to-transparent px-4 py-3">
           <ListChecks size={16} className="shrink-0 text-[var(--accent)]" />
           <h3 className="text-sm font-semibold tracking-tight">Your list</h3>
           <span className="rounded-full bg-[var(--accent)] px-2 py-0.5 text-[11px] font-semibold tabular-nums text-[var(--accent-fg)]">
             {picked.length}
           </span>
           <span className="flex-1" />
+          {picked.length > 0 && (
+            // Short rows to plan from, or everything open to rehearse from.
+            <span className="flex rounded-lg border border-border bg-surface p-0.5 text-xs font-medium">
+              {([true, false] as const).map((short) => (
+                <button
+                  key={String(short)}
+                  type="button"
+                  onClick={() => setView(short)}
+                  className={`rounded-md px-2 py-0.5 transition ${compact === short ? "bg-[var(--accent)] text-[var(--accent-fg)]" : "text-muted hover:text-ink"}`}
+                >
+                  {short ? "Questions only" : "Everything"}
+                </button>
+              ))}
+            </span>
+          )}
           {picked.length > 2 && (
             <span className="flex items-center gap-1">
               <Button
@@ -1096,210 +1231,275 @@ export function QuestionsTab({
             onUseAsSlot={(mins) => save({ duration_min: mins })}
           />
         )}
+        {picked.length > 0 && panel.length > 0 && (
+          // Each name shows only what is put to that person, so planning one
+          // person's share of the conversation is one click.
+          <div className="flex flex-wrap items-center gap-1.5 border-b border-[var(--accent)]/20 px-4 py-2 text-xs">
+            <span className="mr-0.5 font-semibold text-muted">Show</span>
+            {[
+              { key: null as string | null, label: "All", n: picked.length, tip: "Every question in your list" },
+              ...panel.map((n) => ({
+                key: n as string | null,
+                label: n,
+                n: picked.filter((q) => askList(q.askWho).includes(n)).length,
+                tip: `The questions you are putting to ${n}`,
+              })),
+              {
+                key: "none" as string | null,
+                label: "Nobody yet",
+                n: picked.filter((q) => !askList(q.askWho).length).length,
+                tip: "Questions you have not put to anyone yet",
+              },
+            ].map((c) => (
+              <button
+                key={c.label}
+                type="button"
+                title={c.tip}
+                onClick={() => setWhoFilter(c.key)}
+                className={`rounded-full border px-2 py-0.5 font-medium transition ${
+                  whoFilter === c.key
+                    ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-fg)]"
+                    : "border-border bg-surface text-ink/80 hover:border-[var(--accent)]"
+                }`}
+              >
+                {c.label} <span className="tabular-nums opacity-70">{c.n}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <div className="p-3">
         {picked.length === 0 ? (
           <p className="px-1 py-2 text-sm text-muted">
-            Press the + on any question below to put it here. Drag by the
-            handle to reorder, and star the ones you&apos;re holding in
-            reserve.
+            Press the + on any question below to put it here.
           </p>
         ) : (
-          <ol className="space-y-2">
-            {panel.length > 0 && (
-              <li className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-xs text-muted">
-                {/* How the list spreads across the panel: how many each
-                    person could take, and how many are put to them. */}
-                <span className="font-semibold">Per panelist:</span>
-                {panel.map((n) => (
-                  <span key={n}>
-                    {n}{" "}
-                    <span className="tabular-nums text-ink">{picked.filter((q) => fitsPanelist(q.forWhom || "", n)).length}</span>
-                    {" "}fit
-                    {picked.some((q) => askList(q.askWho).includes(n)) && `, ${picked.filter((q) => askList(q.askWho).includes(n)).length} assigned`}
-                  </span>
-                ))}
-                <span>
-                  For nobody yet {picked.filter((q) => !panel.some((n) => fitsPanelist(q.forWhom || "", n))).length}
-                </span>
-              </li>
-            )}
-            {picked.map((q, i) => (
-              <li
-                key={q.id}
-                data-qrow={q.id}
-                data-section={q.section && q.section !== picked[i - 1]?.section ? q.section : undefined}
-                onPointerMove={(e) => {
-                  if (!dragId || dragId === q.id) return;
-                  e.preventDefault();
-                  reorder(dragId, i);
-                }}
-                className={`group/row relative flex items-start gap-2 rounded-xl border bg-surface p-2.5 transition ${
-                  q.section && q.section !== picked[i - 1]?.section ? "mt-7 before:absolute before:-top-6 before:left-1 before:text-xs before:font-semibold before:uppercase before:tracking-wide before:text-[var(--accent)] before:content-[attr(data-section)]" : ""
-                } ${
-                  dragId === q.id
-                    ? "border-[var(--accent)] opacity-60 shadow-sm"
-                    : "border-border hover:border-[var(--accent)]/40"
-                }`}
-              >
-                {/* Pointer events rather than HTML5 drag, so this works
-                    with a finger. The up and down buttons are gone: two
-                    controls for one job, and you can already drop a
-                    question anywhere. */}
-                <button
-                  type="button"
-                  aria-label="Drag to reorder"
-                  title="Drag to reorder"
-                  onPointerDown={(e) => {
-                    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-                    setDragId(q.id);
-                  }}
-                  onPointerUp={() => setDragId(null)}
-                  onPointerCancel={() => setDragId(null)}
-                  onPointerMove={(e) => {
-                    if (dragId !== q.id) return;
-                    // With the pointer captured, every move lands here, so
-                    // the row under the finger has to be found by hand.
-                    const el = document
-                      .elementFromPoint(e.clientX, e.clientY)
-                      ?.closest("[data-qrow]");
-                    const overId = el?.getAttribute("data-qrow");
-                    if (!overId || overId === q.id) return;
-                    const to = picked.findIndex((p) => p.id === overId);
-                    if (to >= 0) reorder(q.id, to);
-                  }}
-                  className="mt-0.5 shrink-0 cursor-grab touch-none rounded-md p-0.5 text-muted/60 transition hover:text-ink active:cursor-grabbing"
-                >
-                  <GripVertical size={15} />
-                </button>
-                <span className="mt-0.5 w-5 shrink-0 text-right text-xs font-semibold tabular-nums text-muted">
-                  {i + 1}.
-                </span>
-                <div className="min-w-0 flex-1">
-                  {editingId === q.id ? (
-                    <QuestionEditor
-                      q={q}
-                      categories={allCategories}
-                      saveState={saveState}
-                      onPatch={(p) => patch(q.id, p)}
-                      onDone={() => setEditingId(null)}
-                    />
-                  ) : (
-                    <>
-                      {/* Every question reads at the same weight. Backups
-                          used to be greyed out, which made a held-back
-                          question look like a rendering fault rather than a
-                          choice — the chip below says it is a backup, and
-                          that is the whole job. Nothing in this list is
-                          less readable than anything else in it. */}
-                      <SpokenQuestion
-                        q={q}
-                        busy={settingUpId === q.id}
-                        onAddSetup={() => void addSetups(q)}
-                        onPatch={(p) => patch(q.id, p)}
-                        versioning={versioningIds.includes(q.id)}
-                        onWriteVersions={() => void sharpen([q])}
-                      />
-                      {/* Your list is one running order, not groups: the
-                          order you ask them in is the whole point of it. But
-                          which group a question came out of is worth knowing
-                          at a glance, so it rides along as a tag. */}
-                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
-                        <span className="rounded-full bg-canvas px-1.5 py-0.5 text-[10px] font-medium">
-                          {q.source === "user" ? "Yours" : q.category}
-                        </span>
-                        {/* Held back, and until this chip existed the only
-                            sign of it was the greyed text above — which
-                            reads as a glitch, not a state, when the star
-                            that explains it only appears on hover. */}
-                        {q.mustAsk && (
-                          <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
-                            Must ask
-                          </span>
+          <ol className="space-y-1.5">
+            {(() => {
+              const sections = [...new Set(picked.map((q) => q.section).filter(Boolean))] as string[];
+              const runTime = (sec: string) =>
+                picked.filter((q) => q.section === sec && !q.backup).reduce((n, q) => n + minutesFor(q, panel.length, timing), 0);
+              const shown = picked
+                .map((q, i) => ({ q, i }))
+                .filter(({ q }) =>
+                  !whoFilter ? true : whoFilter === "none" ? !askList(q.askWho).length : askList(q.askWho).includes(whoFilter),
+                );
+              if (!shown.length)
+                return (
+                  <li className="px-1 py-2 text-sm text-muted">
+                    {whoFilter === "none" ? "Every question is put to someone." : `Nothing is put to ${whoFilter} yet. Open a question and press their name.`}
+                  </li>
+                );
+              return shown.map(({ q, i }, k) => {
+                const heading = q.section && q.section !== shown[k - 1]?.q.section ? q.section : null;
+                const open = !compact || openRows.has(q.id) || editingId === q.id || openNote === q.id;
+                const asked = askList(q.askWho);
+                const setupText = stripAskedQuestion(q.setup, q.text);
+                const versions = choicesOf(q).filter((o) => !o.keep).length;
+                return (
+                  <Fragment key={q.id}>
+                    {heading && (
+                      <li className="flex items-baseline gap-2 px-1 pb-0.5 pt-4 first:pt-0">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-[var(--accent)]">{heading}</span>
+                        <span className="text-[11px] tabular-nums text-muted">~{fmtMin(runTime(heading))} min</span>
+                      </li>
+                    )}
+                    <li
+                      data-qrow={q.id}
+                      onPointerMove={(e) => {
+                        if (!dragId || dragId === q.id) return;
+                        e.preventDefault();
+                        reorder(dragId, i);
+                      }}
+                      className={`group/row rounded-xl border transition ${q.backup ? "bg-canvas/50" : "bg-surface"} ${
+                        dragId === q.id
+                          ? "border-[var(--accent)] opacity-60 shadow-sm"
+                          : q.mustAsk
+                            ? "border-amber-300"
+                            : "border-border hover:border-[var(--accent)]/40"
+                      }`}
+                    >
+                      <div className="flex items-start gap-1.5 p-2.5">
+                        {/* Pointer events rather than HTML5 drag, so this works
+                            with a finger; near the edge it scrolls. The move
+                            menu is for the long hops. */}
+                        {!whoFilter && (
+                          <button
+                            type="button"
+                            aria-label="Drag to reorder"
+                            title="Drag to reorder, or use the … menu to move it to the top"
+                            onPointerDown={(e) => {
+                              (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+                              startDrag(q.id, e.currentTarget, e.clientX, e.clientY);
+                            }}
+                            onPointerUp={endDrag}
+                            onPointerCancel={endDrag}
+                            onPointerMove={(e) => {
+                              if (dragId !== q.id) return;
+                              drag.current.x = e.clientX;
+                              drag.current.y = e.clientY;
+                              // With the pointer captured, every move lands here, so
+                              // the row under the finger has to be found by hand.
+                              const el = document.elementFromPoint(e.clientX, e.clientY)?.closest("[data-qrow]");
+                              const overId = el?.getAttribute("data-qrow");
+                              if (!overId || overId === q.id) return;
+                              const to = picked.findIndex((p) => p.id === overId);
+                              if (to >= 0) reorder(q.id, to);
+                            }}
+                            className="mt-0.5 shrink-0 cursor-grab touch-none rounded-md p-0.5 text-muted/60 transition hover:text-ink active:cursor-grabbing"
+                          >
+                            <GripVertical size={15} />
+                          </button>
                         )}
-                        <span className="tabular-nums" title="Setup, the first answer and the others coming in on it">
-                          ~{fmtMin(minutesFor(q, panel.length, timing))} min
-                        </span>
-                        {q.backup && (
-                          <span className="rounded-full bg-canvas px-1.5 py-0.5 text-[10px] font-medium">
-                            In reserve
+                        <span className="mt-px w-6 shrink-0 text-right text-sm font-semibold tabular-nums text-muted">{i + 1}</span>
+                        <div className="min-w-0 flex-1">
+                          {editingId === q.id ? (
+                            <QuestionEditor
+                              q={q}
+                              categories={allCategories}
+                              saveState={saveState}
+                              onPatch={(p) => patch(q.id, p)}
+                              onDone={() => setEditingId(null)}
+                            />
+                          ) : (
+                            <>
+                              {/* Said in this order: the setup, then the question. */}
+                              {open && setupText && <p className="mb-1.5 text-sm leading-relaxed text-ink/65">{setupText}</p>}
+                              <p
+                                onClick={() => compact && toggleRow(q.id)}
+                                className={`text-[15px] font-medium leading-snug text-ink ${compact ? "cursor-pointer" : ""}`}
+                              >
+                                {q.text}
+                              </p>
+                              <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
+                                {open ? (
+                                  <AskWho
+                                    forWhom={q.forWhom || ""}
+                                    panel={panel}
+                                    value={q.askWho}
+                                    onChange={(who) => patch(q.id, { askWho: who || undefined })}
+                                  />
+                                ) : asked.length ? (
+                                  asked.map((n) => (
+                                    <span key={n} className="rounded bg-[var(--accent)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--accent-fg)]">
+                                      {n}
+                                    </span>
+                                  ))
+                                ) : (
+                                  <ForChip who={q.forWhom || ""} />
+                                )}
+                                <span className="tabular-nums" title="Saying it, the first answer, and the others coming in on it">
+                                  ~{fmtMin(minutesFor(q, panel.length, timing))} min
+                                </span>
+                                {q.mustAsk && (
+                                  <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">Must ask</span>
+                                )}
+                                {q.backup && (
+                                  <span className="rounded-full bg-canvas px-1.5 py-0.5 text-[10px] font-medium text-ink/70">In reserve</span>
+                                )}
+                                {!open && (setupText || versions > 0 || q.note) && (
+                                  <button type="button" onClick={() => toggleRow(q.id)} className="text-muted hover:text-ink hover:underline">
+                                    {[setupText && "setup", versions > 0 && `${versions} other ways`, q.note && "your note"].filter(Boolean).join(" · ")}
+                                  </button>
+                                )}
+                              </div>
+                              {open && (
+                                <>
+                                  <ProbeLine
+                                    q={q}
+                                    busy={fillingId === q.id || (fillingAll && !q.followUp)}
+                                    onFill={() => void fillOut(q)}
+                                  />
+                                  <QuestionChoices
+                                    x={q}
+                                    fold
+                                    busy={versioningIds.includes(q.id)}
+                                    onPick={(p) => patch(q.id, p)}
+                                    onWrite={q.setup ? () => void sharpen([q]) : undefined}
+                                  />
+                                  {q.setup === "" && (
+                                    <button
+                                      type="button"
+                                      disabled={settingUpId === q.id}
+                                      onClick={() => void addSetups(q)}
+                                      className="mt-1.5 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium text-[var(--accent)] transition hover:bg-[var(--accent-soft)] disabled:opacity-60"
+                                    >
+                                      <BookOpen size={12} className={settingUpId === q.id ? "animate-pulse" : ""} />
+                                      {settingUpId === q.id ? "Writing the setup…" : "Add a setup"}
+                                    </button>
+                                  )}
+                                  <NoteLine q={q} openNote={openNote} setOpenNote={setOpenNote} onPatch={(p) => patch(q.id, p)} />
+                                  {/* What you can do to it, in words. */}
+                                  <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 border-t border-border/70 pt-2 text-xs font-medium text-muted">
+                                    <RowAction
+                                      onClick={() => patch(q.id, { backup: !q.backup, ...(q.backup ? {} : { mustAsk: false }) })}
+                                      icon={<CirclePause size={12} />}
+                                    >
+                                      {q.backup ? "Back into the running order" : "Hold in reserve"}
+                                    </RowAction>
+                                    <RowAction onClick={() => setOpenNote(openNote === q.id ? null : q.id)} icon={<StickyNote size={12} />}>
+                                      {q.note ? "Edit note" : "Add a note"}
+                                    </RowAction>
+                                    <RowAction disabled={busy} onClick={() => setReworkId(q.id)} icon={<Wand2 size={12} />}>
+                                      Rework it
+                                    </RowAction>
+                                    <RowAction onClick={() => setEditingId(q.id)} icon={<Pencil size={12} />}>
+                                      Edit
+                                    </RowAction>
+                                    <RowAction
+                                      onClick={() => {
+                                        unpick(q);
+                                        toast("info", "Moved to the bank.");
+                                      }}
+                                      icon={<Archive size={12} />}
+                                    >
+                                      Move to the bank
+                                    </RowAction>
+                                  </div>
+                                </>
+                              )}
+                            </>
+                          )}
+                        </div>
+                        {/* Stacked on a narrow pane, so the question keeps the width. */}
+                        <div className="-mr-1 flex shrink-0 flex-col items-center gap-0.5 sm:mr-0 sm:flex-row">
+                          {/* The star reads as "my favourite, make sure I get
+                              to it", so that is what it means. */}
+                          <IconBtn
+                            label={q.mustAsk ? "No longer a must-ask" : "Must ask: make sure I get to this one"}
+                            active={q.mustAsk}
+                            onClick={() => patch(q.id, { mustAsk: !q.mustAsk, ...(q.mustAsk ? {} : { backup: false }) })}
+                          >
+                            <Star size={14} className={q.mustAsk ? "fill-amber-400 text-amber-500" : ""} />
+                          </IconBtn>
+                          <span className="relative">
+                            <span data-move-trigger>
+                              <IconBtn label="Move it: to the top, a number or a section" onClick={() => setMoveMenu(moveMenu === q.id ? null : q.id)}>
+                                <Ellipsis size={15} />
+                              </IconBtn>
+                            </span>
+                            {moveMenu === q.id && (
+                              <MoveMenu
+                                index={i}
+                                count={picked.length}
+                                sections={sections}
+                                current={q.section}
+                                onMove={(to) => moveTo(q.id, to)}
+                                onClose={() => setMoveMenu(null)}
+                              />
+                            )}
                           </span>
-                        )}
-                        <AskWho
-                          forWhom={q.forWhom || ""}
-                          panel={panel}
-                          value={q.askWho}
-                          onChange={(who, fw) => patch(q.id, { askWho: who || undefined, ...(fw !== undefined ? { forWhom: fw } : {}) })}
-                        />
+                          {compact && (
+                            <IconBtn label={open ? "Fold it" : "Open it: setup, probe, who to ask, other ways"} onClick={() => toggleRow(q.id)}>
+                              <ChevronDown size={15} className={`transition-transform ${open ? "rotate-180" : ""}`} />
+                            </IconBtn>
+                          )}
+                        </div>
                       </div>
-                      <ProbeLine
-                        q={q}
-                        busy={fillingId === q.id || (fillingAll && !q.followUp)}
-                        onFill={() => void fillOut(q)}
-                      />
-                      <NoteLine q={q} openNote={openNote} setOpenNote={setOpenNote} onPatch={(p) => patch(q.id, p)} />
-                    </>
-                  )}
-                </div>
-                {/* Quiet until you are on the row. Six icons on every line
-                    is what made this page look like a control panel. */}
-                {/* Quiet, not hidden. These were invisible until you hovered,
-                    which is how the writer came to ask for a feature that was
-                    already here: three other ways to ask a question, behind
-                    the wand. Mobile has always shown them, so the control
-                    panel this was guarding against was only ever the desktop
-                    one, and a soft grey keeps that at bay without hiding the
-                    row's actions from the person looking for them. */}
-                <div className="flex shrink-0 items-center gap-0.5 opacity-60 transition focus-within:opacity-100 group-hover/row:opacity-100 max-sm:opacity-100">
-                  {/* The star reads as "my favourite, make sure I get to it",
-                      so that is what it means. Holding one in reserve is its
-                      own button, said in words. */}
-                  <IconBtn
-                    label={q.mustAsk ? "No longer a must-ask" : "Must ask: make sure I get to this one"}
-                    active={q.mustAsk}
-                    onClick={() => patch(q.id, { mustAsk: !q.mustAsk, ...(q.mustAsk ? {} : { backup: false }) })}
-                  >
-                    <Star size={14} className={q.mustAsk ? "fill-amber-400 text-amber-500" : ""} />
-                  </IconBtn>
-                  <IconBtn
-                    label={q.backup ? "Back into the running order" : "Hold in reserve: only if there's time"}
-                    active={q.backup}
-                    onClick={() => patch(q.id, { backup: !q.backup, ...(q.backup ? {} : { mustAsk: false }) })}
-                  >
-                    <CirclePause size={14} />
-                  </IconBtn>
-                  <IconBtn
-                    label={q.note ? "Your note on this one" : "Add a note of your own"}
-                    active={Boolean(q.note)}
-                    onClick={() => setOpenNote(openNote === q.id ? null : q.id)}
-                  >
-                    <StickyNote size={13} />
-                  </IconBtn>
-                  <IconBtn
-                    label="Not quite right? Give me a few other ways to ask it"
-                    disabled={busy}
-                    onClick={() => setReworkId(q.id)}
-                  >
-                    <Wand2 size={13} />
-                  </IconBtn>
-                  <IconBtn
-                    label="Edit the question, the probe, who it's for, its group"
-                    active={editingId === q.id}
-                    onClick={() => setEditingId(editingId === q.id ? null : q.id)}
-                  >
-                    <Pencil size={13} />
-                  </IconBtn>
-                  <IconBtn
-                    label="Move to the bank"
-                    onClick={() => {
-                      unpick(q);
-                      toast("info", "Moved to the bank.");
-                    }}
-                  >
-                    <Archive size={13} />
-                  </IconBtn>
-                </div>
-              </li>
-            ))}
+                    </li>
+                  </Fragment>
+                );
+              });
+            })()}
           </ol>
         )}
         </div>
@@ -1391,6 +1591,16 @@ export function QuestionsTab({
                           onDone={() => setEditingId(null)}
                         />
                       ) : (
+                        compact && !openRows.has(q.id) ? (
+                          <button type="button" onClick={() => toggleRow(q.id)} className="block w-full text-left">
+                            <p className="text-sm text-ink">{q.text}</p>
+                            {q.forWhom && (
+                              <span className="mt-1 inline-block">
+                                <ForChip who={q.forWhom} />
+                              </span>
+                            )}
+                          </button>
+                        ) : (
                         <>
                           <SpokenQuestion
                         q={q}
@@ -1416,6 +1626,7 @@ export function QuestionsTab({
                           />
                           <NoteLine q={q} openNote={openNote} setOpenNote={setOpenNote} onPatch={(p) => patch(q.id, p)} />
                         </>
+                        )
                       )}
                     </div>
                     <div className="flex shrink-0 items-center gap-0.5 opacity-60 transition focus-within:opacity-100 group-hover/row:opacity-100 max-sm:opacity-100">
@@ -1460,6 +1671,11 @@ export function QuestionsTab({
                       >
                         <Trash2 size={13} />
                       </IconBtn>
+                      {compact && (
+                        <IconBtn label={openRows.has(q.id) ? "Fold it" : "Open it"} onClick={() => toggleRow(q.id)}>
+                          <ChevronDown size={14} className={`transition-transform ${openRows.has(q.id) ? "rotate-180" : ""}`} />
+                        </IconBtn>
+                      )}
                     </div>
                   </li>
                 ))}
@@ -1679,15 +1895,17 @@ const fmtMin = (n: number) => (Math.round(n * 2) / 2).toString();
 /**
  * How long one question really takes on a panel: saying the setup and the
  * question (about 150 words a minute), the first answer, then the others
- * who come in on it at about a minute and a half each. A question put to
- * everyone ("to all in turn", or for Everyone and not assigned) is everyone
- * answering. The moderator saw a list run long the moment one answer drew
- * two more, and asked for the number that allows for it.
+ * who come in on it at about a minute and a half each. Only a question put
+ * to the whole panel (asked of all of them, or worded "to all in turn") is
+ * everyone answering. "For Everyone" means any of them could take it, and
+ * counting that as four answers put eight minutes on most of the list.
  */
 function minutesFor(q: QuestionItem, panelSize: number, t: Timing): number {
   const say = (words(q.setup) + words(q.text)) / 150;
   const asked = askList(q.askWho).length;
-  const toAll = !asked && (/^(?:for )?everyone$/i.test((q.forWhom || "").trim()) || /\b(to all in turn|each of you|go down the line|all of you)\b/i.test(q.text));
+  const toAll =
+    (panelSize > 1 && asked >= panelSize) ||
+    (!asked && /\b(to all in turn|each of you|go down the line|all of you|everyone in turn)\b/i.test(q.text));
   // Put to several by name: each of them answers, then the usual others come in.
   const others = toAll ? Math.max(0, panelSize - 1) : asked > 1 ? asked - 1 + t.reactions : t.reactions;
   return say + t.pace + others * 1.5;
@@ -1708,6 +1926,7 @@ function TimeBudget({
   onTiming: (p: Partial<Timing & { paceMin: number }>) => void;
   onUseAsSlot: (minutes: number) => void;
 }) {
+  const [settings, setSettings] = useState(false);
   const asking = list.filter((q) => !q.backup);
   const must = asking.filter((q) => q.mustAsk);
   const cost = (qs: QuestionItem[]) => qs.reduce((n, q) => n + minutesFor(q, panelSize, timing), 0);
@@ -1724,26 +1943,45 @@ function TimeBudget({
     fit++;
   }
   const total = cost(asking);
+  const mustCost = cost(must);
+  const pct = (n: number) => (budget ? Math.min(100, (n / budget) * 100) : 0);
+  // The two numbers the moderator asked for: one question to one person,
+  // and one the whole panel answers.
+  const toOne = 0.3 + timing.pace + timing.reactions * 1.5;
+  const toAll = 0.3 + timing.pace + Math.max(0, panelSize - 1) * 1.5;
   const sel =
     "rounded-md border border-border bg-surface px-1.5 py-0.5 text-xs text-muted outline-none focus:border-[var(--accent)]";
   return (
-    <div className="space-y-1.5 border-b border-[var(--accent)]/20 px-4 py-2.5 text-xs">
+    <div className="border-b border-[var(--accent)]/20 px-4 py-3 text-xs">
       {slot ? (
         <>
-          <p className="text-muted">
-            <span className="font-semibold text-ink">{fmtMin(budget)} min for questions</span> out of your {slot}: {fmtMin(intros)} for
-            introductions, {openClose} to open and close, {timing.qaMin} for audience questions.
-          </p>
-          {must.length > 0 && (
-            <p className={cost(must) > budget ? "font-semibold text-amber-700" : "text-ink"}>
-              Your {must.length} must-ask {must.length === 1 ? "question takes" : "questions take"} about {fmtMin(cost(must))} min
-              {cost(must) > budget ? `, ${fmtMin(cost(must) - budget)} more than you have` : `, leaving ${fmtMin(budget - cost(must))}`}.
-            </p>
-          )}
-          <p className={total > budget ? "text-amber-700" : "text-ink"}>
-            All {asking.length} in the running order take about {fmtMin(total)} min.{" "}
-            <span className="font-semibold">About {fit} fit</span>
-            {must.length ? ", your must-asks first, then the rest in order" : ", in this order"}.
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+            <span className="text-sm font-semibold text-ink">
+              About {fit} of {asking.length} fit
+            </span>
+            <span className="text-muted">
+              {fmtMin(budget)} of your {slot} min are for questions
+            </span>
+            <button
+              type="button"
+              onClick={() => setSettings((v) => !v)}
+              className="ml-auto inline-flex items-center gap-1 text-muted hover:text-ink"
+            >
+              <SlidersHorizontal size={12} /> {settings ? "Hide timing" : "Timing"}
+            </button>
+          </div>
+          <div className="mt-2 flex h-2 overflow-hidden rounded-full bg-canvas" title="Must-asks, then the rest of what fits">
+            <div className="bg-amber-400" style={{ width: `${pct(mustCost)}%` }} />
+            <div className="bg-[var(--accent)]" style={{ width: `${Math.max(0, pct(used) - pct(mustCost))}%` }} />
+          </div>
+          <p className="mt-1.5 text-muted">
+            {must.length > 0 && (
+              <span className={mustCost > budget ? "font-semibold text-amber-700" : "text-ink"}>
+                {must.length} must-ask: {fmtMin(mustCost)} min
+                {mustCost > budget ? `, ${fmtMin(mustCost - budget)} over` : ""}.{" "}
+              </span>
+            )}
+            One question to one person runs about {fmtMin(toOne)} min; one the whole panel answers, about {fmtMin(toAll)}.
           </p>
         </>
       ) : (
@@ -1756,40 +1994,53 @@ function TimeBudget({
       )}
       {/* The assumptions, in the open and adjustable, so the total can be
           checked against how this panel actually runs. */}
-      <div className="flex flex-wrap items-center gap-1.5 text-muted">
-        <span>First answer</span>
-        <select value={timing.pace} onChange={(e) => onTiming({ paceMin: Number(e.target.value) })} className={sel}>
-          {[1.5, 2, 2.5, 3, 4, 5].map((n) => (
-            <option key={n} value={n}>
-              {n} min
-            </option>
-          ))}
-        </select>
-        <span>then</span>
-        <select value={timing.reactions} onChange={(e) => onTiming({ reactions: Number(e.target.value) })} className={sel}>
-          {[0, 1, 2, 3].map((n) => (
-            <option key={n} value={n}>
-              {n === 0 ? "nobody else" : `${n} more`}
-            </option>
-          ))}
-        </select>
-        <span>come in (1.5 min each). Audience questions</span>
-        <select value={timing.qaMin} onChange={(e) => onTiming({ qaMin: Number(e.target.value) })} className={sel}>
-          {[0, 5, 10, 15].map((n) => (
-            <option key={n} value={n}>
-              {n} min
-            </option>
-          ))}
-        </select>
-        <span>Introductions</span>
-        <select value={timing.introMin} onChange={(e) => onTiming({ introMin: Number(e.target.value) })} className={sel}>
-          {[0, 0.5, 1, 2].map((n) => (
-            <option key={n} value={n}>
-              {n} min each
-            </option>
-          ))}
-        </select>
-      </div>
+      {(settings || !slot) && (
+        <div className="mt-2 space-y-1.5 rounded-lg bg-canvas px-3 py-2 text-muted">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span>First answer</span>
+            <select value={timing.pace} onChange={(e) => onTiming({ paceMin: Number(e.target.value) })} className={sel}>
+              {[1.5, 2, 2.5, 3, 4, 5].map((n) => (
+                <option key={n} value={n}>
+                  {n} min
+                </option>
+              ))}
+            </select>
+            <span>then</span>
+            <select value={timing.reactions} onChange={(e) => onTiming({ reactions: Number(e.target.value) })} className={sel}>
+              {[0, 1, 2, 3].map((n) => (
+                <option key={n} value={n}>
+                  {n === 0 ? "nobody else" : `${n} more`}
+                </option>
+              ))}
+            </select>
+            <span>come in, about 1.5 min each.</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span>Introductions</span>
+            <select value={timing.introMin} onChange={(e) => onTiming({ introMin: Number(e.target.value) })} className={sel}>
+              {[0, 0.5, 1, 2].map((n) => (
+                <option key={n} value={n}>
+                  {n} min each
+                </option>
+              ))}
+            </select>
+            <span>Audience questions</span>
+            <select value={timing.qaMin} onChange={(e) => onTiming({ qaMin: Number(e.target.value) })} className={sel}>
+              {[0, 5, 10, 15].map((n) => (
+                <option key={n} value={n}>
+                  {n === 0 ? "none" : `${n} min`}
+                </option>
+              ))}
+            </select>
+          </div>
+          {slot ? (
+            <p>
+              Of your {slot} min: {fmtMin(intros)} for introductions, {openClose} to open and close
+              {timing.qaMin ? `, ${timing.qaMin} for audience questions` : ""}. The whole list would take about {fmtMin(total)}.
+            </p>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }
@@ -1866,7 +2117,7 @@ function SpokenQuestion({
       <p className={`text-sm text-ink ${q.setup ? "font-medium" : ""}`}>{q.text}</p>
       {/* Other ways to ask it under the same setup; picking one swaps it in. */}
       {onPatch && (
-        <QuestionChoices x={q} busy={versioning} onPick={(p) => onPatch(p)} onWrite={q.setup ? onWriteVersions : undefined} />
+        <QuestionChoices x={q} fold busy={versioning} onPick={(p) => onPatch(p)} onWrite={q.setup ? onWriteVersions : undefined} />
       )}
       {/* Left bare on purpose ("") is a judgement, and the writer may not
           share it. One click overrules it. */}
@@ -2175,6 +2426,122 @@ function ReworkModal({
         </>
       )}
     </Modal>
+  );
+}
+
+type MoveTarget = "top" | "up" | "down" | "bottom" | number | { section: string };
+
+/**
+ * Where a question can go in one click. Dragging moved it a card at a time,
+ * which made taking the last question to the top a chore.
+ */
+function MoveMenu({
+  index,
+  count,
+  sections,
+  current,
+  onMove,
+  onClose,
+}: {
+  index: number;
+  count: number;
+  sections: string[];
+  current?: string;
+  onMove: (to: MoveTarget) => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [num, setNum] = useState("");
+  useEffect(() => {
+    const away = (e: PointerEvent) => {
+      const t = e.target as HTMLElement;
+      if (!ref.current?.contains(t) && !t.closest("[data-move-trigger]")) onClose();
+    };
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("pointerdown", away);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("pointerdown", away);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [onClose]);
+  const item =
+    "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-ink transition hover:bg-canvas disabled:pointer-events-none disabled:opacity-35";
+  // Opening is offered even before there is one: it is where a question
+  // moved to start the panel belongs.
+  const all = sections.includes("Opening") ? sections : ["Opening", ...sections];
+  return (
+    <div ref={ref} className="absolute right-0 top-8 z-30 w-60 rounded-lg border border-border bg-surface p-1 shadow-lg">
+      <button type="button" className={item} disabled={index === 0} onClick={() => onMove("top")}>
+        <ArrowUpToLine size={13} className="text-muted" /> To the top
+      </button>
+      <button type="button" className={item} disabled={index === 0} onClick={() => onMove("up")}>
+        <ArrowUp size={13} className="text-muted" /> Up one
+      </button>
+      <button type="button" className={item} disabled={index === count - 1} onClick={() => onMove("down")}>
+        <ArrowDown size={13} className="text-muted" /> Down one
+      </button>
+      <button type="button" className={item} disabled={index === count - 1} onClick={() => onMove("bottom")}>
+        <ArrowDownToLine size={13} className="text-muted" /> To the bottom
+      </button>
+      <form
+        className="flex items-center gap-1.5 px-2 py-1.5 text-xs text-muted"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const n = Number(num);
+          if (n >= 1 && n <= count) onMove(n);
+        }}
+      >
+        To number
+        <input
+          type="number"
+          min={1}
+          max={count}
+          value={num}
+          onChange={(e) => setNum(e.target.value)}
+          placeholder={String(index + 1)}
+          className="w-14 rounded border border-border bg-surface px-1.5 py-0.5 text-xs text-ink outline-none focus:border-[var(--accent)]"
+        />
+        <button type="submit" className="font-medium text-[var(--accent)] hover:underline">
+          Move
+        </button>
+      </form>
+      <div className="my-1 border-t border-border" />
+      <p className="px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted">Into a section</p>
+      {all.map((sec) => (
+        <button key={sec} type="button" className={item} disabled={sec === current} onClick={() => onMove({ section: sec })}>
+          {sec}
+          {!sections.includes(sec) && <span className="text-muted">(new, at the top)</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** A row action said in words, under an opened question. */
+function RowAction({
+  onClick,
+  icon,
+  children,
+  disabled,
+}: {
+  onClick: () => void;
+  icon: React.ReactNode;
+  children: React.ReactNode;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className="inline-flex items-center gap-1 transition hover:text-ink disabled:opacity-40"
+    >
+      {icon}
+      {children}
+    </button>
   );
 }
 
