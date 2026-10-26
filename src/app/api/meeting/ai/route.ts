@@ -27,6 +27,8 @@ import {
   rewriteQuestion,
   sharpenQuestions,
   optionsFor,
+  trimRepeatedSetup,
+  regroupQuestions,
   orderForConversation,
   placeQuestion,
   writeQuestions,
@@ -501,6 +503,31 @@ export async function POST(req: Request) {
     if (action === "place") {
       const items = (Array.isArray(body?.items) ? body.items : []).slice(0, 80).map(lineIn);
       return NextResponse.json(await placeQuestion({ items, question: lineIn(body?.question || {}) }));
+    }
+
+    // The bank sorted by subject, so like questions sit together.
+    if (action === "regroup") {
+      const meeting: MeetingPayload = body?.meeting || {};
+      const items = (Array.isArray(body?.items) ? body.items : []).slice(0, 150).map(
+        (x: { setup?: unknown; text?: unknown }) => ({
+          setup: String(x?.setup || "").slice(0, 400),
+          text: String(x?.text || "").slice(0, 1000),
+        }),
+      );
+      const groups = await regroupQuestions({ meeting, items });
+      return NextResponse.json({ groups });
+    }
+
+    // Questions that say their setup again: the repeat taken out.
+    if (action === "trim") {
+      const items = (Array.isArray(body?.items) ? body.items : []).slice(0, 120).map(
+        (x: { setup?: unknown; text?: unknown }) => ({
+          setup: String(x?.setup || "").slice(0, 3000),
+          text: String(x?.text || "").slice(0, 1000),
+        }),
+      );
+      const cut = await trimRepeatedSetup(items);
+      return NextResponse.json({ texts: items.map((_: unknown, i: number) => cut.get(i) || "") });
     }
 
     // Other ways to ask each question under its setup, to choose from.

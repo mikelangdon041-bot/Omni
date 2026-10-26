@@ -477,6 +477,73 @@ export async function setupAnswers(items: { setup: string; text: string }[]): Pr
   return out;
 }
 
+const TRIM_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    items: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: { index: { type: "number" as const }, repeats: { type: "boolean" as const }, question: { type: "string" as const } },
+        required: ["index", "repeats", "question"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["items"],
+  additionalProperties: false,
+};
+
+/**
+ * Questions that say their setup again. The setup gives the figure ("two
+ * thirds say they can't measure MSL performance") and the question opens by
+ * giving it again ("Two thirds of you say you can't accurately measure MSL
+ * performance. So how..."). Returns, for each one that does, the question
+ * with the repeat taken out and the rest of its words kept.
+ */
+export async function trimRepeatedSetup(items: { setup: string; text: string }[]): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  const idx = items.map((x, i) => (x.setup.trim() ? i : -1)).filter((i) => i >= 0);
+  const chunks: number[][] = [];
+  for (let k = 0; k < idx.length; k += 10) chunks.push(idx.slice(k, k + 10));
+  const wordsOf = (t: string) => t.toLowerCase().match(/[a-z0-9']+/g) || [];
+  await Promise.all(
+    chunks.map(async (chunk) => {
+      try {
+        const res = await anthropic().messages.create({
+          model: CHECK_MODEL,
+          max_tokens: 8000,
+          output_config: { format: { type: "json_schema", schema: TRIM_SCHEMA } },
+          system: `Each item is a setup a moderator says out loud, then the question they ask straight after it. The room has just heard the setup. For every item answer: does the question state again, as fact, the finding, figure or claim the setup just gave, before it asks? That is a statement such as "Two thirds of you say you can't measure MSL performance.", "The best-in-class numbers actually dropped this year.", "MAPS is pushing everyone to drop the word metrics.", "Half the field says value is a relationship, the other half says it's changing practice." sitting in front of the actual question.
+Not a repeat, and left alone: a "When..." or "If..." clause that puts the question in the panelist's own work ("When the scorecard is built on volume, how does that shape..."), a question that only shares the topic, and one that points back briefly ("that gap").
+If it repeats: question is the question without the restated statement, changed as little as possible. It must make complete sense read on its own, with no "that", "those", "it" or "they" pointing at something only the removed part named: where it would, name the thing in a few words ("What's stopping you?" becomes "What's stopping you from using qualitative measures?"). End with a question mark.
+If not: question is "".`,
+          messages: [{ role: "user", content: chunk.map((i, k) => `${k}. SETUP: ${items[i].setup}\nQUESTION: ${items[i].text}`).join("\n\n") }],
+        });
+        const parsed = JSON.parse(firstText(res) || "{}");
+        for (const x of Array.isArray(parsed.items) ? parsed.items : []) {
+          const k = Number(x?.index);
+          if (!x?.repeats || !Number.isInteger(k) || k < 0 || k >= chunk.length) continue;
+          const was = items[chunk[k]].text;
+          const t = String(x.question || "")
+            .trim()
+            .replace(/^(?:so|and|but)[,\s]+/i, "")
+            .replace(/^./, (c) => c.toUpperCase());
+          // A cut, not a rewrite: clearly shorter, a question, and mostly its old words.
+          const old = new Set(wordsOf(was));
+          const w = wordsOf(t);
+          if (t.length < 15 || t.length > was.length * 0.85 || !t.endsWith("?")) continue;
+          if (w.filter((x) => old.has(x)).length < w.length * 0.7) continue;
+          out.set(chunk[k], t);
+        }
+      } catch (e) {
+        console.warn("[trim] check failed", (e as Error).message);
+      }
+    }),
+  );
+  return out;
+}
+
 export async function judgeSpoken(items: { setup: string; text: string }[]): Promise<Map<number, string>> {
   const out = new Map<number, string>();
   if (!items.length) return out;
@@ -1059,7 +1126,8 @@ Every question:
 Fields:
 - setup: the spoken lead-in before the question, per the rules above, drawn from the research, the reading list and what you know of the subject. "" where the question does not need one. Most questions on the substance and the harder ground should have one; openers and quick ones usually should not.
 - text: the question itself.
-- category: which part of the conversation it belongs to. Name it the way you would say it to a colleague: plain, literal, two to four words, describing what the questions in it are about or when they get asked. "Opening questions", "How it works in practice", "The uncomfortable ones", "Measuring it", "To close on". Never a colon, never a label with a clever subtitle after it, never a word nobody would say out loud. When categories are given below, use those exact names; only invent a new one for a question that genuinely belongs nowhere in them, and never a near-synonym of one that exists. Otherwise invent 4 to 6 that fit this meeting's arc (one to open with, two or three on the substance, one on the harder ground, one to close with). Use identical wording for every question in a category.
+- category: which part of the conversation it belongs to. Name it the way you would say it to a colleague: plain, literal, two to four words, describing what the questions in it are about or when they get asked. "Opening questions", "How it works in practice", "The uncomfortable ones", "Measuring it", "To close on". Never a colon, never a label with a clever subtitle after it, never a word nobody would say out loud. When categories are given below, use those exact names; only invent a new one for a question that genuinely belongs nowhere in them, and never a near-synonym of one that exists. Otherwise invent 4 to 6 that fit this meeting's arc (one to open with, two or three on the substance, one on the harder ground, one to close with). Use identical wording for every question in a category. The group you open with holds only questions that open a panel: broad, about the panelist's own view or seat, answerable by every one of them in a minute, with no statistic or finding to react to. A question that reacts to a figure or a finding belongs with the substance, however good a start it would make.
+- Never say the setup's finding, figure or claim again in the question: the room has just heard it. Ask straight after it.
 - why: at most 15 words on what it gets you — the reason to pick this one, plus where the material came from when it came from the research. Not a restatement of the question.
 - followUp: the probe to use when the first answer is thin or too comfortable, also written word for word. Never empty.
 - forWhom: who to put it to. When the context names the people in the room, their first names, only those who can answer it from their own work ("Ajay and Eleonora"), or "Everyone" when all of them truly can. Never a description like "the most operational panelist", which the writer cannot act on. With no names, a role ("the CFO"), or "" for the only other person in the room.
@@ -1147,6 +1215,9 @@ ${instructionBlock(guidance.trim(), coverage.trim(), focus.trim())}`,
       }),
     );
   }
+  // A question that says its setup again, after the room just heard it.
+  const trimmed = await trimRepeatedSetup(clean.map((q) => ({ setup: q.setup, text: q.text })));
+  for (const [i, t] of trimmed) clean[i].text = t;
   // A question that still only makes sense after something else is dropped:
   // the writer cannot ask it without the thing it leans on.
   return clean
@@ -1529,6 +1600,8 @@ ${SEAT_RULE}
 ${OPEN_QUESTION_RULE}
 
 Use the words people in the field actually say, never a term or image the setup borrowed from a document. Never name a consultancy, report, study, survey or author, never refer to "the source" or anything the room has not heard.
+
+The room has just heard the setup. Never say its finding, figure or claim again in the question: ask straight after it.
 ${standing.trim() ? `\nThe writer's standing instruction for how all their questions are written: ${standing.trim()}\n` : ""}
 Each one is short enough to say in one breath and ends with a question mark, with a follow-up probe for when the first answer is thin, written word for word. Plain prose, no quotation marks, never an em dash.
 
@@ -1536,7 +1609,7 @@ forWhom, for each: When the context names the people in the room, forWhom is the
     messages: [
       {
         role: "user",
-        content: `${meetingContext({ ...meeting, documents: [] }, "") || "(minimal context)"}\n\nThe setup, which stays:\n${setup || "(none)"}\n\nThe question as it stands, for what it is after:\n${question}`,
+        content: `${meetingContext({ ...meeting, documents: [] }, "") || "(minimal context)"}\n\nThe setup, which stays:\n${setup || "(none: the question is asked bare, so each version has to stand on its own)"}\n\nThe question as it stands, for what it is after:\n${question}`,
       },
     ],
   });
@@ -1575,7 +1648,6 @@ export async function optionsFor({
   for (let k = 0; k < items.length; k += 6)
     await Promise.all(
       items.slice(k, k + 6).map(async (x, j) => {
-        if (!x.setup.trim()) return;
         out[k + j] = await questionOptions({ meeting, setup: x.setup, question: x.text, standing }).catch(() => []);
       }),
     );
@@ -1655,6 +1727,81 @@ Return every index exactly once.`,
   // the order the stretches first appear, whatever order they came back in.
   const runs = [...new Set(out.map((o) => o.section))];
   return runs.flatMap((r) => out.filter((o) => o.section === r));
+}
+
+const REGROUP_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    groups: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: {
+          name: { type: "string" as const },
+          indices: { type: "array" as const, items: { type: "number" as const } },
+        },
+        required: ["name", "indices"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["groups"],
+  additionalProperties: false,
+};
+
+/**
+ * The whole bank sorted by what each question is about. Each batch named
+ * its own groups, so the same kind of question sat under "Measuring it",
+ * "Measuring the value" and "The hard ground" at once, and the writer could
+ * not see like with like. Returns the groups in conversation order, each with
+ * its questions broadest first; every index exactly once.
+ */
+export async function regroupQuestions({
+  meeting,
+  items,
+}: {
+  meeting: MeetingPayload;
+  items: { text: string; setup?: string }[];
+}): Promise<{ name: string; indices: number[] }[]> {
+  if (!items.length) return [];
+  const res = await anthropic().messages.create({
+    model: CHECK_MODEL,
+    max_tokens: 16000,
+    output_config: { format: { type: "json_schema", schema: REGROUP_SCHEMA } },
+    system: `A moderator's bank of questions for a panel, written in several batches that each invented their own group names. Sort them again by what each question is actually about, so questions on the same subject sit together.
+- One group per subject. Two questions about the same thing (activity targets and which experts get chased, say, or measuring MSL performance) go in the same group whatever their tone, and however differently they were grouped before. Never split one subject across two groups, and never put a question in a group whose name does not describe it.
+- Name each group plainly, two to five words, for its subject, as a colleague would say it ("Activity targets and KOL choice", "Measuring MSL performance", "AI and digital", "Budget and resources"). Never a mood ("The uncomfortable ones", "The hard ground"), never a colon.
+- "Opening questions" holds only broad openers every panelist could answer from their own seat with no figure to react to. "To close on" holds only closing or forward-looking calls to action. Leave either out if nothing fits.
+- About 6 to 9 groups. Order them the way a conversation would run: opening first, closing last. Within a group, the broadest question first.
+Return every index exactly once.`,
+    messages: [
+      {
+        role: "user",
+        content: `${meetingContext({ ...meeting, documents: [] }, "") || "(minimal context)"}\n\nThe questions:\n${items
+          .map((q, i) => `${i}. ${q.text}${q.setup ? `\n   (setup: ${q.setup.slice(0, 160)})` : ""}`)
+          .join("\n")}`,
+      },
+    ],
+  });
+  if (res.stop_reason === "max_tokens") console.warn("[regroup] ran out of room before answering");
+  const parsed = JSON.parse(firstText(res) || "{}");
+  const seen = new Set<number>();
+  const out: { name: string; indices: number[] }[] = [];
+  for (const g of Array.isArray(parsed.groups) ? parsed.groups : []) {
+    const name = String(g?.name || "").replace(/:.*$/, "").trim();
+    const idx = (Array.isArray(g?.indices) ? g.indices : [])
+      .map(Number)
+      .filter((i: number) => Number.isInteger(i) && i >= 0 && i < items.length && !seen.has(i));
+    idx.forEach((i: number) => seen.add(i));
+    if (!name || !idx.length) continue;
+    const same = out.find((o) => o.name.toLowerCase() === name.toLowerCase());
+    if (same) same.indices.push(...idx);
+    else out.push({ name, indices: idx });
+  }
+  // Nothing is dropped: a question the model left out keeps a group of its own.
+  const left = items.map((_, i) => i).filter((i) => !seen.has(i));
+  if (left.length) out.push({ name: "Other questions", indices: left });
+  return out;
 }
 
 const PLACE_SCHEMA = {

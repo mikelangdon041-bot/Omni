@@ -9,6 +9,7 @@
 // "backup": in the list that already means a question held in reserve.)
 
 import { useState } from "react";
+import { Loader2 } from "lucide-react";
 import type { QuestionOption, SharperQuestion } from "@/lib/meetingprep/types";
 
 type Holder = {
@@ -68,6 +69,7 @@ export function QuestionChoices({
   onPick,
   onWrite,
   fold = false,
+  startOpen = false,
 }: {
   x: Holder;
   busy?: boolean;
@@ -77,11 +79,13 @@ export function QuestionChoices({
   /** Keep the versions behind a button until asked for. On the list eight
    *  open versions under one question were most of the page. */
   fold?: boolean;
+  /** Open on arrival: the writer just asked for these and is waiting. */
+  startOpen?: boolean;
 }) {
   const opts = choicesOf(x);
   const kept = opts.filter((o) => o.keep);
   const rest = opts.filter((o) => !o.keep);
-  const [shown, setShown] = useState(false);
+  const [shown, setShown] = useState(startOpen);
   const open = shown || (!fold && !x.optionChosen);
 
   return (
@@ -117,11 +121,20 @@ export function QuestionChoices({
       )}
 
       {busy ? (
-        <p className="mt-1.5 text-xs text-muted">Writing other ways to ask it…</p>
+        // Said plainly and in colour: a grey line under the question read as
+        // nothing happening.
+        <p className="mt-2 inline-flex items-center gap-2 rounded-md bg-[var(--accent-soft)] px-2.5 py-1.5 text-xs font-medium text-[var(--accent)]">
+          <Loader2 size={13} className="animate-spin" />
+          Writing other ways to ask it. About 20 seconds; they open here when ready.
+        </p>
       ) : !opts.length ? (
         onWrite ? (
-          <button type="button" onClick={onWrite} className="mt-1.5 text-xs font-medium text-[var(--accent)] hover:underline">
-            Other ways to ask it
+          <button
+            type="button"
+            onClick={onWrite}
+            className="mt-1.5 rounded-md border border-border px-2 py-0.5 text-xs font-medium text-ink/80 transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+          >
+            Write other ways to ask it
           </button>
         ) : null
       ) : !rest.length ? null : !open ? (

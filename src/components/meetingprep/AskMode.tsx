@@ -27,7 +27,8 @@ export function AskMode({
   onClose,
   topic,
   title,
-  picked,
+  picked: all,
+  panel = [],
   onToggleAsked,
   onResetTicks,
 }: {
@@ -36,9 +37,23 @@ export function AskMode({
   topic: string;
   title: string;
   picked: QuestionItem[];
+  /** First names, for showing one person's questions. */
+  panel?: string[];
   onToggleAsked: (q: QuestionItem) => void;
   onResetTicks: () => void;
 }) {
+  // In the room you may only want the must-asks, or one person's share.
+  const [show, setShow] = useState<string>("all");
+  const asks = (q: QuestionItem) => (q.askWho || "").split(/\s*,\s*/).filter(Boolean);
+  const picked = all.filter((q) =>
+    show === "all" ? true : show === "must" ? q.mustAsk : show === "reserve" ? q.backup : asks(q).includes(show),
+  );
+  const filters = [
+    { key: "all", label: "All", n: all.length },
+    { key: "must", label: "Must ask", n: all.filter((q) => q.mustAsk).length },
+    { key: "reserve", label: "In reserve", n: all.filter((q) => q.backup).length },
+    ...panel.map((n) => ({ key: n, label: n, n: all.filter((q) => asks(q).includes(n)).length })),
+  ].filter((f) => f.key === "all" || f.n > 0);
   const main = picked.filter((q) => !q.backup);
   const backups = picked.filter((q) => q.backup);
   const flow = [...main, ...backups];
@@ -123,6 +138,28 @@ export function AskMode({
             <X size={20} />
           </button>
         </div>
+        {filters.length > 1 && (
+          <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-1.5 px-4 pb-2.5 text-xs">
+            <span className="mr-0.5 font-semibold text-muted">Show</span>
+            {filters.map((f) => (
+              <button
+                key={f.key}
+                type="button"
+                onClick={() => {
+                  setShow(f.key);
+                  setAt(0);
+                }}
+                className={`rounded-full border px-2 py-0.5 font-medium transition ${
+                  show === f.key
+                    ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-fg)]"
+                    : "border-border bg-surface text-ink/80 hover:border-[var(--accent)]"
+                }`}
+              >
+                {f.label} <span className="tabular-nums opacity-70">{f.n}</span>
+              </button>
+            ))}
+          </div>
+        )}
         {/* How far through you are, which is the one number that matters
             when you are watching the clock. */}
         <div className="h-1 bg-border">
@@ -144,9 +181,14 @@ export function AskMode({
               <span className="rounded-full bg-[var(--accent-soft)] px-2.5 py-1 font-semibold text-[var(--accent)]">
                 {cur.backup ? "In reserve" : `${here + 1} of ${main.length}`}
               </span>
-              {cur.forWhom && (
+              {(cur.askWho || cur.forWhom) && (
                 <span className="rounded-full border border-border px-2.5 py-1 text-muted">
-                  For {cur.forWhom}
+                  {cur.askWho ? `Ask ${asks(cur).join(", ")}` : `For ${cur.forWhom}`}
+                </span>
+              )}
+              {cur.mustAsk && (
+                <span className="flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 font-semibold text-amber-800">
+                  <Star size={12} className="fill-current" /> Must ask
                 </span>
               )}
               {cur.asked && (
@@ -339,7 +381,12 @@ function AskRow({
         >
           {q.text}
         </span>
-        {q.forWhom && <span className="mt-0.5 block text-sm text-muted">For {q.forWhom}</span>}
+        {(q.askWho || q.forWhom) && (
+          <span className="mt-0.5 block text-sm text-muted">
+            {q.askWho ? `Ask ${q.askWho}` : `For ${q.forWhom}`}
+            {q.mustAsk ? " · Must ask" : ""}
+          </span>
+        )}
         {(q.options || [])
           .filter((o) => o.keep)
           .map((o) => (

@@ -44,6 +44,8 @@ import {
   ArrowUpToLine,
   Ellipsis,
   SlidersHorizontal,
+  Loader2,
+  Scissors,
 } from "lucide-react";
 import { AskMode } from "@/components/meetingprep/AskMode";
 import { AskWho, ForChip, QuestionChoices, askList, choicesOf, panelNames } from "@/components/meetingprep/QuestionChoices";
@@ -135,7 +137,10 @@ export function QuestionsTab({
   const [openNote, setOpenNote] = useState<string | null>(null);
   const pct = useProgress(busy, 45000);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [openCats, setOpenCats] = useState<Set<string>>(new Set());
+  // null until the writer opens or closes one; then exactly what they chose.
+  // An empty set used to mean "untouched", so closing the last open group
+  // opened the first one again and it could never be shut.
+  const [openCats, setOpenCats] = useState<Set<string> | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   // Short rows (the question, who, how long) or every row open. Short is the
   // default: the list with every setup, probe and version showing was a wall
@@ -165,8 +170,6 @@ export function QuestionsTab({
     });
   // One panelist's share of the list, or the questions nobody has yet.
   const [whoFilter, setWhoFilter] = useState<string | null>(null);
-  const [moveMenu, setMoveMenu] = useState<string | null>(null);
-  const [showTools, setShowTools] = useState(false);
   // Dragging near the edge scrolls, so a question can go from 22 to 1 in
   // one drag instead of a screenful at a time.
   const drag = useRef<{ x: number; y: number; timer: number | null; scroller: HTMLElement | null }>({ x: 0, y: 0, timer: null, scroller: null });
@@ -236,8 +239,10 @@ export function QuestionsTab({
    * while it ran is kept.
    */
   const [versioningIds, setVersioningIds] = useState<string[]>([]);
+  // Asked for one question's versions: they open there when they land.
+  const [freshVersions, setFreshVersions] = useState<Set<string>>(new Set());
   async function sharpen(only?: QuestionItem[]) {
-    const targets = (only || live).filter((q) => q.setup && !q.options?.length);
+    const targets = (only || live).filter((q) => !q.options?.length);
     if (!targets.length) return;
     const ids = targets.map((q) => q.id);
     if (!only) {
@@ -269,6 +274,7 @@ export function QuestionsTab({
           items: fresh.map((x) => (byId.get(x.id)?.length ? { ...x, options: byId.get(x.id) } : x)),
         },
       });
+      if (only) setFreshVersions((v) => new Set([...v, ...ids]));
       if (!only) toast("success", "Other ways to ask each one are under it. Pick the one you would say.");
     } catch (e) {
       if (!sharpenAbort.current?.signal.aborted) toast("error", (e as Error).message);
@@ -281,6 +287,113 @@ export function QuestionsTab({
     }
   }
   const [settingUp, setSettingUp] = useState(false);
+
+  /**
+   * Questions in the bank that say their setup again ("Two thirds of you
+   * can't measure MSL performance. So how...") after a setup that just gave
+   * the room that figure. The repeat comes out, the rest keeps its words.
+   * The bank only: what is in the list is the writer's, and that one gets the
+   * shorter wording offered as a version instead.
+   */
+  const [tidying, setTidying] = useState(false);
+
+  /**
+   * Sorts every question by its subject. Each batch named its own groups,
+   * so like questions were scattered across "Measuring it", "Measuring the
+   * value" and "The hard ground". Group and rank change; nothing else does,
+   * and Undo puts the old groups back.
+   */
+  const [regrouping, setRegrouping] = useState(false);
+  const [undoGroups, setUndoGroups] = useState<{ id: string; category: string; rank: number }[] | null>(null);
+  async function regroup() {
+    const targets = [...live].sort((a, b) => a.rank - b.rank);
+    if (targets.length < 2) return;
+    setRegrouping(true);
+    try {
+      const res = await fetch("/api/meeting/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          action: "regroup",
+          meeting: payloadOf(m),
+          items: targets.map((q) => ({ text: q.text, setup: stripAskedQuestion(q.setup, q.text) })),
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "Could not regroup them");
+      const groups: { name: string; indices: number[] }[] = json.groups || [];
+      const at = new Map<string, { category: string; rank: number }>();
+      let rank = 1;
+      for (const g of groups) for (const i of g.indices) if (targets[i]) at.set(targets[i].id, { category: g.name, rank: rank++ });
+      if (!at.size) throw new Error("Could not regroup them");
+      setUndoGroups(targets.map((q) => ({ id: q.id, category: q.category, rank: q.rank })));
+      const fresh = latest.current.questions?.items || [];
+      save({
+        questions: {
+          ...latest.current.questions,
+          items: fresh.map((x) => (at.has(x.id) ? { ...x, ...at.get(x.id)! } : x)),
+        },
+      });
+      setOpenCats(new Set(groups.map((g) => g.name)));
+      toast("success", `Sorted into ${groups.length} groups by subject. Undo is at the top of the bank.`);
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setRegrouping(false);
+    }
+  }
+  function undoRegroup() {
+    if (!undoGroups) return;
+    const was = new Map(undoGroups.map((u) => [u.id, u]));
+    setItems(items.map((x) => (was.has(x.id) ? { ...x, category: was.get(x.id)!.category, rank: was.get(x.id)!.rank } : x)));
+    setUndoGroups(null);
+  }
+  async function tidyRepeats() {
+    const targets = live.filter((q) => q.source !== "user" && stripAskedQuestion(q.setup, q.text));
+    if (!targets.length) return;
+    setTidying(true);
+    try {
+      const res = await fetch("/api/meeting/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ action: "trim", items: targets.map((q) => ({ setup: stripAskedQuestion(q.setup, q.text), text: q.text })) }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "Could not check them");
+      const texts: string[] = json.texts || [];
+      const byId = new Map<string, string>(targets.map((q, i) => [q.id, texts[i] || ""] as [string, string]).filter(([, t]) => t));
+      const fresh = latest.current.questions?.items || [];
+      let bank = 0;
+      let list = 0;
+      save({
+        questions: {
+          ...latest.current.questions,
+          items: fresh.map((x) => {
+            const t = byId.get(x.id);
+            if (!t) return x;
+            if (!x.picked) {
+              bank++;
+              return { ...x, text: t, options: [{ kind: "Yours before", text: x.text, followUp: x.followUp }, ...(x.options || [])] };
+            }
+            list++;
+            return { ...x, options: [{ kind: "Without the repeat", text: t, followUp: x.followUp, forWhom: x.forWhom }, ...(x.options || [])] };
+          }),
+        },
+      });
+      toast(
+        "success",
+        bank || list
+          ? `${bank ? `Took the repeat out of ${bank} in the bank. ` : ""}${list ? `${list} in your list have a shorter version under "other ways".` : ""}`
+          : "None of them repeat their setup.",
+      );
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setTidying(false);
+    }
+  }
 
 
   // Categories in the order the model's strongest question in each appears,
@@ -685,7 +798,6 @@ export function QuestionsTab({
         where === "top" ? 0 : where === "bottom" ? picked.length - 1 : where === "up" ? from - 1 : where === "down" ? from + 1 : where - 1,
       );
     }
-    setMoveMenu(null);
     requestAnimationFrame(() =>
       document.querySelector(`[data-qrow="${id}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }),
     );
@@ -890,7 +1002,7 @@ export function QuestionsTab({
       if (!opts.onlyId && !opts.onlyCategory)
         setOpenCats(new Set([...new Set(fresh.map((q) => q.category))]));
       if (opts.onlyCategory)
-        setOpenCats((prev) => new Set([...prev, opts.onlyCategory!]));
+        setOpenCats((prev) => new Set([...(prev ?? []), opts.onlyCategory!]));
       toast(
         "success",
         opts.onlyId
@@ -980,20 +1092,113 @@ export function QuestionsTab({
           page. The things you do to the bank on the left, the thing you do
           in the room on the right. */}
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-surface p-2">
-        <Button size="sm" disabled={busy} onClick={() => setGuideScope("more")}>
-          <Sparkles size={14} /> {busy ? "Working…" : "Write me more"}
-        </Button>
-        <Button size="sm" variant="secondary" onClick={() => setShowAdd(true)}>
-          <Pencil size={14} /> Type one of my own
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => setShowTools((v) => !v)}
-          title="Setups, probes, other ways to ask, a rewrite and a read-through"
-        >
-          <Ellipsis size={14} /> {showTools ? "Fewer tools" : "More tools"}
-        </Button>
+        <Dropdown variant="primary" align="left" icon={<Sparkles size={14} />} text={busy ? "Working…" : "Add questions"} label="Add questions" width="w-56">
+          {(close) => (
+            <>
+              <MenuItem
+                icon={<Sparkles size={13} />}
+                disabled={busy}
+                onClick={() => {
+                  close();
+                  setGuideScope("more");
+                }}
+              >
+                Write me more
+              </MenuItem>
+              <MenuItem
+                icon={<Pencil size={13} />}
+                onClick={() => {
+                  close();
+                  setShowAdd(true);
+                }}
+              >
+                Type one of my own
+              </MenuItem>
+            </>
+          )}
+        </Dropdown>
+        {/* The jobs done once or twice per meeting, out of the way until
+            wanted. Each says what it will touch. */}
+        <Dropdown variant="secondary" align="left" icon={<Ellipsis size={14} />} text="More tools" label="More tools" width="w-80">
+          {(close) => (
+            <>
+              <MenuItem
+                icon={<Wand2 size={13} />}
+                disabled={sharpening || busy || !live.some((q) => !q.options?.length)}
+                onClick={() => {
+                  close();
+                  void sharpen();
+                }}
+              >
+                Other ways to ask each question that has none
+              </MenuItem>
+              {setupTargets.qs.length > 0 && (
+                <MenuItem
+                  icon={<BookOpen size={13} />}
+                  disabled={settingUp || busy}
+                  onClick={() => {
+                    close();
+                    void addSetups();
+                  }}
+                >
+                  {`Write setups for ${setupTargets.qs.length === 1 ? "1 question" : `${setupTargets.qs.length} questions`} in ${setupTargets.where}`}
+                </MenuItem>
+              )}
+              {missingProbes > 0 && (
+                <MenuItem
+                  icon={<Sparkles size={13} />}
+                  disabled={fillingAll || busy}
+                  onClick={() => {
+                    close();
+                    void fillMissingProbes();
+                  }}
+                >
+                  {`Write the ${missingProbes} missing probe${missingProbes === 1 ? "" : "s"}`}
+                </MenuItem>
+              )}
+              <MenuItem
+                icon={<ListOrdered size={13} />}
+                disabled={regrouping || busy}
+                onClick={() => {
+                  close();
+                  void regroup();
+                }}
+              >
+                Regroup the bank by subject, like with like
+              </MenuItem>
+              <MenuItem
+                icon={<Scissors size={13} />}
+                disabled={tidying || busy}
+                onClick={() => {
+                  close();
+                  void tidyRepeats();
+                }}
+              >
+                Take out questions repeating their setup (the bank)
+              </MenuItem>
+              <MenuItem
+                icon={<Wand2 size={13} />}
+                disabled={busy}
+                onClick={() => {
+                  close();
+                  setGuideScope("rewrite");
+                }}
+              >
+                Fix how these are written
+              </MenuItem>
+              <MenuItem
+                icon={<Stethoscope size={13} />}
+                disabled={review.reviewing || busy}
+                onClick={() => {
+                  close();
+                  void review.runReview();
+                }}
+              >
+                {review.notes.length ? "Check it again" : "Check it over"}
+              </MenuItem>
+            </>
+          )}
+        </Dropdown>
         <span className="flex-1" />
         <Button
           size="sm"
@@ -1004,69 +1209,6 @@ export function QuestionsTab({
         >
           <Play size={14} /> Ask mode
         </Button>
-        {showTools && (
-          <div className="flex w-full flex-wrap items-center gap-2 border-t border-border pt-2">
-        {/* Only while there is something to do, so it takes itself off the
-            bar once every question has a probe. */}
-        {/* Only for questions written before setups existed, or typed by
-            you. New questions arrive with theirs, so this takes itself off
-            the bar once everything has been through it. */}
-        {live.some((q) => q.setup) && (
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={sharpening || busy}
-            onClick={() => void sharpen()}
-            title="Writes other ways to ask each question under its setup. Nothing changes until you pick one."
-          >
-            <Wand2 size={14} /> Other ways to ask each
-          </Button>
-        )}
-        {setupTargets.qs.length > 0 && (
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={settingUp || busy}
-            onClick={() => void addSetups()}
-            title="A setup is the two to four sentences you say before a question: the argument or finding it stands on, from your reading. Your questions are not changed."
-          >
-            <BookOpen size={14} className={settingUp ? "animate-pulse" : ""} />
-            {settingUp
-              ? "Writing setups…"
-              : `Write setups for ${setupTargets.qs.length === 1 ? "1 question" : `${setupTargets.qs.length} questions`} in ${setupTargets.where}`}
-          </Button>
-        )}
-        {missingProbes > 0 && (
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={fillingAll || busy}
-            onClick={() => void fillMissingProbes()}
-          >
-            <Sparkles size={14} className={fillingAll ? "animate-pulse" : ""} />
-            {fillingAll
-              ? `Writing probes… ${filledCount}/${missingProbes}`
-              : `Write the ${missingProbes} missing probe${missingProbes === 1 ? "" : "s"}`}
-          </Button>
-        )}
-        <Button size="sm" variant="secondary" disabled={busy} onClick={() => setGuideScope("rewrite")}>
-          <Wand2 size={14} /> Fix how these are written
-        </Button>
-        <Button
-          size="sm"
-          variant="secondary"
-          disabled={review.reviewing || busy}
-          onClick={() => void review.runReview()}
-        >
-          <Stethoscope size={14} />
-          {review.reviewing
-            ? "Reading it…"
-            : review.notes.length
-              ? "Check it again"
-              : "Check it over"}
-        </Button>
-          </div>
-        )}
       </div>
 
       {busy && <ProgressBar pct={pct} label={`${busyLabel}…`} className="px-0.5" />}
@@ -1084,6 +1226,8 @@ export function QuestionsTab({
           toast("info", "Cancelled.");
         }}
       />
+      <Working active={tidying} seconds={25} label="Looking for questions that repeat their setup" className="px-0.5" />
+      <Working active={regrouping} seconds={40} label="Sorting the bank by subject" className="px-0.5" />
       {/* Measured: 14 setups in 18s. Longer lists take a little longer. */}
       <Working
         active={settingUp}
@@ -1231,7 +1375,7 @@ export function QuestionsTab({
             onUseAsSlot={(mins) => save({ duration_min: mins })}
           />
         )}
-        {picked.length > 0 && panel.length > 0 && (
+        {picked.length > 0 && (
           // Each name shows only what is put to that person, so planning one
           // person's share of the conversation is one click.
           <div className="flex flex-wrap items-center gap-1.5 border-b border-[var(--accent)]/20 px-4 py-2 text-xs">
@@ -1244,6 +1388,18 @@ export function QuestionsTab({
                 n: picked.filter((q) => askList(q.askWho).includes(n)).length,
                 tip: `The questions you are putting to ${n}`,
               })),
+              {
+                key: "must" as string | null,
+                label: "Must ask",
+                n: picked.filter((q) => q.mustAsk).length,
+                tip: "The questions you starred",
+              },
+              {
+                key: "reserve" as string | null,
+                label: "In reserve",
+                n: picked.filter((q) => q.backup).length,
+                tip: "The questions held back for if there's time",
+              },
               {
                 key: "none" as string | null,
                 label: "Nobody yet",
@@ -1281,12 +1437,26 @@ export function QuestionsTab({
               const shown = picked
                 .map((q, i) => ({ q, i }))
                 .filter(({ q }) =>
-                  !whoFilter ? true : whoFilter === "none" ? !askList(q.askWho).length : askList(q.askWho).includes(whoFilter),
+                  !whoFilter
+                    ? true
+                    : whoFilter === "must"
+                      ? Boolean(q.mustAsk)
+                      : whoFilter === "reserve"
+                        ? Boolean(q.backup)
+                        : whoFilter === "none"
+                          ? !askList(q.askWho).length
+                          : askList(q.askWho).includes(whoFilter),
                 );
               if (!shown.length)
                 return (
                   <li className="px-1 py-2 text-sm text-muted">
-                    {whoFilter === "none" ? "Every question is put to someone." : `Nothing is put to ${whoFilter} yet. Open a question and press their name.`}
+                    {whoFilter === "none"
+                      ? "Every question is put to someone."
+                      : whoFilter === "must"
+                        ? "No must-asks yet. Star the ones you have to get to."
+                        : whoFilter === "reserve"
+                          ? "Nothing held in reserve."
+                          : `Nothing is put to ${whoFilter} yet. Open a question and press their name.`}
                   </li>
                 );
               return shown.map(({ q, i }, k) => {
@@ -1366,6 +1536,7 @@ export function QuestionsTab({
                               {open && setupText && <p className="mb-1.5 text-sm leading-relaxed text-ink/65">{setupText}</p>}
                               <p
                                 onClick={() => compact && toggleRow(q.id)}
+                                title={compact ? (open ? "Fold it" : "Open it: setup, probe, who to ask, other ways") : undefined}
                                 className={`text-[15px] font-medium leading-snug text-ink ${compact ? "cursor-pointer" : ""}`}
                               >
                                 {q.text}
@@ -1396,9 +1567,15 @@ export function QuestionsTab({
                                 {q.backup && (
                                   <span className="rounded-full bg-canvas px-1.5 py-0.5 text-[10px] font-medium text-ink/70">In reserve</span>
                                 )}
-                                {!open && (setupText || versions > 0 || q.note) && (
-                                  <button type="button" onClick={() => toggleRow(q.id)} className="text-muted hover:text-ink hover:underline">
-                                    {[setupText && "setup", versions > 0 && `${versions} other ways`, q.note && "your note"].filter(Boolean).join(" · ")}
+                                {versioningIds.includes(q.id) && (
+                                  <span className="inline-flex items-center gap-1 rounded bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--accent)]">
+                                    <Loader2 size={11} className="animate-spin" /> Writing other ways…
+                                  </span>
+                                )}
+                                {!open && compact && (
+                                  <button type="button" onClick={() => toggleRow(q.id)} className="inline-flex items-center gap-0.5 text-muted hover:text-ink">
+                                    {[setupText && "setup", versions > 0 && `${versions} other ways`, q.note && "your note"].filter(Boolean).join(" · ") || "more"}
+                                    <ChevronDown size={12} />
                                   </button>
                                 )}
                               </div>
@@ -1410,11 +1587,13 @@ export function QuestionsTab({
                                     onFill={() => void fillOut(q)}
                                   />
                                   <QuestionChoices
+                                    key={`${q.id}:${versions}`}
                                     x={q}
                                     fold
+                                    startOpen={freshVersions.has(q.id)}
                                     busy={versioningIds.includes(q.id)}
                                     onPick={(p) => patch(q.id, p)}
-                                    onWrite={q.setup ? () => void sharpen([q]) : undefined}
+                                    onWrite={() => void sharpen([q])}
                                   />
                                   {q.setup === "" && (
                                     <button
@@ -1428,40 +1607,23 @@ export function QuestionsTab({
                                     </button>
                                   )}
                                   <NoteLine q={q} openNote={openNote} setOpenNote={setOpenNote} onPatch={(p) => patch(q.id, p)} />
-                                  {/* What you can do to it, in words. */}
-                                  <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 border-t border-border/70 pt-2 text-xs font-medium text-muted">
-                                    <RowAction
-                                      onClick={() => patch(q.id, { backup: !q.backup, ...(q.backup ? {} : { mustAsk: false }) })}
-                                      icon={<CirclePause size={12} />}
+                                  {compact && (
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleRow(q.id)}
+                                      className="mt-2 inline-flex items-center gap-0.5 text-xs text-muted hover:text-ink"
                                     >
-                                      {q.backup ? "Back into the running order" : "Hold in reserve"}
-                                    </RowAction>
-                                    <RowAction onClick={() => setOpenNote(openNote === q.id ? null : q.id)} icon={<StickyNote size={12} />}>
-                                      {q.note ? "Edit note" : "Add a note"}
-                                    </RowAction>
-                                    <RowAction disabled={busy} onClick={() => setReworkId(q.id)} icon={<Wand2 size={12} />}>
-                                      Rework it
-                                    </RowAction>
-                                    <RowAction onClick={() => setEditingId(q.id)} icon={<Pencil size={12} />}>
-                                      Edit
-                                    </RowAction>
-                                    <RowAction
-                                      onClick={() => {
-                                        unpick(q);
-                                        toast("info", "Moved to the bank.");
-                                      }}
-                                      icon={<Archive size={12} />}
-                                    >
-                                      Move to the bank
-                                    </RowAction>
-                                  </div>
+                                      Fold <ChevronDown size={12} className="rotate-180" />
+                                    </button>
+                                  )}
                                 </>
                               )}
                             </>
                           )}
                         </div>
-                        {/* Stacked on a narrow pane, so the question keeps the width. */}
-                        <div className="-mr-1 flex shrink-0 flex-col items-center gap-0.5 sm:mr-0 sm:flex-row">
+                        {/* Two controls: the star, and one menu for everything
+                            else. Six icons on every card was the clutter. */}
+                        <div className="-mr-1 flex shrink-0 items-center gap-0.5 sm:mr-0">
                           {/* The star reads as "my favourite, make sure I get
                               to it", so that is what it means. */}
                           <IconBtn
@@ -1471,28 +1633,70 @@ export function QuestionsTab({
                           >
                             <Star size={14} className={q.mustAsk ? "fill-amber-400 text-amber-500" : ""} />
                           </IconBtn>
-                          <span className="relative">
-                            <span data-move-trigger>
-                              <IconBtn label="Move it: to the top, a number or a section" onClick={() => setMoveMenu(moveMenu === q.id ? null : q.id)}>
-                                <Ellipsis size={15} />
-                              </IconBtn>
-                            </span>
-                            {moveMenu === q.id && (
-                              <MoveMenu
-                                index={i}
-                                count={picked.length}
-                                sections={sections}
-                                current={q.section}
-                                onMove={(to) => moveTo(q.id, to)}
-                                onClose={() => setMoveMenu(null)}
-                              />
+                          <Dropdown label="Move it, rework it, hold it in reserve…" icon={<Ellipsis size={15} />} width="w-64">
+                            {(close) => (
+                              <>
+                                <MenuItem
+                                  icon={<Wand2 size={13} />}
+                                  disabled={busy}
+                                  onClick={() => {
+                                    close();
+                                    setReworkId(q.id);
+                                  }}
+                                >
+                                  Rework it: other wording or setup
+                                </MenuItem>
+                                <MenuItem
+                                  icon={<CirclePause size={13} />}
+                                  onClick={() => {
+                                    close();
+                                    patch(q.id, { backup: !q.backup, ...(q.backup ? {} : { mustAsk: false }) });
+                                  }}
+                                >
+                                  {q.backup ? "Back into the running order" : "Hold in reserve"}
+                                </MenuItem>
+                                <MenuItem
+                                  icon={<StickyNote size={13} />}
+                                  onClick={() => {
+                                    close();
+                                    setOpenNote(q.id);
+                                  }}
+                                >
+                                  {q.note ? "Edit your note" : "Add a note"}
+                                </MenuItem>
+                                <MenuItem
+                                  icon={<Pencil size={13} />}
+                                  onClick={() => {
+                                    close();
+                                    setEditingId(q.id);
+                                  }}
+                                >
+                                  Edit the words
+                                </MenuItem>
+                                <MenuItem
+                                  icon={<Archive size={13} />}
+                                  onClick={() => {
+                                    close();
+                                    unpick(q);
+                                    toast("info", "Moved to the bank.");
+                                  }}
+                                >
+                                  Move to the bank
+                                </MenuItem>
+                                <div className="my-1 border-t border-border" />
+                                <MoveItems
+                                  index={i}
+                                  count={picked.length}
+                                  sections={sections}
+                                  current={q.section}
+                                  onMove={(to) => {
+                                    close();
+                                    moveTo(q.id, to);
+                                  }}
+                                />
+                              </>
                             )}
-                          </span>
-                          {compact && (
-                            <IconBtn label={open ? "Fold it" : "Open it: setup, probe, who to ask, other ways"} onClick={() => toggleRow(q.id)}>
-                              <ChevronDown size={15} className={`transition-transform ${open ? "rotate-180" : ""}`} />
-                            </IconBtn>
-                          )}
+                          </Dropdown>
                         </div>
                       </div>
                     </li>
@@ -1505,10 +1709,18 @@ export function QuestionsTab({
         </div>
       </section>
 
+      {undoGroups && (
+        <div className="flex items-center gap-2 px-1 text-xs text-muted">
+          <span>The bank is sorted by subject.</span>
+          <button type="button" onClick={undoRegroup} className="inline-flex items-center gap-1 font-medium text-ink hover:underline">
+            <Undo2 size={12} /> Put the old groups back
+          </button>
+        </div>
+      )}
       {/* Suggestions, grouped. Collapsed by default past the first group so
           the page is skimmable rather than a wall of twenty questions. */}
       {categories.map(([cat, list, inList], catIndex) => {
-        const open = openCats.has(cat) || (catIndex === 0 && openCats.size === 0);
+        const open = openCats ? openCats.has(cat) : catIndex === 0;
         return (
           <section
             key={cat}
@@ -1521,7 +1733,7 @@ export function QuestionsTab({
                 type="button"
                 onClick={() =>
                   setOpenCats((prev) => {
-                    const next = new Set(prev.size ? prev : [categories[0][0]]);
+                    const next = new Set(prev ?? [categories[0][0]]);
                     if (next.has(cat)) next.delete(cat);
                     else next.add(cat);
                     return next;
@@ -1592,7 +1804,7 @@ export function QuestionsTab({
                         />
                       ) : (
                         compact && !openRows.has(q.id) ? (
-                          <button type="button" onClick={() => toggleRow(q.id)} className="block w-full text-left">
+                          <button type="button" onClick={() => toggleRow(q.id)} className="block w-full text-left" title="Open it: setup, probe, other ways">
                             <p className="text-sm text-ink">{q.text}</p>
                             {q.forWhom && (
                               <span className="mt-1 inline-block">
@@ -1609,6 +1821,7 @@ export function QuestionsTab({
                         onPatch={(p) => patch(q.id, p)}
                         versioning={versioningIds.includes(q.id)}
                         onWriteVersions={() => void sharpen([q])}
+                        startOpen={freshVersions.has(q.id)}
                       />
                           <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted">
                             <AskWho
@@ -1625,57 +1838,83 @@ export function QuestionsTab({
                             onFill={() => void fillOut(q)}
                           />
                           <NoteLine q={q} openNote={openNote} setOpenNote={setOpenNote} onPatch={(p) => patch(q.id, p)} />
+                          {compact && (
+                            <button
+                              type="button"
+                              onClick={() => toggleRow(q.id)}
+                              className="mt-2 inline-flex items-center gap-0.5 text-xs text-muted hover:text-ink"
+                            >
+                              Fold <ChevronDown size={12} className="rotate-180" />
+                            </button>
+                          )}
                         </>
                         )
                       )}
                     </div>
-                    <div className="flex shrink-0 items-center gap-0.5 opacity-60 transition focus-within:opacity-100 group-hover/row:opacity-100 max-sm:opacity-100">
-                      <IconBtn
-                        label={
-                          q.locked
-                            ? "Unlock — rewrites may change this one"
-                            : "Lock — keep this one through every rewrite"
-                        }
-                        active={q.locked}
-                        onClick={() => patch(q.id, { locked: !q.locked })}
-                      >
-                        {q.locked ? <Lock size={13} /> : <LockOpen size={13} />}
-                      </IconBtn>
-                      <IconBtn
-                        label={q.note ? "Your note on this one" : "Add a note of your own"}
-                        active={Boolean(q.note)}
-                        onClick={() => setOpenNote(openNote === q.id ? null : q.id)}
-                      >
-                        <StickyNote size={13} />
-                      </IconBtn>
-                      <IconBtn
-                        label="Not quite right? Give me a few other ways to ask it"
-                        disabled={busy}
-                        onClick={() => setReworkId(q.id)}
-                      >
-                        <Wand2 size={13} />
-                      </IconBtn>
-                      <IconBtn
-                        label="Edit the question, the probe, who it's for, its group"
-                        active={editingId === q.id}
-                        onClick={() => setEditingId(editingId === q.id ? null : q.id)}
-                      >
-                        <Pencil size={13} />
-                      </IconBtn>
-                      <IconBtn
-                        label="Bin this question (it goes to the bin at the foot of the page)"
-                        onClick={() => {
-                          patch(q.id, { deleted: true, picked: false });
-                          toast("info", "Binned — it's in the bin at the foot of the page");
-                        }}
-                      >
-                        <Trash2 size={13} />
-                      </IconBtn>
-                      {compact && (
-                        <IconBtn label={openRows.has(q.id) ? "Fold it" : "Open it"} onClick={() => toggleRow(q.id)}>
-                          <ChevronDown size={14} className={`transition-transform ${openRows.has(q.id) ? "rotate-180" : ""}`} />
-                        </IconBtn>
-                      )}
+                    <div className="flex shrink-0 items-center">
+                      <Dropdown label="Rework, lock, note, edit or bin it" icon={<Ellipsis size={15} />} width="w-64">
+                        {(close) => (
+                          <>
+                            <MenuItem
+                              icon={<Plus size={13} />}
+                              onClick={() => {
+                                close();
+                                pick(q);
+                              }}
+                            >
+                              Add to my list
+                            </MenuItem>
+                            <MenuItem
+                              icon={<Wand2 size={13} />}
+                              disabled={busy}
+                              onClick={() => {
+                                close();
+                                setReworkId(q.id);
+                              }}
+                            >
+                              Rework it: other wording or setup
+                            </MenuItem>
+                            <MenuItem
+                              icon={q.locked ? <Lock size={13} /> : <LockOpen size={13} />}
+                              onClick={() => {
+                                close();
+                                patch(q.id, { locked: !q.locked });
+                              }}
+                            >
+                              {q.locked ? "Unlock: rewrites may change it" : "Lock: keep it through rewrites"}
+                            </MenuItem>
+                            <MenuItem
+                              icon={<StickyNote size={13} />}
+                              onClick={() => {
+                                close();
+                                setOpenRows((v) => new Set([...v, q.id]));
+                                setOpenNote(q.id);
+                              }}
+                            >
+                              {q.note ? "Edit your note" : "Add a note"}
+                            </MenuItem>
+                            <MenuItem
+                              icon={<Pencil size={13} />}
+                              onClick={() => {
+                                close();
+                                setEditingId(q.id);
+                              }}
+                            >
+                              Edit the words
+                            </MenuItem>
+                            <MenuItem
+                              icon={<Trash2 size={13} />}
+                              onClick={() => {
+                                close();
+                                patch(q.id, { deleted: true, picked: false });
+                                toast("info", "Binned. It's in the bin at the foot of the page.");
+                              }}
+                            >
+                              Bin it
+                            </MenuItem>
+                          </>
+                        )}
+                      </Dropdown>
                     </div>
                   </li>
                 ))}
@@ -1722,6 +1961,7 @@ export function QuestionsTab({
           topic={m.topic || ""}
           title={m.title}
           picked={picked}
+          panel={panel}
           onToggleAsked={(q) => patch(q.id, { asked: !q.asked })}
           onResetTicks={() => setItems(items.map((q) => ({ ...q, asked: false })))}
         />
@@ -2100,8 +2340,10 @@ function SpokenQuestion({
   onPatch,
   versioning = false,
   onWriteVersions,
+  startOpen = false,
 }: {
   q: QuestionItem;
+  startOpen?: boolean;
   busy?: boolean;
   onAddSetup?: () => void;
   /** For picking another way to ask it. */
@@ -2117,7 +2359,15 @@ function SpokenQuestion({
       <p className={`text-sm text-ink ${q.setup ? "font-medium" : ""}`}>{q.text}</p>
       {/* Other ways to ask it under the same setup; picking one swaps it in. */}
       {onPatch && (
-        <QuestionChoices x={q} fold busy={versioning} onPick={(p) => onPatch(p)} onWrite={q.setup ? onWriteVersions : undefined} />
+        <QuestionChoices
+          key={`${q.id}:${choicesOf(q).length}`}
+          x={q}
+          fold
+          startOpen={startOpen}
+          busy={versioning}
+          onPick={(p) => onPatch(p)}
+          onWrite={onWriteVersions}
+        />
       )}
       {/* Left bare on purpose ("") is a judgement, and the writer may not
           share it. One click overrules it. */}
@@ -2429,36 +2679,38 @@ function ReworkModal({
   );
 }
 
-type MoveTarget = "top" | "up" | "down" | "bottom" | number | { section: string };
 
 /**
- * Where a question can go in one click. Dragging moved it a card at a time,
- * which made taking the last question to the top a chore.
+ * A button that opens a short menu under it. Used for the card's one "…"
+ * and the two menus on the toolbar, so nothing needs a row of icons.
  */
-function MoveMenu({
-  index,
-  count,
-  sections,
-  current,
-  onMove,
-  onClose,
+function Dropdown({
+  label,
+  icon,
+  text,
+  variant,
+  align = "right",
+  width = "w-60",
+  children,
 }: {
-  index: number;
-  count: number;
-  sections: string[];
-  current?: string;
-  onMove: (to: MoveTarget) => void;
-  onClose: () => void;
+  label: string;
+  icon: React.ReactNode;
+  /** With text it is a button; without, an icon. */
+  text?: string;
+  variant?: "primary" | "secondary" | "ghost";
+  align?: "left" | "right";
+  width?: string;
+  children: (close: () => void) => React.ReactNode;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [num, setNum] = useState("");
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement>(null);
   useEffect(() => {
+    if (!open) return;
     const away = (e: PointerEvent) => {
-      const t = e.target as HTMLElement;
-      if (!ref.current?.contains(t) && !t.closest("[data-move-trigger]")) onClose();
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
     };
     const esc = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") setOpen(false);
     };
     document.addEventListener("pointerdown", away);
     document.addEventListener("keydown", esc);
@@ -2466,26 +2718,93 @@ function MoveMenu({
       document.removeEventListener("pointerdown", away);
       document.removeEventListener("keydown", esc);
     };
-  }, [onClose]);
-  const item =
-    "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-ink transition hover:bg-canvas disabled:pointer-events-none disabled:opacity-35";
+  }, [open]);
+  return (
+    <span ref={ref} className="relative inline-flex">
+      {text ? (
+        <Button size="sm" variant={variant || "secondary"} onClick={() => setOpen((v) => !v)} title={label}>
+          {icon} {text} <ChevronDown size={13} className={`transition-transform ${open ? "rotate-180" : ""}`} />
+        </Button>
+      ) : (
+        <IconBtn label={label} active={false} onClick={() => setOpen((v) => !v)}>
+          {icon}
+        </IconBtn>
+      )}
+      {open && (
+        <div
+          className={`absolute top-full z-30 mt-1 ${align === "left" ? "left-0" : "right-0"} ${width} max-w-[calc(100vw-2rem)] rounded-lg border border-border bg-surface p-1 shadow-lg`}
+        >
+          {children(() => setOpen(false))}
+        </div>
+      )}
+    </span>
+  );
+}
+
+function MenuItem({
+  icon,
+  onClick,
+  disabled,
+  children,
+}: {
+  icon?: React.ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-ink transition hover:bg-canvas disabled:pointer-events-none disabled:opacity-35"
+    >
+      {icon && <span className="shrink-0 text-muted">{icon}</span>}
+      <span className="min-w-0 flex-1">{children}</span>
+    </button>
+  );
+}
+
+type MoveTarget = "top" | "up" | "down" | "bottom" | number | { section: string };
+
+/**
+ * Where a question can go in one click. Dragging moved it a card at a time,
+ * which made taking the last question to the top a chore.
+ */
+function MoveItems({
+  index,
+  count,
+  sections,
+  current,
+  onMove,
+}: {
+  index: number;
+  count: number;
+  sections: string[];
+  current?: string;
+  onMove: (to: MoveTarget) => void;
+}) {
+  const [num, setNum] = useState("");
   // Opening is offered even before there is one: it is where a question
   // moved to start the panel belongs.
   const all = sections.includes("Opening") ? sections : ["Opening", ...sections];
   return (
-    <div ref={ref} className="absolute right-0 top-8 z-30 w-60 rounded-lg border border-border bg-surface p-1 shadow-lg">
-      <button type="button" className={item} disabled={index === 0} onClick={() => onMove("top")}>
-        <ArrowUpToLine size={13} className="text-muted" /> To the top
-      </button>
-      <button type="button" className={item} disabled={index === 0} onClick={() => onMove("up")}>
-        <ArrowUp size={13} className="text-muted" /> Up one
-      </button>
-      <button type="button" className={item} disabled={index === count - 1} onClick={() => onMove("down")}>
-        <ArrowDown size={13} className="text-muted" /> Down one
-      </button>
-      <button type="button" className={item} disabled={index === count - 1} onClick={() => onMove("bottom")}>
-        <ArrowDownToLine size={13} className="text-muted" /> To the bottom
-      </button>
+    <>
+      <p className="px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted">Move it</p>
+      <div className="grid grid-cols-2">
+        <MenuItem icon={<ArrowUpToLine size={13} />} disabled={index === 0} onClick={() => onMove("top")}>
+          To the top
+        </MenuItem>
+        <MenuItem icon={<ArrowDownToLine size={13} />} disabled={index === count - 1} onClick={() => onMove("bottom")}>
+          To the bottom
+        </MenuItem>
+        <MenuItem icon={<ArrowUp size={13} />} disabled={index === 0} onClick={() => onMove("up")}>
+          Up one
+        </MenuItem>
+        <MenuItem icon={<ArrowDown size={13} />} disabled={index === count - 1} onClick={() => onMove("down")}>
+          Down one
+        </MenuItem>
+      </div>
       <form
         className="flex items-center gap-1.5 px-2 py-1.5 text-xs text-muted"
         onSubmit={(e) => {
@@ -2508,40 +2827,14 @@ function MoveMenu({
           Move
         </button>
       </form>
-      <div className="my-1 border-t border-border" />
       <p className="px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted">Into a section</p>
       {all.map((sec) => (
-        <button key={sec} type="button" className={item} disabled={sec === current} onClick={() => onMove({ section: sec })}>
+        <MenuItem key={sec} disabled={sec === current} onClick={() => onMove({ section: sec })}>
           {sec}
-          {!sections.includes(sec) && <span className="text-muted">(new, at the top)</span>}
-        </button>
+          {!sections.includes(sec) && <span className="text-muted"> (new, at the top)</span>}
+        </MenuItem>
       ))}
-    </div>
-  );
-}
-
-/** A row action said in words, under an opened question. */
-function RowAction({
-  onClick,
-  icon,
-  children,
-  disabled,
-}: {
-  onClick: () => void;
-  icon: React.ReactNode;
-  children: React.ReactNode;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      className="inline-flex items-center gap-1 transition hover:text-ink disabled:opacity-40"
-    >
-      {icon}
-      {children}
-    </button>
+    </>
   );
 }
 
