@@ -247,6 +247,8 @@ export interface SourceDraft {
   options?: QuestionOption[];
   /** The writer picked one of the options, so the rest fold away. */
   optionChosen?: boolean;
+  /** Who the writer will put it to, carried into the list. */
+  askWho?: string;
 }
 
 // Something about the subject that is not settled. A panel needs the sides
@@ -337,7 +339,7 @@ export interface IdeaSuggestion {
 // regenerate adds to the list rather than replacing it.
 export interface QuestionItem {
   id: string;
-  /** The one panelist the writer will put it to, of those it works for. */
+  /** Who the writer will put it to: one panelist or several, comma separated. */
   askWho?: string;
   /** Starred: one the writer wants to be sure to get to. */
   mustAsk?: boolean;

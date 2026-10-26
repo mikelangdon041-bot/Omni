@@ -28,7 +28,7 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
-import { ForChip, QuestionChoices } from "@/components/meetingprep/QuestionChoices";
+import { AskWho, QuestionChoices, panelNames } from "@/components/meetingprep/QuestionChoices";
 import { Input, Textarea } from "@/components/ui/Input";
 import { Working } from "@/components/ui/Progress";
 import { useToast } from "@/components/ui/Feedback";
@@ -607,6 +607,7 @@ Write questions specifically on that, each with a setup. How many is set by the 
       // The versions and any second question go with it into the list.
       options: d.options,
       optionChosen: d.optionChosen,
+      askWho: d.askWho,
     };
   }
 
@@ -948,6 +949,7 @@ Write questions specifically on that, each with a setup. How many is set by the 
     else groups.push({ ask: key, items: [d] });
   }
 
+  const panel = panelNames(getMeeting()?.attendees);
   const row = (d: SourceDraft) => {
     const like = d.similarTo ? byId.get(d.similarTo) : undefined;
     const setup = stripAskedQuestion(d.setup, d.text);
@@ -971,9 +973,8 @@ Write questions specifically on that, each with a setup. How many is set by the 
       >
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
-            {(d.isNew || derivedKind(d.askedFor || "") || d.forWhom) && (
+            {(d.isNew || derivedKind(d.askedFor || "")) && (
               <span className="mb-1 flex flex-wrap gap-1">
-                <ForChip who={d.forWhom || ""} />
                 {d.isNew && (
                   <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">New</span>
                 )}
@@ -998,6 +999,14 @@ Write questions specifically on that, each with a setup. How many is set by the 
               </button>
             )}
             <p className="mt-1.5 text-[15px] font-medium leading-snug text-ink">{d.text}</p>
+            <div className="mt-1.5">
+              <AskWho
+                forWhom={d.forWhom || ""}
+                panel={panel}
+                value={d.askWho}
+                onChange={(who, fw) => patchDraft(d.id, { askWho: who || undefined, ...(fw !== undefined ? { forWhom: fw } : {}) })}
+              />
+            </div>
           </div>
         </div>
 

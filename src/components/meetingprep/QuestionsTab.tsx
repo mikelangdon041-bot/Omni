@@ -40,7 +40,7 @@ import {
   CirclePause,
 } from "lucide-react";
 import { AskMode } from "@/components/meetingprep/AskMode";
-import { AskWho, ForChip, QuestionChoices, fitsPanelist, panelNames } from "@/components/meetingprep/QuestionChoices";
+import { AskWho, ForChip, QuestionChoices, askList, fitsPanelist, panelNames } from "@/components/meetingprep/QuestionChoices";
 import { ReviewPanel } from "@/components/meetingprep/ReviewPanel";
 import { useReview } from "@/lib/meetingprep/useReview";
 import { Button } from "@/components/ui/Button";
@@ -1115,7 +1115,7 @@ export function QuestionsTab({
                     {n}{" "}
                     <span className="tabular-nums text-ink">{picked.filter((q) => fitsPanelist(q.forWhom || "", n)).length}</span>
                     {" "}fit
-                    {picked.some((q) => q.askWho === n) && `, ${picked.filter((q) => q.askWho === n).length} assigned`}
+                    {picked.some((q) => askList(q.askWho).includes(n)) && `, ${picked.filter((q) => askList(q.askWho).includes(n)).length} assigned`}
                   </span>
                 ))}
                 <span>
@@ -1686,8 +1686,10 @@ const fmtMin = (n: number) => (Math.round(n * 2) / 2).toString();
  */
 function minutesFor(q: QuestionItem, panelSize: number, t: Timing): number {
   const say = (words(q.setup) + words(q.text)) / 150;
-  const toAll = !q.askWho && (/^(?:for )?everyone$/i.test((q.forWhom || "").trim()) || /\b(to all in turn|each of you|go down the line|all of you)\b/i.test(q.text));
-  const others = toAll ? Math.max(0, panelSize - 1) : t.reactions;
+  const asked = askList(q.askWho).length;
+  const toAll = !asked && (/^(?:for )?everyone$/i.test((q.forWhom || "").trim()) || /\b(to all in turn|each of you|go down the line|all of you)\b/i.test(q.text));
+  // Put to several by name: each of them answers, then the usual others come in.
+  const others = toAll ? Math.max(0, panelSize - 1) : asked > 1 ? asked - 1 + t.reactions : t.reactions;
   return say + t.pace + others * 1.5;
 }
 

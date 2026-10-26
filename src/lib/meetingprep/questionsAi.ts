@@ -1627,7 +1627,7 @@ export async function orderForConversation({
     max_tokens: 16000,
     output_config: { format: { type: "json_schema", schema: ORDER_SCHEMA } },
     system: `A moderator's list of questions for a panel. Put them in the order the conversation should run and group them into 3 to 6 stretches.
-- Open with what frames the subject (defining the terms, a question everyone answers), close with a forward-looking or call-to-action question.
+- The first stretch is always named "Opening": the one or two questions that open the panel, short enough for every panelist to answer briefly in turn and frame what follows. Close with a forward-looking or call-to-action question.
 - Keep questions on the same theme together, so the conversation builds instead of jumping around, and put the one that sets up a theme before the ones that go deeper into it.
 - Spread the panelists: avoid putting several questions in a row to the same person when another order works as well.
 - section: a short plain name for the stretch, two to five words ("Defining value", "Measuring the field", "Publications and evidence", "Where this goes next"). Questions in the same stretch share the exact same name.
