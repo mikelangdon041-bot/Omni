@@ -927,6 +927,18 @@ export const DEFAULT_BRIEF_SECTIONS: { key: string; title: string; prompt: strin
  * the guarantee, run wherever a setup is written or shown: the question's
  * own words are removed, and a setup never ends on a question of its own.
  */
+const normQuestion = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+/**
+ * The live question that already says this, if there is one. The same
+ * question twice in one list happened when a reworked version was added that
+ * was already there; every way in checks this first.
+ */
+export function sameQuestion<T extends { text: string; deleted?: boolean }>(items: T[], text: string): T | undefined {
+  const n = normQuestion(text);
+  return n ? items.find((q) => !q.deleted && normQuestion(q.text) === n) : undefined;
+}
+
 export function stripAskedQuestion(setup: string | undefined, text: string): string {
   let s = String(setup || "").trim();
   const q = String(text || "").trim();

@@ -29,6 +29,8 @@ export function ReviewPanel({
   onDismiss,
   onClear,
   questionText,
+  questionWhere,
+  onShowQuestion,
   onRerun,
   rerunning = false,
 }: {
@@ -41,7 +43,11 @@ export function ReviewPanel({
   onFix?: (n: ReviewNote) => void;
   /** Looks up a question the note named, so the note can quote it. */
   questionText?: (id: string) => string | undefined;
-  onFixAll?: (ns: ReviewNote[]) => void;
+  /** Where that question is now ("Your list, 4", "Bank: AI and digital"). */
+  questionWhere?: (id: string) => string | undefined;
+  /** Takes the writer to it. */
+  onShowQuestion?: (id: string) => void;
+  onFixAll?:(ns: ReviewNote[]) => void;
   onToggleDone: (n: ReviewNote) => void;
   onDismiss: (n: ReviewNote) => void;
   onClear: () => void;
@@ -184,7 +190,9 @@ export function ReviewPanel({
             />
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium">{n.title}</p>
-              {n.detail && <p className="mt-0.5 text-sm text-muted">{n.detail}</p>}
+              {n.detail && (
+                <p className="mt-0.5 text-sm text-muted">{n.questionIds?.length ? unnumber(n.detail) : n.detail}</p>
+              )}
               {/* The questions it actually means. "Cut the duplicates down
                   to one" sent the writer hunting their own list for the pair
                   the reviewer had in mind; now the note shows them. */}
@@ -198,6 +206,7 @@ export function ReviewPanel({
                         Keep
                       </span>
                       {questionText(n.keepId)}
+                      <Where id={n.keepId} where={questionWhere} onShow={onShowQuestion} />
                     </li>
                   )}
                   {n.questionIds!.map((id) => {
@@ -215,6 +224,7 @@ export function ReviewPanel({
                           </span>
                         )}
                         {text}
+                        <Where id={id} where={questionWhere} onShow={onShowQuestion} />
                       </li>
                     ) : null;
                   })}
@@ -306,6 +316,46 @@ export function ReviewPanel({
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * "Questions 2, 3, 15 and 38 all ask..." becomes "These all ask...": the
+ * numbers were the reviewer's own count over the whole bank and matched
+ * nothing on the writer's screen. The questions themselves are listed under.
+ */
+function unnumber(t: string): string {
+  return t
+    .replace(/\b(questions?)\s+\d+(?:(?:\s*,\s*|,?\s+and\s+|\s*&\s*)\d+)*/gi, (m, w: string) =>
+      /\d\D+\d/.test(m) || /s$/i.test(w) ? "these" : "this one",
+    )
+    .replace(/\b(keep|bin|hold|move|cut|drop)\s+\d+\b/gi, (_m, v: string) => `${v} the one marked`)
+    .replace(/,?\s+and\s+\d+\s+(is|are|asks|ask)\s+/g, ", and another $1 ")
+    .replace(/(^|[.!?;]\s+)(these|this one)\b/g, (_m, p: string, w: string) => p + w[0].toUpperCase() + w.slice(1));
+}
+
+/** Where a question is, and a click to go there. */
+function Where({
+  id,
+  where,
+  onShow,
+}: {
+  id: string;
+  where?: (id: string) => string | undefined;
+  onShow?: (id: string) => void;
+}) {
+  const at = where?.(id);
+  if (!at) return null;
+  return onShow ? (
+    <button
+      type="button"
+      onClick={() => onShow(id)}
+      className="ml-1.5 whitespace-nowrap text-[11px] font-medium text-[var(--accent)] hover:underline"
+    >
+      {at} →
+    </button>
+  ) : (
+    <span className="ml-1.5 whitespace-nowrap text-[11px] text-muted">{at}</span>
   );
 }
 

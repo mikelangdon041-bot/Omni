@@ -45,6 +45,7 @@ import {
   type QuestionItem,
   type ReadingSource,
   type SourceDraft,
+  sameQuestion,
 } from "@/lib/meetingprep/types";
 
 async function post<T>(body: unknown, signal?: AbortSignal): Promise<T> {
@@ -684,6 +685,21 @@ Write questions specifically on that, each with a setup. How many is set by the 
     const m = getMeeting();
     if (!m) return;
     const items = m.questions?.items || [];
+    // Never the same question twice: one already here is used instead.
+    const dup = sameQuestion(items, d.text);
+    if (dup) {
+      if (where === "list" && !dup.picked) {
+        const order = items.filter((q) => q.picked).reduce((n, q) => Math.max(n, q.order + 1), 0);
+        save({ questions: { ...(m.questions || {}), items: items.map((q) => (q.id === dup.id ? { ...q, picked: true, order } : q)) } });
+        mark(d.id, where);
+        void placeInList(dup.id);
+        toast("success", "That question was already in the bank, so it has moved to your list.");
+      } else {
+        mark(d.id, where);
+        toast("info", dup.picked ? "That question is already in your list." : "That question is already in the bank.");
+      }
+      return;
+    }
     const item = toItem(d, items);
     if (where === "list") {
       item.picked = true;

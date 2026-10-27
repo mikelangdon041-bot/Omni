@@ -69,6 +69,7 @@ import {
   QUESTIONS_ENGINE,
   engineBehind,
   meetingTypeLabel,
+  sameQuestion,
   setupFingerprint,
   stripAskedQuestion,
   type MpMeeting,
@@ -242,6 +243,7 @@ export function QuestionsTab({
   // Asked for one question's versions: they open there when they land.
   const [freshVersions, setFreshVersions] = useState<Set<string>>(new Set());
   async function sharpen(only?: QuestionItem[]) {
+    if (blocked()) return;
     const targets = (only || live).filter((q) => !q.options?.length);
     if (!targets.length) return;
     const ids = targets.map((q) => q.id);
@@ -306,6 +308,7 @@ export function QuestionsTab({
   const [regrouping, setRegrouping] = useState(false);
   const [undoGroups, setUndoGroups] = useState<{ id: string; category: string; rank: number }[] | null>(null);
   async function regroup() {
+    if (blocked()) return;
     const targets = [...live].sort((a, b) => a.rank - b.rank);
     if (targets.length < 2) return;
     setRegrouping(true);
@@ -350,6 +353,7 @@ export function QuestionsTab({
     setUndoGroups(null);
   }
   async function tidyRepeats() {
+    if (blocked()) return;
     const targets = live.filter((q) => q.source !== "user" && stripAskedQuestion(q.setup, q.text));
     if (!targets.length) return;
     setTidying(true);
@@ -476,6 +480,19 @@ export function QuestionsTab({
   const patch = (id: string, p: Partial<QuestionItem>) =>
     setItems(items.map((q) => (q.id === id ? { ...q, ...p } : q)));
 
+  /** Before adding a question: is it here already? Handles it and says so. */
+  function alreadyHere(text: string): boolean {
+    const dup = sameQuestion(items, text);
+    if (!dup) return false;
+    if (dup.picked) {
+      toast("info", "That question is already in your list.");
+    } else {
+      pick(dup);
+      toast("success", "That one was in the bank, so it has moved to your list.");
+    }
+    return true;
+  }
+
   function pick(q: QuestionItem) {
     const maxOrder = picked.length ? Math.max(...picked.map((p) => p.order)) : -1;
     patch(q.id, { picked: true, order: maxOrder + 1 });
@@ -489,10 +506,39 @@ export function QuestionsTab({
     introMin: m.questions?.introMin ?? (m.meeting_type === "panel" ? 1 : 0),
   };
   const [ordering, setOrdering] = useState(false);
+  // One AI job at a time. Two at once (ordering, then a read-through) queued
+  // up behind each other with no sign of which had finished, so while one
+  // runs every other is greyed out and the page says what is running.
+  const runningLabel = busy
+    ? busyLabel || "Writing questions"
+    : ordering
+      ? "Ordering your list"
+      : sharpening
+        ? "Writing other ways to ask each question"
+        : settingUp || settingUpId
+          ? "Writing setups"
+          : tidying
+            ? "Taking out repeats"
+            : regrouping
+              ? "Sorting the bank by subject"
+              : review.reviewing
+                ? "Checking it over"
+                : fillingAll || fillingId
+                  ? "Writing probes"
+                  : versioningIds.length
+                    ? "Writing other ways to ask it"
+                    : "";
+  const working = Boolean(runningLabel);
+  const blocked = () => {
+    if (!working) return false;
+    toast("info", `${runningLabel} first. Try again when it finishes.`);
+    return true;
+  };
   const [undoOrder, setUndoOrder] = useState<{ id: string; order: number; section?: string }[] | null>(null);
 
   /** The list in conversation order, in named stretches; the old order kept for Undo. */
   async function orderList() {
+    if (blocked()) return;
     const list = picked;
     setOrdering(true);
     try {
@@ -587,6 +633,9 @@ export function QuestionsTab({
   }
 
   async function fillOut(q: QuestionItem, base?: QuestionItem[]) {
+    // Called on its own after a typed question goes in: skipped, not
+    // queued, while something else runs.
+    if (working) return;
     setFillingId(q.id);
     try {
       const p = await fetchProbe(q);
@@ -660,6 +709,7 @@ export function QuestionsTab({
    * and the last one home would win.
    */
   async function fillMissingProbes() {
+    if (blocked()) return;
     const targets = live.filter((q) => !q.followUp);
     if (!targets.length) return;
     setFillingAll(true);
@@ -701,6 +751,7 @@ export function QuestionsTab({
    * Only the setup changes: the call has no way to hand back a question.
    */
   async function addSetups(only?: QuestionItem) {
+    if (blocked()) return;
     const targets = only ? [only] : setupTargets.qs;
     if (!targets.length) return;
     setupAbort.current = new AbortController();
@@ -855,6 +906,7 @@ export function QuestionsTab({
       label?: string;
     } = {},
   ) {
+    if (blocked()) return;
     setBusy(true);
     setBusyLabel(opts.label || "Writing your questions");
     try {
@@ -977,6 +1029,12 @@ export function QuestionsTab({
           source: "ai" as const,
         }),
       );
+      if (!opts.onlyId) {
+        const seen: QuestionItem[] = [...kept];
+        for (let k = fresh.length - 1; k >= 0; k--) {
+          if (sameQuestion(seen, fresh[k].text) || fresh.findIndex((f) => sameQuestion([f], fresh[k].text)) !== k) fresh.splice(k, 1);
+        }
+      }
       if (!fresh.length) throw new Error("Nothing came back — try again.");
       save({
         questions: {
@@ -1077,7 +1135,7 @@ export function QuestionsTab({
           <Button
             size="sm"
             className="shrink-0 !bg-amber-600 hover:!bg-amber-700"
-            disabled={busy}
+            disabled={working}
             onClick={() =>
               void generate({ replace: true, label: "Rewriting your questions" })
             }
@@ -1097,7 +1155,7 @@ export function QuestionsTab({
             <>
               <MenuItem
                 icon={<Sparkles size={13} />}
-                disabled={busy}
+                disabled={working}
                 onClick={() => {
                   close();
                   setGuideScope("more");
@@ -1124,7 +1182,7 @@ export function QuestionsTab({
             <>
               <MenuItem
                 icon={<Wand2 size={13} />}
-                disabled={sharpening || busy || !live.some((q) => !q.options?.length)}
+                disabled={working || !live.some((q) => !q.options?.length)}
                 onClick={() => {
                   close();
                   void sharpen();
@@ -1135,7 +1193,7 @@ export function QuestionsTab({
               {setupTargets.qs.length > 0 && (
                 <MenuItem
                   icon={<BookOpen size={13} />}
-                  disabled={settingUp || busy}
+                  disabled={working}
                   onClick={() => {
                     close();
                     void addSetups();
@@ -1147,7 +1205,7 @@ export function QuestionsTab({
               {missingProbes > 0 && (
                 <MenuItem
                   icon={<Sparkles size={13} />}
-                  disabled={fillingAll || busy}
+                  disabled={working}
                   onClick={() => {
                     close();
                     void fillMissingProbes();
@@ -1158,7 +1216,7 @@ export function QuestionsTab({
               )}
               <MenuItem
                 icon={<ListOrdered size={13} />}
-                disabled={regrouping || busy}
+                disabled={working}
                 onClick={() => {
                   close();
                   void regroup();
@@ -1168,7 +1226,7 @@ export function QuestionsTab({
               </MenuItem>
               <MenuItem
                 icon={<Scissors size={13} />}
-                disabled={tidying || busy}
+                disabled={working}
                 onClick={() => {
                   close();
                   void tidyRepeats();
@@ -1178,7 +1236,7 @@ export function QuestionsTab({
               </MenuItem>
               <MenuItem
                 icon={<Wand2 size={13} />}
-                disabled={busy}
+                disabled={working}
                 onClick={() => {
                   close();
                   setGuideScope("rewrite");
@@ -1188,10 +1246,10 @@ export function QuestionsTab({
               </MenuItem>
               <MenuItem
                 icon={<Stethoscope size={13} />}
-                disabled={review.reviewing || busy}
+                disabled={working}
                 onClick={() => {
                   close();
-                  void review.runReview();
+                  if (!blocked()) void review.runReview();
                 }}
               >
                 {review.notes.length ? "Check it again" : "Check it over"}
@@ -1251,10 +1309,32 @@ export function QuestionsTab({
         notes={review.notes}
         at={review.at}
         scope="questions"
-        busy={busy}
-        onRerun={() => void review.runReview()}
+        busy={working}
+        onRerun={() => !blocked() && void review.runReview()}
         rerunning={review.reviewing}
-        questionText={(id) => items.find((q) => q.id === id)?.text}
+        questionText={(id) => items.find((q) => q.id === id && !q.deleted)?.text}
+        questionWhere={(id) => {
+          const q = items.find((x) => x.id === id && !x.deleted);
+          if (!q) return undefined;
+          return q.picked ? `Your list, ${picked.findIndex((x) => x.id === id) + 1}` : `Bank: ${q.category}`;
+        }}
+        onShowQuestion={(id) => {
+          const q = items.find((x) => x.id === id);
+          if (!q) return;
+          // Open it where it is, so its setup and versions are there to read.
+          setWhoFilter(null);
+          setOpenRows((v) => new Set([...v, id]));
+          if (!q.picked)
+            setOpenCats((prev) => new Set([...(prev ?? (categories[0] ? [categories[0][0]] : [])), q.category]));
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => {
+              const el = document.querySelector(`[data-qrow="${id}"]`);
+              el?.scrollIntoView({ block: "center", behavior: "smooth" });
+              el?.classList.add("ring-2", "ring-[var(--accent)]");
+              setTimeout(() => el?.classList.remove("ring-2", "ring-[var(--accent)]"), 1600);
+            }),
+          );
+        }}
         onFix={(n) => void applyQuestionNote(n)}
         onToggleDone={(n) => review.patchNote(n.id, { done: !n.done })}
         onDismiss={(n) => review.patchNote(n.id, { dismissed: true })}
@@ -1350,7 +1430,7 @@ export function QuestionsTab({
               <Button
                 size="sm"
                 variant="secondary"
-                disabled={ordering}
+                disabled={working}
                 onClick={() => void orderList()}
                 title="Groups similar questions and puts them in the order the conversation should run"
               >
@@ -1598,7 +1678,7 @@ export function QuestionsTab({
                                   {q.setup === "" && (
                                     <button
                                       type="button"
-                                      disabled={settingUpId === q.id}
+                                      disabled={working}
                                       onClick={() => void addSetups(q)}
                                       className="mt-1.5 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium text-[var(--accent)] transition hover:bg-[var(--accent-soft)] disabled:opacity-60"
                                     >
@@ -1638,7 +1718,7 @@ export function QuestionsTab({
                               <>
                                 <MenuItem
                                   icon={<Wand2 size={13} />}
-                                  disabled={busy}
+                                  disabled={working}
                                   onClick={() => {
                                     close();
                                     setReworkId(q.id);
@@ -1761,7 +1841,7 @@ export function QuestionsTab({
                   ask for it. */}
               <IconBtn
                 label={`Write me more for "${cat}"`}
-                disabled={busy}
+                disabled={working}
                 onClick={() =>
                   void generate({
                     count: 5,
@@ -1783,7 +1863,7 @@ export function QuestionsTab({
                   </li>
                 )}
                 {list.map((q) => (
-                  <li key={q.id} className="group/row flex items-start gap-3 p-3">
+                  <li key={q.id} data-qrow={q.id} className="group/row flex items-start gap-3 rounded-lg p-3 transition">
                     <button
                       type="button"
                       aria-label="Add to my list"
@@ -1866,7 +1946,7 @@ export function QuestionsTab({
                             </MenuItem>
                             <MenuItem
                               icon={<Wand2 size={13} />}
-                              disabled={busy}
+                              disabled={working}
                               onClick={() => {
                                 close();
                                 setReworkId(q.id);
@@ -1970,7 +2050,7 @@ export function QuestionsTab({
       <GuidanceModal
         key={`${guideScope}|${guidance}|${coverage}`}
         scope={guideScope}
-        busy={busy}
+        busy={working}
         guidance={guidance}
         coverage={coverage}
         keptCount={keptCount}
@@ -2008,6 +2088,7 @@ export function QuestionsTab({
           toast("success", "Swapped in");
         }}
         onAdd={(text, followUp, setup, forWho) => {
+          if (alreadyHere(text)) return;
           const from = live.find((x) => x.id === reworkId);
           const maxOrder = picked.length ? Math.max(...picked.map((p) => p.order)) : -1;
           setItems([
@@ -2074,6 +2155,10 @@ export function QuestionsTab({
         onClose={() => setShowAdd(false)}
         categories={allCategories}
         onAdd={(text, category, followUp, forWhom) => {
+          if (alreadyHere(text)) {
+            setShowAdd(false);
+            return;
+          }
           const maxOrder = picked.length ? Math.max(...picked.map((p) => p.order)) : -1;
           const fresh: QuestionItem = {
             id: newId(),
