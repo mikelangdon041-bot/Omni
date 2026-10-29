@@ -794,8 +794,9 @@ const VARIANTS_SCHEMA = {
           followUp: { type: "string" as const },
           setup: { type: "string" as const },
           forWhom: { type: "string" as const },
+          changed: { type: "string" as const, enum: ["setup", "question", "both"] },
         },
-        required: ["angle", "text", "followUp", "setup", "forWhom"],
+        required: ["angle", "text", "followUp", "setup", "forWhom", "changed"],
         additionalProperties: false,
       },
     },
@@ -813,7 +814,11 @@ export interface QuestionVariant {
   setup?: string;
   /** The panelists it works for, by first name. */
   forWhom?: string;
+  /** Which part this version changed. */
+  changed?: "setup" | "question" | "both";
 }
+
+export type ReworkPart = "auto" | "setup" | "question" | "both";
 
 /**
  * Three other ways to ask one question.
@@ -834,11 +839,20 @@ export async function writeVariants({
   standing = "",
   count = 3,
   avoid = [],
+  part = "auto",
+  keep = [],
+  drop = [],
 }: {
   meeting: MeetingPayload;
   kolBlock?: string;
   research?: string;
   question: { text: string; why?: string; followUp?: string; category?: string; setup?: string };
+  /** Which part to change. "auto" works it out from what the writer said. */
+  part?: ReworkPart;
+  /** Words the writer marked to keep, exactly as they are. */
+  keep?: string[];
+  /** Words the writer marked to lose. */
+  drop?: string[];
   /**
    * The rest of the bank. Without it "combine this with the next one" is a
    * sentence the model cannot act on, because it has never been shown the
@@ -878,12 +892,23 @@ Every version:
 
 ${OPEN_QUESTION_RULE}
 ${guidance ? `\nWHAT THE WRITER WANTS DIFFERENT ABOUT THIS ONE. This outranks every rule above:\n${guidance}\n` : ""}${standing ? `\nTheir standing instruction about how all their questions must be written, which still applies:\n${standing}\n` : ""}
+WHAT TO CHANGE. ${
+      part === "setup"
+        ? "The writer wants a different SETUP. Keep the question word for word as it is. Only if a new setup genuinely stops leading into the question may you touch the question, and then change as few words as possible and set changed to \"both\"."
+        : part === "question"
+          ? "The writer wants a different QUESTION under the same setup. setup is \"\" in every version, so the current setup stays."
+          : part === "both"
+            ? "The writer wants both the setup and the question reworked."
+            : "Work out from what the writer says which part they are unhappy with. When it is the setup, write new setups and keep the question word for word; when it is the question, keep the setup (setup \"\"). Change both only when they ask for both, or when the new part truly cannot work with the old one, and then change the other part as little as possible. Never rewrite a part they did not complain about just to make the version look different. With no instruction at all, vary the question and keep the setup."
+    }${keep.length ? `\nKeep these words exactly as they are, in every version, wherever they appear: ${keep.map((k) => `"${k}"`).join("; ")}.` : ""}${drop.length ? `\nLeave these words out of every version: ${drop.map((k) => `"${k}"`).join("; ")}.` : ""}
+
 Fields:
 - angle: three or four words on what this version does differently, so they can choose at a glance. "Blunter", "Puts a number on it", "Through a scenario". Not a description of the question.
 - text: the question.
 - followUp: the probe for when the answer is thin, written word for word.
 - setup: the question is said after a setup (given below when there is one). When this version needs a different lead-in, or what the writer wants different is about the setup, write the new setup in full, two to four spoken sentences that lay out the substance, never pointing at a document the room has not heard of, never saying what the question says. Otherwise "", and the current setup stays.
 - forWhom: When the context names the people in the room, forWhom is the first names of those who can answer THIS version from their own direct work, strictly: a question about managing MSLs fits nobody who does not manage MSLs, a question about KOL meetings does not fit people who never meet KOLs, a question about hiring fits only people who hire. "Everyone" only when all of them truly can. "" when it fits none of them, or when no names are given.
+- changed: "setup" when only the setup is new (text is the question unchanged), "question" when only the question is new (setup ""), "both" when both are.
 
 Plain prose. No markdown, no quotation marks around the question. Never an em dash or en dash.`,
     messages: [
@@ -919,17 +944,43 @@ Plain prose. No markdown, no quotation marks around the question. Never an em da
     // source is not an alternative.
     // A version that closes the question down is not offered either.
     if (!text || namedSource(text, allow, houses) || closedQuestion(text)) continue;
-    const setup = String(v?.setup || "").trim();
+    let setup = String(v?.setup || "").trim();
+    let changed = (["setup", "question", "both"].includes(v?.changed) ? v.changed : setup ? "both" : "question") as QuestionVariant["changed"];
+    let said = text;
+    // The part they did not ask to change stays as it was. Asked for a better
+    // setup, the writer got four new questions and lost the one they liked.
+    if (part === "question") {
+      setup = "";
+      changed = "question";
+    }
+    if (part === "setup" && changed !== "both") {
+      said = question.text;
+      changed = "setup";
+    }
+    if (changed === "setup") said = question.text;
+    // A new setup is held to the same checks as every other one.
+    if (setup && (spokenProblem(setup, said) || namedSource(setup, allow, houses))) {
+      if (changed === "setup") continue;
+      setup = "";
+      changed = "question";
+    }
+    if (part === "setup" && !setup) continue;
     out.push({
       angle: String(v?.angle || "").trim() || "Another way",
-      text,
+      text: said,
       followUp: String(v?.followUp || "").trim(),
-      // A new setup is held to the same checks as every other one.
-      setup: setup && !spokenProblem(setup, text) && !namedSource(setup, allow, houses) ? setup : "",
+      setup,
       forWhom: String(v?.forWhom || "").trim(),
+      changed,
     });
   }
-  return out;
+  // Words they marked to keep must be there; a version that dropped them is
+  // not what they asked for, unless none kept them.
+  const low = (t: string) => t.toLowerCase().replace(/\s+/g, " ");
+  const kept = keep.length
+    ? out.filter((v) => keep.every((k) => low(`${v.setup || question.setup || ""} ${v.text}`).includes(low(k))))
+    : out;
+  return kept.length ? kept : out;
 }
 
 const FILL_SCHEMA = {
@@ -1091,6 +1142,10 @@ export async function writeQuestions({
   /** Standing instruction on what the bank should cover. */
   coverage?: string;
 }): Promise<WrittenQuestion[]> {
+  // Where the time goes, in the server log: a batch the writer watched sit
+  // at 94% was four checks in a row after the writing.
+  const t0 = Date.now();
+  const lap = (what: string) => console.info(`[questions] ${what} at ${((Date.now() - t0) / 1000).toFixed(1)}s`);
   const context = [
     meetingContext(meeting, kolBlock),
     research && `Research notes, from a web search run for this meeting. This is your best material — most questions should be traceable to something in here:\n${research.slice(0, 20000)}`,
@@ -1155,6 +1210,7 @@ ${instructionBlock(guidance.trim(), coverage.trim(), focus.trim())}`,
       },
     ],
   });
+  lap("written");
   if (res.stop_reason === "refusal") return [];
 
   const parsed = JSON.parse(firstText(res) || "{}");
@@ -1180,10 +1236,18 @@ ${instructionBlock(guidance.trim(), coverage.trim(), focus.trim())}`,
     guidance.trim(),
     housesIn(research),
   );
+  lap("names scrubbed");
   // A batch is written as one sequence, so its setups lean on each other
   // exactly the way a list of separate questions cannot; and filler slips in
   // however the prompt is worded. Checked by pattern and by judgement.
-  const judged = await judgeSpoken(clean.map((q) => ({ setup: q.setup, text: q.text })));
+  // The three checks read the same first draft, so they run at once: one
+  // after another they took a minute between them while the bar sat at 94%.
+  const firstDraft = clean.map((q) => ({ setup: q.setup, text: q.text }));
+  const [judged, misfitEarly, trimmedEarly] = await Promise.all([
+    judgeSpoken(firstDraft),
+    judgeFit(firstDraft),
+    trimRepeatedSetup(firstDraft),
+  ]);
   const bad = clean
     .map((q, i) => ({ q, why: spokenProblem(q.setup, q.text) || judged.get(i) || "" }))
     .filter((r) => r.why);
@@ -1199,9 +1263,10 @@ ${instructionBlock(guidance.trim(), coverage.trim(), focus.trim())}`,
     });
     bad.forEach((r, i) => (r.q.setup = redone[i] || ""));
   }
+  lap("setups judged and repaired");
   // A question that misses its setup is rewritten under the same setup, on
   // the quick model; the setup was checked above and stays.
-  const misfit = await judgeFit(clean.map((q) => ({ setup: q.setup, text: q.text })));
+  const misfit = misfitEarly;
   if (misfit.size) {
     console.warn(`[questions] ${misfit.size} did not follow their setup: ${[...misfit.values()].join(" | ")}`);
     await Promise.all(
@@ -1215,9 +1280,11 @@ ${instructionBlock(guidance.trim(), coverage.trim(), focus.trim())}`,
       }),
     );
   }
+  lap("fit checked and fixed");
   // A question that says its setup again, after the room just heard it.
-  const trimmed = await trimRepeatedSetup(clean.map((q) => ({ setup: q.setup, text: q.text })));
-  for (const [i, t] of trimmed) clean[i].text = t;
+  // A trim applies only where the question was not rewritten since.
+  for (const [i, t] of trimmedEarly) if (clean[i].text === firstDraft[i].text) clean[i].text = t;
+  lap("repeats trimmed");
   // A question that still only makes sense after something else is dropped:
   // the writer cannot ask it without the thing it leans on.
   return clean

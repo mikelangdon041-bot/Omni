@@ -419,6 +419,10 @@ export interface QuestionOption {
   forWhom?: string;
   /** Its own setup, for a version that needs a different lead-in. */
   setup?: string;
+  /** Written in the Rework window, so it shows there again when reopened. */
+  rework?: boolean;
+  /** What a reworked version changed: the setup, the question, or both. */
+  changed?: "setup" | "question" | "both";
 }
 
 export interface SharperQuestion {

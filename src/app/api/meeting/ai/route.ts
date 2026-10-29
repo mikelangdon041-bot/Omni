@@ -29,6 +29,7 @@ import {
   optionsFor,
   trimRepeatedSetup,
   regroupQuestions,
+  type ReworkPart,
   orderForConversation,
   placeQuestion,
   writeQuestions,
@@ -448,6 +449,9 @@ export async function POST(req: Request) {
         standing: String(body?.standing || "").slice(0, 2000),
         count: Math.min(8, Math.max(1, Number(body?.count) || 3)),
         avoid: Array.isArray(body?.avoid) ? body.avoid.map(String).slice(0, 30) : [],
+        part: (["setup", "question", "both"].includes(body?.part) ? body.part : "auto") as ReworkPart,
+        keep: Array.isArray(body?.keep) ? body.keep.map(String).slice(0, 8) : [],
+        drop: Array.isArray(body?.drop) ? body.drop.map(String).slice(0, 8) : [],
       });
       return NextResponse.json({ variants });
     }

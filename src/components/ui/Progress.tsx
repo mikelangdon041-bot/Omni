@@ -18,7 +18,10 @@ export function useProgress(active: boolean, expectedMs = 20000): number {
     const started = Date.now();
     const step = () => {
       const elapsed = (Date.now() - started) / expectedMs;
-      setPct(Math.min(95, Math.round(95 * (1 - Math.exp(-2.4 * elapsed)))));
+      // Past the estimate it keeps creeping toward 99 rather than sitting
+      // still, which read as stuck.
+      const tail = Math.min(4, Math.max(0, elapsed - 1.2) * 2.5);
+      setPct(Math.min(99, Math.round(95 * (1 - Math.exp(-2.4 * elapsed)) + tail)));
     };
     // Deferred so the first sample lands after the reset, not during the effect.
     const first = setTimeout(step, 0);
@@ -100,7 +103,13 @@ export function Working({
   const bar = (
     <ProgressBar
       pct={pct}
-      label={`${label} · ${left > 3 ? `about ${left}s left` : "nearly done…"}`}
+      label={`${label} · ${
+        left > 3
+          ? `about ${left}s left`
+          : left > -5
+            ? "nearly done…"
+            : `still checking them, ${Math.round((now - started) / 1000)}s so far`
+      }`}
       className={onCancel ? "min-w-0 flex-1" : className}
     />
   );

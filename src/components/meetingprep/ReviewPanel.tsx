@@ -13,7 +13,7 @@
 // not keep taking up the top of the page.
 
 import { useState } from "react";
-import { CheckSquare, Stethoscope, Undo2, Wand2, X } from "lucide-react";
+import { CheckSquare, Stethoscope, Undo2, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { scopeOf, type ReviewScope } from "@/lib/meetingprep/useReview";
 import type { ReviewNote } from "@/lib/meetingprep/types";
@@ -57,6 +57,9 @@ export function ReviewPanel({
 }) {
   const [showDone, setShowDone] = useState(false);
   const [showOther, setShowOther] = useState(false);
+  // Folding it away is not the same as deleting it. The X used to clear the
+  // notes, and the writer lost them thinking they could open them again.
+  const [folded, setFolded] = useState(false);
   if (!notes.length) return null;
 
   // Advice about the whole pack belongs on whatever tab you are reading,
@@ -135,6 +138,21 @@ export function ReviewPanel({
       </div>
     );
 
+  if (folded)
+    return (
+      <button
+        type="button"
+        onClick={() => setFolded(false)}
+        className="flex w-full items-center gap-2 rounded-xl border border-[var(--accent)]/30 bg-[var(--accent-soft)]/25 px-3 py-2 text-left text-sm transition hover:border-[var(--accent)]/60"
+      >
+        <Stethoscope size={15} className="shrink-0 text-[var(--accent)]" />
+        <span className="min-w-0 flex-1 font-medium">
+          {open.length} thing{open.length === 1 ? "" : "s"} worth changing here
+        </span>
+        <span className="shrink-0 text-xs text-muted">Show</span>
+      </button>
+    );
+
   return (
     <section className="rounded-xl border border-[var(--accent)]/30 bg-[var(--accent-soft)]/25">
       <div className="flex flex-wrap items-center gap-2 border-b border-[var(--accent)]/20 px-3 py-2">
@@ -154,12 +172,11 @@ export function ReviewPanel({
           </Button>
         )}
         <button
-          className="rounded p-1 text-muted hover:text-ink"
-          title="Clear the read-through"
-          aria-label="Clear the read-through"
-          onClick={onClear}
+          type="button"
+          className="rounded px-1.5 py-0.5 text-xs font-medium text-muted hover:bg-surface hover:text-ink"
+          onClick={() => setFolded(true)}
         >
-          <X size={14} />
+          Hide
         </button>
       </div>
       {outdated && (
@@ -262,6 +279,11 @@ export function ReviewPanel({
           </li>
         ))}
       </ul>
+      <div className="flex justify-end border-t border-[var(--accent)]/20 px-3 py-1.5">
+        <button type="button" onClick={onClear} className="text-[11px] text-muted hover:text-ink hover:underline">
+          Delete these notes
+        </button>
+      </div>
       {(done.length > 0 || elsewhere.length > 0) && (
         <div className="space-y-1.5 border-t border-[var(--accent)]/20 px-3 py-2">
           {done.length > 0 && (

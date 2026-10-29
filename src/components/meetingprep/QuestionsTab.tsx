@@ -64,7 +64,7 @@ import type { ReadingSource } from "@/lib/meetingprep/types";
 // The reading list, for the source line under a question to link into.
 // Context rather than a prop: that line sits several components deep.
 const ReadingSources = createContext<ReadingSource[]>([]);
-import type { QuestionVariant } from "@/lib/meetingprep/questionsAi";
+import type { QuestionVariant, ReworkPart } from "@/lib/meetingprep/questionsAi";
 import {
   QUESTIONS_ENGINE,
   engineBehind,
@@ -136,7 +136,8 @@ export function QuestionsTab({
   // Which question has its note open. One at a time, because the note is a
   // scratch line and not a second body of text.
   const [openNote, setOpenNote] = useState<string | null>(null);
-  const pct = useProgress(busy, 45000);
+  // Twenty questions and their checks: about a minute and a half.
+  const pct = useProgress(busy, 90000);
   const [editingId, setEditingId] = useState<string | null>(null);
   // null until the writer opens or closes one; then exactly what they chose.
   // An empty set used to mean "untouched", so closing the last open group
@@ -1654,7 +1655,10 @@ export function QuestionsTab({
                                 )}
                                 {!open && compact && (
                                   <button type="button" onClick={() => toggleRow(q.id)} className="inline-flex items-center gap-0.5 text-muted hover:text-ink">
-                                    {[setupText && "setup", versions > 0 && `${versions} other ways`, q.note && "your note"].filter(Boolean).join(" · ") || "more"}
+                                    {/* Says what opening it shows. The versions stay behind
+                                        their own button, so they are not promised here. */}
+                                    {setupText ? "Show the setup" : "Show more"}
+                                    {q.note ? " and your note" : ""}
                                     <ChevronDown size={12} />
                                   </button>
                                 )}
@@ -1687,15 +1691,6 @@ export function QuestionsTab({
                                     </button>
                                   )}
                                   <NoteLine q={q} openNote={openNote} setOpenNote={setOpenNote} onPatch={(p) => patch(q.id, p)} />
-                                  {compact && (
-                                    <button
-                                      type="button"
-                                      onClick={() => toggleRow(q.id)}
-                                      className="mt-2 inline-flex items-center gap-0.5 text-xs text-muted hover:text-ink"
-                                    >
-                                      Fold <ChevronDown size={12} className="rotate-180" />
-                                    </button>
-                                  )}
                                 </>
                               )}
                             </>
@@ -1902,6 +1897,7 @@ export function QuestionsTab({
                         versioning={versioningIds.includes(q.id)}
                         onWriteVersions={() => void sharpen([q])}
                         startOpen={freshVersions.has(q.id)}
+                        onToggle={compact ? () => toggleRow(q.id) : undefined}
                       />
                           <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted">
                             <AskWho
@@ -1918,15 +1914,6 @@ export function QuestionsTab({
                             onFill={() => void fillOut(q)}
                           />
                           <NoteLine q={q} openNote={openNote} setOpenNote={setOpenNote} onPatch={(p) => patch(q.id, p)} />
-                          {compact && (
-                            <button
-                              type="button"
-                              onClick={() => toggleRow(q.id)}
-                              className="mt-2 inline-flex items-center gap-0.5 text-xs text-muted hover:text-ink"
-                            >
-                              Fold <ChevronDown size={12} className="rotate-180" />
-                            </button>
-                          )}
                         </>
                         )
                       )}
@@ -2114,6 +2101,34 @@ export function QuestionsTab({
           ]);
           toast("success", "Added to your list");
         }}
+        onSave={(vs) => {
+          // Kept on the question: closing the window used to lose them.
+          const id = reworkId;
+          if (!id) return;
+          const fresh = latest.current.questions?.items || [];
+          const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+          save({
+            questions: {
+              ...latest.current.questions,
+              items: fresh.map((x) => {
+                if (x.id !== id) return x;
+                const have = x.options || [];
+                const add = vs
+                  .filter((v) => !have.some((o) => norm(o.text) === norm(v.text) && norm(o.setup || "") === norm(v.setup || "")))
+                  .map((v) => ({
+                    kind: v.angle,
+                    text: v.text,
+                    followUp: v.followUp,
+                    setup: v.setup || undefined,
+                    forWhom: v.forWhom,
+                    rework: true,
+                    changed: v.changed,
+                  }));
+                return add.length ? { ...x, options: [...have, ...add] } : x;
+              }),
+            },
+          });
+        }}
         fetchVariants={async (q, instruction, extra) => {
           const res = await fetch("/api/meeting/ai", {
             method: "POST",
@@ -2140,6 +2155,9 @@ export function QuestionsTab({
               ],
               count: extra?.count || 3,
               avoid: extra?.avoid || [],
+              part: extra?.part || "auto",
+              keep: extra?.keep || [],
+              drop: extra?.drop || [],
               guidance: instruction,
               standing: guidance,
             }),
@@ -2426,9 +2444,12 @@ function SpokenQuestion({
   versioning = false,
   onWriteVersions,
   startOpen = false,
+  onToggle,
 }: {
   q: QuestionItem;
   startOpen?: boolean;
+  /** Clicking the question closes it again. */
+  onToggle?: () => void;
   busy?: boolean;
   onAddSetup?: () => void;
   /** For picking another way to ask it. */
@@ -2441,7 +2462,13 @@ function SpokenQuestion({
       {stripAskedQuestion(q.setup, q.text) && (
         <p className="mb-1 text-sm leading-relaxed text-ink/70">{stripAskedQuestion(q.setup, q.text)}</p>
       )}
-      <p className={`text-sm text-ink ${q.setup ? "font-medium" : ""}`}>{q.text}</p>
+      <p
+        onClick={onToggle}
+        title={onToggle ? "Click to close" : undefined}
+        className={`text-sm text-ink ${q.setup ? "font-medium" : ""} ${onToggle ? "cursor-pointer" : ""}`}
+      >
+        {q.text}
+      </p>
       {/* Other ways to ask it under the same setup; picking one swaps it in. */}
       {onPatch && (
         <QuestionChoices
@@ -2588,6 +2615,7 @@ function ReworkModal({
   onClose,
   onApply,
   onAdd,
+  onSave,
   fetchVariants,
 }: {
   q: QuestionItem | null;
@@ -2597,10 +2625,31 @@ function ReworkModal({
   onApply: (text: string, followUp: string, setup?: string, forWhom?: string) => void;
   /** Keep a version as well as, rather than instead of, what is there. */
   onAdd: (text: string, followUp: string, setup?: string, forWhom?: string) => void;
-  fetchVariants: (q: QuestionItem, instruction: string, extra?: { count?: number; avoid?: string[] }) => Promise<QuestionVariant[]>;
+  /** Keeps what came back on the question, so it is there next time. */
+  onSave: (vs: QuestionVariant[]) => void;
+  fetchVariants: (
+    q: QuestionItem,
+    instruction: string,
+    extra?: { count?: number; avoid?: string[]; part?: ReworkPart; keep?: string[]; drop?: string[] },
+  ) => Promise<QuestionVariant[]>;
 }) {
   const [instruction, setInstruction] = useState("");
-  const [options, setOptions] = useState<QuestionVariant[]>([]);
+  // What came back last time, kept on the question, is here again.
+  const [options, setOptions] = useState<QuestionVariant[]>(() =>
+    (q?.options || [])
+      .filter((o) => o.rework)
+      .map((o) => ({ angle: o.kind, text: o.text, followUp: o.followUp, setup: o.setup, forWhom: o.forWhom, changed: o.changed })),
+  );
+  // Which part to change, and words marked to keep or lose. The writer liked
+  // part of a question and had no way to say which part.
+  const [part, setPart] = useState<ReworkPart>("auto");
+  const [keepWords, setKeepWords] = useState<string[]>([]);
+  const [dropWords, setDropWords] = useState<string[]>([]);
+  const [sel, setSel] = useState("");
+  const grabSelection = () => {
+    const t = (window.getSelection()?.toString() || "").replace(/\s+/g, " ").trim();
+    setSel(t.length >= 2 ? t : "");
+  };
   const [added, setAdded] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -2623,14 +2672,16 @@ function ReworkModal({
     try {
       const got = await fetchVariants(q, instruction.trim(), {
         count: askedCount(instruction) || 3,
-        avoid: more ? options.map((o) => o.text) : [],
+        avoid: options.map((o) => `${o.setup ? `${o.setup} ` : ""}${o.text}`),
+        part,
+        keep: keepWords,
+        drop: dropWords,
       });
       if (!got.length) throw new Error("Nothing usable came back — try saying it differently.");
-      if (more) setOptions((o) => [...o, ...got]);
-      else {
-        setOptions(got);
-        setAdded([]);
-      }
+      onSave(got);
+      // New ones on top; the earlier ones stay underneath rather than vanish.
+      setOptions((o) => [...got, ...o]);
+      if (!more) setAdded([]);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -2643,9 +2694,90 @@ function ReworkModal({
       {q && (
         <>
           {/* The setup too: sometimes it is the setup that needs the work. */}
-          <div className="rounded-lg border border-border bg-canvas/60 px-3 py-2 text-sm">
+          <div
+            className="rounded-lg border border-border bg-canvas/60 px-3 py-2 text-sm"
+            onMouseUp={grabSelection}
+            onTouchEnd={grabSelection}
+            onKeyUp={grabSelection}
+          >
             {q.setup && <p className="leading-relaxed text-ink/70">{stripAskedQuestion(q.setup, q.text)}</p>}
             <p className={`font-medium text-ink ${q.setup ? "mt-1.5" : ""}`}>{q.text}</p>
+          </div>
+          {/* Select any words above to keep them or lose them. */}
+          {sel ? (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
+              <span className="max-w-full truncate text-muted">&ldquo;{sel.length > 70 ? `${sel.slice(0, 70)}…` : sel}&rdquo;</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setKeepWords((k) => (k.includes(sel) ? k : [...k, sel]));
+                  setDropWords((d) => d.filter((x) => x !== sel));
+                  setSel("");
+                }}
+                className="rounded-md bg-emerald-100 px-2 py-0.5 font-medium text-emerald-800 hover:bg-emerald-200"
+              >
+                Keep these words
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setDropWords((d) => (d.includes(sel) ? d : [...d, sel]));
+                  setKeepWords((k) => k.filter((x) => x !== sel));
+                  setSel("");
+                }}
+                className="rounded-md bg-red-100 px-2 py-0.5 font-medium text-red-800 hover:bg-red-200"
+              >
+                Lose these words
+              </button>
+            </div>
+          ) : (
+            <p className="mt-1 text-[11px] text-muted">Select any words above to keep them or lose them.</p>
+          )}
+          {(keepWords.length > 0 || dropWords.length > 0) && (
+            <div className="mt-1.5 flex flex-wrap gap-1.5 text-xs">
+              {keepWords.map((k) => (
+                <span key={`k${k}`} className="inline-flex max-w-full items-center gap-1 rounded-md bg-emerald-50 px-2 py-0.5 text-emerald-900">
+                  <span className="truncate">Keep: {k}</span>
+                  <button type="button" aria-label="Remove" onClick={() => setKeepWords((x) => x.filter((y) => y !== k))}>
+                    ×
+                  </button>
+                </span>
+              ))}
+              {dropWords.map((k) => (
+                <span key={`d${k}`} className="inline-flex max-w-full items-center gap-1 rounded-md bg-red-50 px-2 py-0.5 text-red-900">
+                  <span className="truncate">Lose: {k}</span>
+                  <button type="button" aria-label="Remove" onClick={() => setDropWords((x) => x.filter((y) => y !== k))}>
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          {/* Which part to work on. Said "the setup is the issue", it used to
+              rewrite the question too. */}
+          <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="font-medium text-ink">Change</span>
+            {(
+              [
+                ["auto", "Whatever I say below"],
+                ["setup", "Just the setup"],
+                ["question", "Just the question"],
+                ["both", "Both"],
+              ] as const
+            ).map(([k, label]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setPart(k)}
+                className={`rounded-full border px-2.5 py-0.5 transition ${
+                  part === k
+                    ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
+                    : "border-border text-muted hover:text-ink"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
 
           <div className="mt-3">
@@ -2664,10 +2796,10 @@ function ReworkModal({
             )}
           </div>
 
-          {busy && <ProgressBar pct={pct} label="Finding other ways to ask it…" className="mt-3" />}
+          {busy && <ProgressBar pct={pct} label="Writing them. The ones below stay while you wait." className="mt-3" />}
           {error && <p className="mt-2 text-sm text-status-error">{error}</p>}
 
-          {options.length > 0 && !busy && (
+          {options.length > 0 && (
             <>
               {/* Two different things you can want from a version you like:
                   this one INSTEAD of what you had, or this one AS WELL. Only
@@ -2681,15 +2813,18 @@ function ReworkModal({
                   >
                     <span className="flex flex-wrap items-center gap-1.5">
                       <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--accent)]">{v.angle}</span>
+                      {/* What it changed, so a new setup is not mistaken for a new question. */}
+                      <span className="rounded bg-canvas px-1.5 py-0.5 text-[10px] font-medium text-muted">
+                        {v.changed === "setup"
+                          ? "New setup, your question"
+                          : v.changed === "both" || v.setup
+                            ? "New setup and question"
+                            : "New question, your setup"}
+                      </span>
                       {v.forWhom && <ForChip who={v.forWhom} />}
                     </span>
-                    {v.setup && (
-                      <span className="mt-1 block text-sm leading-relaxed text-ink/70">
-                        <span className="mr-1 text-[10px] font-semibold uppercase tracking-wide text-muted">New setup</span>
-                        {v.setup}
-                      </span>
-                    )}
-                    <span className="mt-1 block text-sm font-medium text-ink">{v.text}</span>
+                    {v.setup && <span className="mt-1 block text-sm leading-relaxed text-ink/70">{v.setup}</span>}
+                    <span className={`mt-1 block text-sm font-medium ${v.changed === "setup" ? "text-ink/60" : "text-ink"}`}>{v.text}</span>
                     {v.followUp && (
                       <span className="mt-1 block text-xs italic text-muted">
                         Probe: {v.followUp}
@@ -2740,7 +2875,7 @@ function ReworkModal({
               Keep it as it is
             </Button>
             {options.length > 0 && (
-              <Button variant="secondary" disabled={busy} onClick={() => void run(true)} title="Keeps these and adds new ones underneath">
+              <Button variant="secondary" disabled={busy} onClick={() => void run(true)} title="Keeps these and adds new ones">
                 <Plus size={14} /> More
               </Button>
             )}

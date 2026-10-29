@@ -123,8 +123,9 @@ export function inferPart(note: string): { part: Part; why: string } {
 type Ask =
   { kind: "batch" } | { kind: "more" | "version" | "fix"; draft: SourceDraft };
 
-// Measured on the writer's panel: a batch with both checks ran about 45s.
-const SECONDS = { batch: 45, more: 40, version: 35, fix: 35 } as const;
+// Measured on the writer's panel on 2026-10-28: a batch took 85s with its
+// checks in a row, about 65s with them side by side.
+const SECONDS = { batch: 65, more: 65, version: 55, fix: 55 } as const;
 
 const PICKS = {
   batch: [
