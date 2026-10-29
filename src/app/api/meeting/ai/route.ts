@@ -29,6 +29,7 @@ import {
   optionsFor,
   trimRepeatedSetup,
   regroupQuestions,
+  searchQuestions,
   type ReworkPart,
   orderForConversation,
   placeQuestion,
@@ -507,6 +508,18 @@ export async function POST(req: Request) {
     if (action === "place") {
       const items = (Array.isArray(body?.items) ? body.items : []).slice(0, 80).map(lineIn);
       return NextResponse.json(await placeQuestion({ items, question: lineIn(body?.question || {}) }));
+    }
+
+    // Every question, searched by what it is about.
+    if (action === "search") {
+      const items = (Array.isArray(body?.items) ? body.items : []).slice(0, 250).map(
+        (x: { setup?: unknown; text?: unknown }) => ({
+          setup: String(x?.setup || "").slice(0, 300),
+          text: String(x?.text || "").slice(0, 600),
+        }),
+      );
+      const matches = await searchQuestions({ query: String(body?.query || "").slice(0, 300), items });
+      return NextResponse.json({ matches });
     }
 
     // The bank sorted by subject, so like questions sit together.

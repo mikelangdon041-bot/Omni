@@ -46,6 +46,7 @@ import {
   SlidersHorizontal,
   Loader2,
   Scissors,
+  Search,
 } from "lucide-react";
 import { AskMode } from "@/components/meetingprep/AskMode";
 import { AskWho, ForChip, QuestionChoices, askList, choicesOf, panelNames } from "@/components/meetingprep/QuestionChoices";
@@ -75,6 +76,7 @@ import {
   type MpMeeting,
   type QuestionItem,
   type ReviewNote,
+  type SourceDraft,
 } from "@/lib/meetingprep/types";
 
 const newId = () => `q${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
@@ -480,6 +482,93 @@ export function QuestionsTab({
 
   const patch = (id: string, p: Partial<QuestionItem>) =>
     setItems(items.map((q) => (q.id === id ? { ...q, ...p } : q)));
+
+  // Every question there is, for the search box: the list in its order, the
+  // bank, and the drafts on the Reading tab nobody has dealt with yet.
+  const searchPool = useMemo((): SearchHit[] => {
+    const extra = (q: { followUp?: string; why?: string; category?: string; options?: { text: string }[] }) =>
+      [q.followUp, q.why, q.category, ...(q.options || []).map((o) => o.text)].filter(Boolean).join(" ");
+    return [
+      ...picked.map((q, i) => ({ key: q.id, kind: "list" as const, where: `Your list, ${i + 1}`, text: q.text, setup: stripAskedQuestion(q.setup, q.text), extra: extra(q), q })),
+      ...live
+        .filter((q) => !q.picked)
+        .map((q) => ({ key: q.id, kind: "bank" as const, where: `Bank: ${q.category}`, text: q.text, setup: stripAskedQuestion(q.setup, q.text), extra: extra(q), q })),
+      ...(m.reading?.sources || []).flatMap((src) =>
+        (src.questions || [])
+          .filter((d) => !d.done)
+          .map((d) => ({
+            key: d.id,
+            kind: "draft" as const,
+            where: `Reading: ${src.title.length > 50 ? `${src.title.slice(0, 50)}…` : src.title}`,
+            text: d.text,
+            setup: stripAskedQuestion(d.setup, d.text),
+            extra: extra(d),
+            draft: { sourceId: src.id, d },
+          })),
+      ),
+    ];
+  }, [picked, live, m.reading]);
+
+  /** Opens a question where it is and brings it into view. */
+  function showQuestion(id: string) {
+    const q = items.find((x) => x.id === id);
+    if (!q) return;
+    setWhoFilter(null);
+    setOpenRows((v) => new Set([...v, id]));
+    if (!q.picked) setOpenCats((prev) => new Set([...(prev ?? (categories[0] ? [categories[0][0]] : [])), q.category]));
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const el = document.querySelector(`[data-qrow="${id}"]`);
+        el?.scrollIntoView({ block: "center", behavior: "smooth" });
+        el?.classList.add("ring-2", "ring-[var(--accent)]");
+        setTimeout(() => el?.classList.remove("ring-2", "ring-[var(--accent)]"), 1600);
+      }),
+    );
+  }
+
+  /** A draft from the Reading tab, straight into the list or the bank. */
+  function addDraft(sourceId: string, d: SourceDraft, toList: boolean) {
+    const fresh = latest.current;
+    const all = fresh.questions?.items || [];
+    const src = (fresh.reading?.sources || []).find((x) => x.id === sourceId);
+    const markDone = (done: SourceDraft["done"]) => ({
+      ...(fresh.reading || {}),
+      sources: (fresh.reading?.sources || []).map((x) =>
+        x.id === sourceId ? { ...x, questions: (x.questions || []).map((y) => (y.id === d.id ? { ...y, done } : y)) } : x,
+      ),
+    });
+    const dup = sameQuestion(all, d.text);
+    if (dup) {
+      const order = all.filter((q) => q.picked).reduce((n, q) => Math.max(n, q.order + 1), 0);
+      save({
+        questions: { ...fresh.questions, items: all.map((q) => (q.id === dup.id && toList && !q.picked ? { ...q, picked: true, order } : q)) },
+        reading: markDone(toList ? "list" : "bank"),
+      });
+      toast("info", dup.picked ? "That one is already in your list." : toList ? "It was in the bank, so it has moved to your list." : "That one is already in the bank.");
+      return;
+    }
+    const item: QuestionItem = {
+      id: newId(),
+      setup: d.setup,
+      text: d.text,
+      why: d.why || "",
+      followUp: d.followUp || "",
+      forWhom: d.forWhom || "",
+      category: d.category || "Questions",
+      sourceNote: src ? `${[src.outlet, src.date].filter(Boolean).join(", ")}${src.outlet || src.date ? ": " : ""}${src.title}` : undefined,
+      rank: all.reduce((n, q) => Math.max(n, q.rank), 0) + 1,
+      picked: toList,
+      backup: false,
+      asked: false,
+      order: toList ? all.filter((q) => q.picked).reduce((n, q) => Math.max(n, q.order + 1), 0) : 0,
+      source: "ai",
+      options: d.options,
+      optionChosen: d.optionChosen,
+      askWho: d.askWho,
+    };
+    save({ questions: { ...fresh.questions, items: [...all, item] }, reading: markDone(toList ? "list" : "bank") });
+    toast("success", toList ? "Added to your list." : "Added to the bank.");
+  }
 
   /** Before adding a question: is it here already? Handles it and says so. */
   function alreadyHere(text: string): boolean {
@@ -1319,23 +1408,7 @@ export function QuestionsTab({
           if (!q) return undefined;
           return q.picked ? `Your list, ${picked.findIndex((x) => x.id === id) + 1}` : `Bank: ${q.category}`;
         }}
-        onShowQuestion={(id) => {
-          const q = items.find((x) => x.id === id);
-          if (!q) return;
-          // Open it where it is, so its setup and versions are there to read.
-          setWhoFilter(null);
-          setOpenRows((v) => new Set([...v, id]));
-          if (!q.picked)
-            setOpenCats((prev) => new Set([...(prev ?? (categories[0] ? [categories[0][0]] : [])), q.category]));
-          requestAnimationFrame(() =>
-            requestAnimationFrame(() => {
-              const el = document.querySelector(`[data-qrow="${id}"]`);
-              el?.scrollIntoView({ block: "center", behavior: "smooth" });
-              el?.classList.add("ring-2", "ring-[var(--accent)]");
-              setTimeout(() => el?.classList.remove("ring-2", "ring-[var(--accent)]"), 1600);
-            }),
-          );
-        }}
+        onShowQuestion={showQuestion}
         onFix={(n) => void applyQuestionNote(n)}
         onToggleDone={(n) => review.patchNote(n.id, { done: !n.done })}
         onDismiss={(n) => review.patchNote(n.id, { dismissed: true })}
@@ -1401,6 +1474,21 @@ export function QuestionsTab({
           )}
         </div>
       )}
+
+      {/* One box for every question: the list, the bank and the drafts on
+          the Reading tab. Words match as you type; "Find by topic" finds the
+          ones about it in other words. */}
+      <SearchAll
+        pool={searchPool}
+        onGo={(h) => (h.kind === "draft" ? null : showQuestion(h.key))}
+        onPick={(h) => {
+          if (h.kind === "bank" && h.q) {
+            pick(h.q);
+            toast("success", "Added to your list.");
+          } else if (h.kind === "draft" && h.draft) addDraft(h.draft.sourceId, h.draft.d, true);
+        }}
+        onBank={(h) => h.kind === "draft" && h.draft && addDraft(h.draft.sourceId, h.draft.d, false)}
+      />
 
       {/* Your list — the questions you carry in, in your order. */}
       <section className="rounded-xl border border-[var(--accent)]/30 bg-surface">
@@ -1646,7 +1734,17 @@ export function QuestionsTab({
                                   <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">Must ask</span>
                                 )}
                                 {q.backup && (
-                                  <span className="rounded-full bg-canvas px-1.5 py-0.5 text-[10px] font-medium text-ink/70">In reserve</span>
+                                  <span className="rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium text-sky-800">In reserve</span>
+                                )}
+                                {!open && (q.options || []).some((o) => o.keep) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleRow(q.id)}
+                                    className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800 hover:bg-emerald-100"
+                                    title="You kept a second way to ask it. Open the card to swap them."
+                                  >
+                                    + a second way kept
+                                  </button>
                                 )}
                                 {versioningIds.includes(q.id) && (
                                   <span className="inline-flex items-center gap-1 rounded bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--accent)]">
@@ -1708,7 +1806,16 @@ export function QuestionsTab({
                           >
                             <Star size={14} className={q.mustAsk ? "fill-amber-400 text-amber-500" : ""} />
                           </IconBtn>
-                          <Dropdown label="Move it, rework it, hold it in reserve…" icon={<Ellipsis size={15} />} width="w-64">
+                          {/* Reserve sits beside the star: the two are the
+                              opposite ends of the same decision. */}
+                          <IconBtn
+                            label={q.backup ? "In reserve. Click to put it back in the running order" : "Hold in reserve: only if there's time"}
+                            active={q.backup}
+                            onClick={() => patch(q.id, { backup: !q.backup, ...(q.backup ? {} : { mustAsk: false }) })}
+                          >
+                            <CirclePause size={14} className={q.backup ? "text-sky-600" : ""} />
+                          </IconBtn>
+                          <Dropdown label="Move it, rework it, add a note…" icon={<Ellipsis size={15} />} width="w-64">
                             {(close) => (
                               <>
                                 <MenuItem
@@ -1720,15 +1827,6 @@ export function QuestionsTab({
                                   }}
                                 >
                                   Rework it: other wording or setup
-                                </MenuItem>
-                                <MenuItem
-                                  icon={<CirclePause size={13} />}
-                                  onClick={() => {
-                                    close();
-                                    patch(q.id, { backup: !q.backup, ...(q.backup ? {} : { mustAsk: false }) });
-                                  }}
-                                >
-                                  {q.backup ? "Back into the running order" : "Hold in reserve"}
                                 </MenuItem>
                                 <MenuItem
                                   icon={<StickyNote size={13} />}
@@ -2982,6 +3080,206 @@ function MenuItem({
       {icon && <span className="shrink-0 text-muted">{icon}</span>}
       <span className="min-w-0 flex-1">{children}</span>
     </button>
+  );
+}
+
+type SearchHit = {
+  key: string;
+  kind: "list" | "bank" | "draft";
+  where: string;
+  text: string;
+  setup?: string;
+  /** Probe, group, versions: searched, not shown. */
+  extra: string;
+  q?: QuestionItem;
+  draft?: { sourceId: string; d: SourceDraft };
+};
+
+/**
+ * Searching every question at once. Words match as you type, on the
+ * question, its setup, probe, group and other ways to ask it. "Find by
+ * topic" asks the model which ones are about it, for when the words differ.
+ */
+function SearchAll({
+  pool,
+  onGo,
+  onPick,
+  onBank,
+}: {
+  pool: SearchHit[];
+  onGo: (h: SearchHit) => void;
+  onPick: (h: SearchHit) => void;
+  onBank: (h: SearchHit) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [topic, setTopic] = useState<{ query: string; hits: { key: string; why: string }[] } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [where, setWhere] = useState<"all" | "list" | "bank" | "draft">("all");
+  const words = query.toLowerCase().split(/\s+/).filter((w) => w.length > 1);
+  const hay = (h: SearchHit) => `${h.text} ${h.setup || ""} ${h.extra}`.toLowerCase();
+  const wordHits = words.length
+    ? pool
+        .filter((h) => words.every((w) => hay(h).includes(w)))
+        .sort((a, b) => Number(words.every((w) => b.text.toLowerCase().includes(w))) - Number(words.every((w) => a.text.toLowerCase().includes(w))))
+    : [];
+  const topicHits =
+    topic && topic.query === query.trim()
+      ? topic.hits
+          .map((t) => ({ h: pool.find((p) => p.key === t.key), why: t.why }))
+          .filter((x): x is { h: SearchHit; why: string } => Boolean(x.h) && !wordHits.some((w) => w.key === x.h!.key))
+      : [];
+  const shown = (h: SearchHit) => where === "all" || h.kind === where;
+
+  async function byTopic() {
+    const q = query.trim();
+    if (!q) return;
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch("/api/meeting/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ action: "search", query: q, items: pool.map((h) => ({ text: h.text, setup: h.setup })) }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "Could not search them");
+      const matches: { index: number; why: string }[] = json.matches || [];
+      setTopic({ query: q, hits: matches.filter((x) => pool[x.index]).map((x) => ({ key: pool[x.index].key, why: x.why })) });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const mark = (t: string) => {
+    if (!words.length) return t;
+    const re = new RegExp(`(${words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "gi");
+    return t.split(re).map((part, i) =>
+      i % 2 ? (
+        <mark key={i} className="rounded bg-amber-200/70 px-0.5 text-ink">
+          {part}
+        </mark>
+      ) : (
+        part
+      ),
+    );
+  };
+  const counts = {
+    list: pool.filter((h) => h.kind === "list").length,
+    bank: pool.filter((h) => h.kind === "bank").length,
+    draft: pool.filter((h) => h.kind === "draft").length,
+  };
+
+  const row = (h: SearchHit, why?: string) => (
+    <li key={h.key} className="py-2">
+      {h.setup && words.some((w) => (h.setup || "").toLowerCase().includes(w)) && (
+        <p className="mb-0.5 line-clamp-2 text-xs leading-relaxed text-ink/60">{mark(h.setup)}</p>
+      )}
+      <p className="text-sm text-ink">{mark(h.text)}</p>
+      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+        <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${h.kind === "list" ? "bg-[var(--accent)] text-[var(--accent-fg)]" : "bg-canvas text-muted"}`}>
+          {h.where}
+        </span>
+        {why && <span className="text-muted">{why}</span>}
+        {/* Matched somewhere not shown: say where, or it reads as a random hit. */}
+        {!why && words.length > 0 && !words.every((w) => `${h.text} ${h.setup || ""}`.toLowerCase().includes(w)) && (
+          <span className="text-muted">found in its probe or another way to ask it</span>
+        )}
+        {h.kind !== "draft" && (
+          <button type="button" onClick={() => onGo(h)} className="font-medium text-[var(--accent)] hover:underline">
+            Go to it
+          </button>
+        )}
+        {h.kind !== "list" && (
+          <button type="button" onClick={() => onPick(h)} className="font-medium text-[var(--accent)] hover:underline">
+            Add to my list
+          </button>
+        )}
+        {h.kind === "draft" && (
+          <button type="button" onClick={() => onBank(h)} className="font-medium text-muted hover:text-ink hover:underline">
+            Add to the bank
+          </button>
+        )}
+      </div>
+    </li>
+  );
+
+  const anyQuery = Boolean(query.trim());
+  return (
+    <div className="rounded-xl border border-border bg-surface px-3 py-2.5">
+      <form
+        className="flex items-center gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void byTopic();
+        }}
+      >
+        <Search size={15} className="shrink-0 text-muted" />
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={`Search all ${pool.length} questions: your list, the bank and the reading`}
+          className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted"
+        />
+        {anyQuery && (
+          <button type="button" onClick={() => setQuery("")} className="shrink-0 text-xs text-muted hover:text-ink">
+            Clear
+          </button>
+        )}
+        <Button size="sm" variant="secondary" type="submit" disabled={!anyQuery || busy} title="Finds the questions about this, even in other words">
+          {busy ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />} {busy ? "Looking…" : "Find by topic"}
+        </Button>
+      </form>
+      {anyQuery && (
+        <div className="mt-2 border-t border-border pt-2">
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            {(
+              [
+                ["all", "Everywhere", pool.length],
+                ["list", "Your list", counts.list],
+                ["bank", "Bank", counts.bank],
+                ["draft", "Reading", counts.draft],
+              ] as const
+            ).map(([k, label]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setWhere(k)}
+                className={`rounded-full border px-2 py-0.5 font-medium transition ${
+                  where === k ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-fg)]" : "border-border text-ink/80 hover:border-[var(--accent)]"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
+            {wordHits.filter(shown).length} with those words
+          </p>
+          {wordHits.filter(shown).length > 0 ? (
+            <ul className="max-h-[50vh] divide-y divide-border overflow-y-auto">{wordHits.filter(shown).slice(0, 60).map((h) => row(h))}</ul>
+          ) : (
+            <p className="py-1 text-xs text-muted">None use those words. Try Find by topic for ones about it in other words.</p>
+          )}
+          {error && <p className="mt-1 text-xs text-status-error">{error}</p>}
+          {topic && topic.query === query.trim() && (
+            <>
+              <p className="mt-3 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                {topicHits.filter((x) => shown(x.h)).length} more about it, in other words
+              </p>
+              {topicHits.filter((x) => shown(x.h)).length > 0 ? (
+                <ul className="max-h-[50vh] divide-y divide-border overflow-y-auto">{topicHits.filter((x) => shown(x.h)).map((x) => row(x.h, x.why))}</ul>
+              ) : (
+                <p className="py-1 text-xs text-muted">Nothing else is about that.</p>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

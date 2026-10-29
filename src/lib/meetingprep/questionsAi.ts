@@ -1871,6 +1871,63 @@ Return every index exactly once.`,
   return out;
 }
 
+const SEARCH_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    matches: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: { index: { type: "number" as const }, why: { type: "string" as const } },
+        required: ["index", "why"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["matches"],
+  additionalProperties: false,
+};
+
+/**
+ * "Do we have anything about X?" across every question the writer has, by
+ * what each one is about rather than the words it uses: a question on
+ * "which experts get chased" is about KOL targeting even if it never says so.
+ * Returns the matching indices, best first, each with a few words on why.
+ */
+export async function searchQuestions({
+  query,
+  items,
+}: {
+  query: string;
+  items: { text: string; setup?: string }[];
+}): Promise<{ index: number; why: string }[]> {
+  if (!query.trim() || !items.length) return [];
+  const res = await anthropic().messages.create({
+    model: CHECK_MODEL,
+    max_tokens: 8000,
+    output_config: { format: { type: "json_schema", schema: SEARCH_SCHEMA } },
+    system: `A moderator is searching their own questions for a panel: "do we have anything about this?". Return every question that is genuinely about what they are looking for, judged by what the question and its setup are about, not by shared words: a question can be about the topic without naming it, and one that only mentions a word in passing is not about it. Best match first. why: at most eight words on how it bears on the search. Nothing that does not fit; an empty list is a fine answer.`,
+    messages: [
+      {
+        role: "user",
+        content: `Looking for: ${query.trim()}\n\nThe questions:\n${items
+          .map((q, i) => `${i}. ${q.text}${q.setup ? `\n   (setup: ${q.setup.slice(0, 160)})` : ""}`)
+          .join("\n")}`,
+      },
+    ],
+  });
+  const parsed = JSON.parse(firstText(res) || "{}");
+  const seen = new Set<number>();
+  const out: { index: number; why: string }[] = [];
+  for (const x of Array.isArray(parsed.matches) ? parsed.matches : []) {
+    const i = Number(x?.index);
+    if (!Number.isInteger(i) || i < 0 || i >= items.length || seen.has(i)) continue;
+    seen.add(i);
+    out.push({ index: i, why: String(x?.why || "").trim() });
+  }
+  return out;
+}
+
 const PLACE_SCHEMA = {
   type: "object" as const,
   properties: { after: { type: "number" as const }, section: { type: "string" as const } },

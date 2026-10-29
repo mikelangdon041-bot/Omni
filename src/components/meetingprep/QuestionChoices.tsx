@@ -95,24 +95,30 @@ export function QuestionChoices({
           {kept.map((o) => (
             <li key={o.text} className="text-sm">
               <p className="text-ink">
-                <span className="mr-1.5 text-[11px] font-semibold text-muted">If that falls flat:</span>
+                <span className="mr-1.5 text-[11px] font-semibold text-emerald-700">Also kept, if that falls flat:</span>
                 {o.text}
               </p>
-              <div className="mt-0.5 flex gap-3 text-xs">
+              {/* Either one can end up the question: this swaps them, and the
+                  one it replaces stays kept in its place. */}
+              <div className="mt-0.5 flex gap-3 text-xs font-medium">
                 <button
                   type="button"
-                  onClick={() => onPick(pickOption(x, o))}
-                  className="text-muted hover:text-ink hover:underline"
-                  title="Make this the main question"
+                  onClick={() => {
+                    const next = pickOption(x, o);
+                    // The question it replaces is kept as the second way, not lost among the versions.
+                    next.options = next.options.map((c) => (c.kind === "Yours before" ? { ...c, keep: true, kind: "Kept" } : c));
+                    onPick(next);
+                  }}
+                  className="text-[var(--accent)] hover:underline"
                 >
-                  Make main
+                  Use this one instead
                 </button>
                 <button
                   type="button"
                   onClick={() => onPick(keepOption(x, o, false))}
                   className="text-muted hover:text-ink hover:underline"
                 >
-                  Drop
+                  Don&apos;t keep it
                 </button>
               </div>
             </li>
