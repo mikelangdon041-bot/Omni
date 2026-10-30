@@ -176,7 +176,21 @@ export function QuestionsTab({
   const [whoFilter, setWhoFilter] = useState<string | null>(null);
   // Dragging near the edge scrolls, so a question can go from 22 to 1 in
   // one drag instead of a screenful at a time.
-  const drag = useRef<{ x: number; y: number; timer: number | null; scroller: HTMLElement | null }>({ x: 0, y: 0, timer: null, scroller: null });
+  const drag = useRef<{
+    x: number;
+    y: number;
+    timer: number | null;
+    scroller: HTMLElement | null;
+    drop: number | null;
+    stop: (() => void) | null;
+  }>({ x: 0, y: 0, timer: null, scroller: null, drop: null, stop: null });
+  // Where a dragged question would land: before the question at this place
+  // in the list, or at the very end when it equals the list's length.
+  const [dropAt, setDropAt] = useState<number | null>(null);
+  useEffect(() => {
+    const d = drag.current;
+    return () => d.stop?.();
+  }, []);
   // The one question having its probe written, so that row can say so.
   const [fillingId, setFillingId] = useState<string | null>(null);
   // Writing every missing probe at once, and how many are home.
@@ -944,32 +958,87 @@ export function QuestionsTab({
     );
   }
 
+  /**
+   * The cards stay still during a drag: a line shows where it will land and
+   * it moves once, on release. Moving the card under the pointer on every
+   * step made it jump, and taking the element out of the page dropped the
+   * browser's hold on the pointer, so the release never arrived and the card
+   * stuck to the mouse. The window listens, so a release lands anywhere.
+   */
   function startDrag(id: string, el: HTMLElement, x: number, y: number) {
+    const d = drag.current;
+    d.stop?.();
     setDragId(id);
     let p: HTMLElement | null = el.parentElement;
     while (p && !(/(auto|scroll)/.test(getComputedStyle(p).overflowY) && p.scrollHeight > p.clientHeight)) p = p.parentElement;
-    const d = drag.current;
     d.scroller = p;
     d.x = x;
     d.y = y;
-    if (d.timer) window.clearInterval(d.timer);
+    d.drop = null;
+    const from = pickedRef.current.findIndex((q) => q.id === id);
+    const place = () => {
+      const rows = [...document.querySelectorAll<HTMLElement>("[data-listrow]")];
+      let at = rows.length;
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i].getBoundingClientRect();
+        if (d.y < r.top + r.height / 2) {
+          at = i;
+          break;
+        }
+      }
+      // Either side of itself is where it already is.
+      const next = at === from || at === from + 1 ? null : at;
+      if (next !== d.drop) {
+        d.drop = next;
+        setDropAt(next);
+      }
+    };
+    const move = (e: PointerEvent) => {
+      d.x = e.clientX;
+      d.y = e.clientY;
+      place();
+    };
+    const stop = (commit: boolean) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("blur", cancel);
+      window.removeEventListener("keydown", key);
+      if (d.timer) window.clearInterval(d.timer);
+      d.timer = null;
+      d.stop = null;
+      document.body.classList.remove("select-none", "cursor-grabbing");
+      const at = d.drop;
+      d.drop = null;
+      setDragId(null);
+      setDropAt(null);
+      if (commit && at !== null) {
+        const list = pickedRef.current;
+        // It joins the section of the question it lands above.
+        const target = list[at] ?? list[list.length - 1];
+        reorderRef.current(id, at > from ? at - 1 : at, target?.section || "");
+      }
+    };
+    const up = () => stop(true);
+    const cancel = () => stop(false);
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape") stop(false);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("blur", cancel);
+    window.addEventListener("keydown", key);
+    d.stop = cancel;
+    document.body.classList.add("select-none", "cursor-grabbing");
     d.timer = window.setInterval(() => {
       const box = d.scroller ? d.scroller.getBoundingClientRect() : { top: 0, bottom: window.innerHeight };
-      const step = d.y < box.top + 70 ? -14 : d.y > box.bottom - 70 ? 14 : 0;
+      const step = d.y < box.top + 70 ? -16 : d.y > box.bottom - 70 ? 16 : 0;
       if (!step) return;
       if (d.scroller) d.scroller.scrollBy(0, step);
       else window.scrollBy(0, step);
-      const over = document.elementFromPoint(d.x, d.y)?.closest("[data-qrow]")?.getAttribute("data-qrow");
-      if (over && over !== id) {
-        const to = pickedRef.current.findIndex((q) => q.id === over);
-        if (to >= 0) reorderRef.current(id, to);
-      }
+      place();
     }, 30);
-  }
-  function endDrag() {
-    if (drag.current.timer) window.clearInterval(drag.current.timer);
-    drag.current.timer = null;
-    setDragId(null);
   }
 
   /**
@@ -1644,14 +1713,16 @@ export function QuestionsTab({
                     )}
                     <li
                       data-qrow={q.id}
-                      onPointerMove={(e) => {
-                        if (!dragId || dragId === q.id) return;
-                        e.preventDefault();
-                        reorder(dragId, i);
-                      }}
+                      data-listrow
                       className={`group/row rounded-xl border transition ${q.backup ? "bg-canvas/50" : "bg-surface"} ${
+                        dropAt === i
+                          ? "shadow-[0_-4px_0_0_var(--accent)]"
+                          : dropAt === picked.length && i === picked.length - 1
+                            ? "shadow-[0_4px_0_0_var(--accent)]"
+                            : ""
+                      } ${
                         dragId === q.id
-                          ? "border-[var(--accent)] opacity-60 shadow-sm"
+                          ? "border-[var(--accent)] opacity-50"
                           : q.mustAsk
                             ? "border-amber-300"
                             : "border-border hover:border-[var(--accent)]/40"
@@ -1659,30 +1730,15 @@ export function QuestionsTab({
                     >
                       <div className="flex items-start gap-1.5 p-2.5">
                         {/* Pointer events rather than HTML5 drag, so this works
-                            with a finger; near the edge it scrolls. The move
-                            menu is for the long hops. */}
+                            with a finger; near the edge it scrolls. */}
                         {!whoFilter && (
                           <button
                             type="button"
                             aria-label="Drag to reorder"
                             title="Drag to reorder, or use the … menu to move it to the top"
                             onPointerDown={(e) => {
-                              (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+                              e.preventDefault();
                               startDrag(q.id, e.currentTarget, e.clientX, e.clientY);
-                            }}
-                            onPointerUp={endDrag}
-                            onPointerCancel={endDrag}
-                            onPointerMove={(e) => {
-                              if (dragId !== q.id) return;
-                              drag.current.x = e.clientX;
-                              drag.current.y = e.clientY;
-                              // With the pointer captured, every move lands here, so
-                              // the row under the finger has to be found by hand.
-                              const el = document.elementFromPoint(e.clientX, e.clientY)?.closest("[data-qrow]");
-                              const overId = el?.getAttribute("data-qrow");
-                              if (!overId || overId === q.id) return;
-                              const to = picked.findIndex((p) => p.id === overId);
-                              if (to >= 0) reorder(q.id, to);
                             }}
                             className="mt-0.5 shrink-0 cursor-grab touch-none rounded-md p-0.5 text-muted/60 transition hover:text-ink active:cursor-grabbing"
                           >
@@ -2375,9 +2431,11 @@ function TimeBudget({
   const openClose = slot ? 2 : 0;
   const budget = slot ? Math.max(0, slot - intros - openClose - timing.qaMin) : 0;
   // What fits: the must-asks first, then the rest in running order.
-  let used = cost(must);
-  let fit = must.length;
-  for (const q of asking.filter((x) => !x.mustAsk)) {
+  // Must-asks count as fitting only while they do: 47 minutes of them used
+  // to read "8 of 10 fit" against a 24 minute budget.
+  let used = 0;
+  let fit = 0;
+  for (const q of [...must, ...asking.filter((x) => !x.mustAsk)]) {
     const c = minutesFor(q, panelSize, timing);
     if (used + c > budget) break;
     used += c;
@@ -2398,7 +2456,7 @@ function TimeBudget({
         <>
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
             <span className="text-sm font-semibold text-ink">
-              About {fit} of {asking.length} fit
+              About {fit} of your {asking.length} questions fit
             </span>
             <span className="text-muted">
               {fmtMin(budget)} of your {slot} min are for questions
@@ -2418,8 +2476,11 @@ function TimeBudget({
           <p className="mt-1.5 text-muted">
             {must.length > 0 && (
               <span className={mustCost > budget ? "font-semibold text-amber-700" : "text-ink"}>
-                {must.length} must-ask: {fmtMin(mustCost)} min
-                {mustCost > budget ? `, ${fmtMin(mustCost - budget)} over` : ""}.{" "}
+                {must.length} must-ask {must.length === 1 ? "takes" : "take"} about {fmtMin(mustCost)} min
+                {mustCost > budget
+                  ? `, ${fmtMin(mustCost - budget)} too long: only about ${fit} of them fit`
+                  : `, leaving ${fmtMin(budget - mustCost)}`}
+                .{" "}
               </span>
             )}
             One question to one person runs about {fmtMin(toOne)} min; one the whole panel answers, about {fmtMin(toAll)}.
