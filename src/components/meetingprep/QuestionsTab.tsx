@@ -185,7 +185,7 @@ export function QuestionsTab({
     stop: (() => void) | null;
   }>({ x: 0, y: 0, timer: null, scroller: null, drop: null, stop: null });
   // Where a dragged question would land: before the question at this place
-  // in the list, or at the very end when it equals the list's length.
+  // on screen, or at the very end when it equals the number of rows.
   const [dropAt, setDropAt] = useState<number | null>(null);
   useEffect(() => {
     const d = drag.current;
@@ -219,6 +219,16 @@ export function QuestionsTab({
   useEffect(() => {
     pickedRef.current = picked;
   }, [picked]);
+  const inFilter = (q: QuestionItem) =>
+    !whoFilter
+      ? true
+      : whoFilter === "must"
+        ? Boolean(q.mustAsk)
+        : whoFilter === "reserve"
+          ? Boolean(q.backup)
+          : whoFilter === "none"
+            ? !askList(q.askWho).length
+            : askList(q.askWho).includes(whoFilter);
 
   // How long the list runs. Backups are left out of it on purpose: they are
   // the ones held back for if the room goes quiet, so counting them would
@@ -948,10 +958,13 @@ export function QuestionsTab({
       const at = picked.map((q) => q.section).lastIndexOf(where.section);
       reorder(id, at < 0 ? 0 : at >= from ? at : at + 1, where.section);
     } else {
-      reorder(
-        id,
-        where === "top" ? 0 : where === "bottom" ? picked.length - 1 : where === "up" ? from - 1 : where === "down" ? from + 1 : where - 1,
-      );
+      // Top, bottom and the numbers mean of what is on screen, so "to the top"
+      // with Must ask showing makes it the first must-ask.
+      const shown = picked.filter(inFilter);
+      const here = shown.findIndex((q) => q.id === id);
+      const want = where === "top" ? 0 : where === "bottom" ? shown.length - 1 : where === "up" ? here - 1 : where === "down" ? here + 1 : where - 1;
+      const target = shown[Math.max(0, Math.min(shown.length - 1, want))];
+      if (target) reorder(id, picked.indexOf(target));
     }
     requestAnimationFrame(() =>
       document.querySelector(`[data-qrow="${id}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }),
@@ -975,7 +988,10 @@ export function QuestionsTab({
     d.x = x;
     d.y = y;
     d.drop = null;
-    const from = pickedRef.current.findIndex((q) => q.id === id);
+    // The rows on screen, which a filter makes a part of the list. Only their
+    // order changes: the questions the filter hides stay where they are.
+    const ids = [...document.querySelectorAll<HTMLElement>("[data-listrow]")].map((r) => r.dataset.qrow || "");
+    const from = ids.indexOf(id);
     const place = () => {
       const rows = [...document.querySelectorAll<HTMLElement>("[data-listrow]")];
       let at = rows.length;
@@ -1015,8 +1031,10 @@ export function QuestionsTab({
       if (commit && at !== null) {
         const list = pickedRef.current;
         // It joins the section of the question it lands above.
-        const target = list[at] ?? list[list.length - 1];
-        reorderRef.current(id, at > from ? at - 1 : at, target?.section || "");
+        const target = list.find((q) => q.id === (ids[at] ?? ids[ids.length - 1]));
+        const slot = list.findIndex((q) => q === target) + (at < ids.length ? 0 : 1);
+        const start = list.findIndex((q) => q.id === id);
+        reorderRef.current(id, slot > start ? slot - 1 : slot, target?.section || "");
       }
     };
     const up = () => stop(true);
@@ -1659,6 +1677,11 @@ export function QuestionsTab({
                 {c.label} <span className="tabular-nums opacity-70">{c.n}</span>
               </button>
             ))}
+            {whoFilter && picked.some(inFilter) && (
+              <span className="w-full pt-0.5 text-muted">
+                Numbered in the order you&apos;ll ask them. Drag to change it; the rest of your list stays where it is.
+              </span>
+            )}
           </div>
         )}
         <div className="p-3">
@@ -1674,17 +1697,7 @@ export function QuestionsTab({
                 picked.filter((q) => q.section === sec && !q.backup).reduce((n, q) => n + minutesFor(q, panel.length, timing), 0);
               const shown = picked
                 .map((q, i) => ({ q, i }))
-                .filter(({ q }) =>
-                  !whoFilter
-                    ? true
-                    : whoFilter === "must"
-                      ? Boolean(q.mustAsk)
-                      : whoFilter === "reserve"
-                        ? Boolean(q.backup)
-                        : whoFilter === "none"
-                          ? !askList(q.askWho).length
-                          : askList(q.askWho).includes(whoFilter),
-                );
+                .filter(({ q }) => inFilter(q));
               if (!shown.length)
                 return (
                   <li className="px-1 py-2 text-sm text-muted">
@@ -1697,7 +1710,7 @@ export function QuestionsTab({
                           : `Nothing is put to ${whoFilter} yet. Open a question and press their name.`}
                   </li>
                 );
-              return shown.map(({ q, i }, k) => {
+              return shown.map(({ q }, k) => {
                 const heading = q.section && q.section !== shown[k - 1]?.q.section ? q.section : null;
                 const open = !compact || openRows.has(q.id) || editingId === q.id || openNote === q.id;
                 const asked = askList(q.askWho);
@@ -1715,9 +1728,9 @@ export function QuestionsTab({
                       data-qrow={q.id}
                       data-listrow
                       className={`group/row rounded-xl border transition ${q.backup ? "bg-canvas/50" : "bg-surface"} ${
-                        dropAt === i
+                        dropAt === k
                           ? "shadow-[0_-4px_0_0_var(--accent)]"
-                          : dropAt === picked.length && i === picked.length - 1
+                          : dropAt === shown.length && k === shown.length - 1
                             ? "shadow-[0_4px_0_0_var(--accent)]"
                             : ""
                       } ${
@@ -1731,21 +1744,19 @@ export function QuestionsTab({
                       <div className="flex items-start gap-1.5 p-2.5">
                         {/* Pointer events rather than HTML5 drag, so this works
                             with a finger; near the edge it scrolls. */}
-                        {!whoFilter && (
-                          <button
-                            type="button"
-                            aria-label="Drag to reorder"
-                            title="Drag to reorder, or use the … menu to move it to the top"
-                            onPointerDown={(e) => {
-                              e.preventDefault();
-                              startDrag(q.id, e.currentTarget, e.clientX, e.clientY);
-                            }}
-                            className="mt-0.5 shrink-0 cursor-grab touch-none rounded-md p-0.5 text-muted/60 transition hover:text-ink active:cursor-grabbing"
-                          >
-                            <GripVertical size={15} />
-                          </button>
-                        )}
-                        <span className="mt-px w-6 shrink-0 text-right text-sm font-semibold tabular-nums text-muted">{i + 1}</span>
+                        <button
+                          type="button"
+                          aria-label="Drag to reorder"
+                          title="Drag to reorder, or use the … menu to move it to the top"
+                          onPointerDown={(e) => {
+                            e.preventDefault();
+                            startDrag(q.id, e.currentTarget, e.clientX, e.clientY);
+                          }}
+                          className="mt-0.5 shrink-0 cursor-grab touch-none rounded-md p-0.5 text-muted/60 transition hover:text-ink active:cursor-grabbing"
+                        >
+                          <GripVertical size={15} />
+                        </button>
+                        <span className="mt-px w-6 shrink-0 text-right text-sm font-semibold tabular-nums text-muted">{k + 1}</span>
                         <div className="min-w-0 flex-1">
                           {editingId === q.id ? (
                             <QuestionEditor
@@ -1914,8 +1925,8 @@ export function QuestionsTab({
                                 </MenuItem>
                                 <div className="my-1 border-t border-border" />
                                 <MoveItems
-                                  index={i}
-                                  count={picked.length}
+                                  index={k}
+                                  count={shown.length}
                                   sections={sections}
                                   current={q.section}
                                   onMove={(to) => {
