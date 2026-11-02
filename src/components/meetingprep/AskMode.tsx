@@ -8,7 +8,7 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, ListChecks, Star, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
-import { stripAskedQuestion, type QuestionItem } from "@/lib/meetingprep/types";
+import { stripAskedQuestion, type QuestionItem, type QuestionOption } from "@/lib/meetingprep/types";
 
 /**
  * Ask mode: the view you have open while the meeting is happening.
@@ -31,6 +31,7 @@ export function AskMode({
   panel = [],
   onToggleAsked,
   onResetTicks,
+  onUseKept,
 }: {
   onClose: () => void;
   /** The subject, on screen while you are standing in front of the room. */
@@ -41,6 +42,8 @@ export function AskMode({
   panel?: string[];
   onToggleAsked: (q: QuestionItem) => void;
   onResetTicks: () => void;
+  /** Swaps a kept second question in for the main one. */
+  onUseKept?: (q: QuestionItem, o: QuestionOption) => void;
 }) {
   // In the room you may only want the must-asks, or one person's share.
   const [show, setShow] = useState<string>("all");
@@ -217,11 +220,21 @@ export function AskMode({
               <div className="mt-6 rounded-xl border border-border bg-surface p-4">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Or ask</p>
                 {(cur.options || [])
-                  .filter((o) => o.keep)
-                  .map((o) => (
-                    <p key={o.text} className="mt-1.5 text-base leading-snug text-ink/75 sm:text-lg">
-                      {o.text}
-                    </p>
+                  .filter((o) => o.keep && o.text.trim())
+                  .map((o, i) => (
+                    <div key={i} className="mt-1.5">
+                      {o.setup && <p className="text-sm leading-relaxed text-muted">{o.setup}</p>}
+                      <p className="text-base leading-snug text-ink/75 sm:text-lg">{o.text}</p>
+                      {onUseKept && (
+                        <button
+                          type="button"
+                          onClick={() => onUseKept(cur, o)}
+                          className="mt-0.5 text-xs font-medium text-[var(--accent)] hover:underline"
+                        >
+                          Use this one instead
+                        </button>
+                      )}
+                    </div>
                   ))}
               </div>
             )}
@@ -388,9 +401,9 @@ function AskRow({
           </span>
         )}
         {(q.options || [])
-          .filter((o) => o.keep)
-          .map((o) => (
-            <span key={o.text} className="mt-1 block text-sm text-muted">
+          .filter((o) => o.keep && o.text.trim())
+          .map((o, i) => (
+            <span key={i} className="mt-1 block text-sm text-muted">
               Or: {o.text}
             </span>
           ))}

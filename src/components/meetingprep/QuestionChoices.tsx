@@ -10,6 +10,7 @@
 
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
+import { Textarea } from "@/components/ui/Input";
 import type { QuestionOption, SharperQuestion } from "@/lib/meetingprep/types";
 
 type Holder = {
@@ -35,6 +36,15 @@ export function backupsOf(x: { options?: QuestionOption[] }): QuestionOption[] {
   return (x.options || []).filter((o) => o.keep);
 }
 
+/**
+ * Whether two options are the same one. The setup counts: a rework can leave
+ * the question word for word and change only what leads into it, so matching
+ * on the words alone kept, swapped and dropped the wrong one.
+ */
+export function sameOption(a: Pick<QuestionOption, "text" | "setup">, b: Pick<QuestionOption, "text" | "setup">): boolean {
+  return a.text === b.text && (a.setup || "") === (b.setup || "");
+}
+
 /** What to save when an option is picked: it becomes the question, and the old question becomes an option. */
 export function pickOption(x: Holder, o: QuestionOption) {
   // A version written for particular panelists makes the question theirs:
@@ -50,7 +60,9 @@ export function pickOption(x: Holder, o: QuestionOption) {
     optionChosen: true,
     options: [
       { kind: "Yours before", text: x.text, followUp: x.followUp, forWhom: x.forWhom || "", ...(o.setup ? { setup: x.setup || "" } : {}) },
-      ...choicesOf(x).filter((c) => c.text !== o.text && c.text !== x.text),
+      ...choicesOf(x).filter(
+        (c) => !sameOption(c, o) && !(c.text === x.text && (!c.setup || c.setup === (x.setup || ""))),
+      ),
     ],
   };
 }
@@ -59,8 +71,39 @@ export function pickOption(x: Holder, o: QuestionOption) {
 function keepOption(x: Holder, o: QuestionOption, keep: boolean) {
   return {
     suggested: undefined,
-    options: choicesOf(x).map((c) => (c.text === o.text ? { ...c, keep } : c)),
+    options: choicesOf(x).map((c) => (sameOption(c, o) ? { ...c, keep } : c)),
   };
+}
+
+/**
+ * Swap a kept second question in. The one it replaces stays kept in its place,
+ * not lost among the versions, and only that one: the older versions under it
+ * are not things the writer asked to keep.
+ */
+export function swapKept(x: Holder, o: QuestionOption) {
+  const next = pickOption(x, o);
+  next.options = next.options.map((c, i) => (i === 0 ? { ...c, keep: true, kind: "Kept" } : c));
+  return next;
+}
+
+/** The words of a kept second question, for changing without swapping it in. */
+export function KeptFields({ option, onChange }: { option: QuestionOption; onChange: (p: Partial<QuestionOption>) => void }) {
+  return (
+    <div className="space-y-2 rounded-md border border-border bg-surface p-2">
+      <Textarea
+        label="Also kept, if that falls flat"
+        value={option.text}
+        onChange={(e) => onChange({ text: e.target.value })}
+        className="min-h-14"
+      />
+      <Textarea
+        label="Its own setup (leave empty to use the main one)"
+        value={option.setup || ""}
+        onChange={(e) => onChange({ setup: e.target.value })}
+        className="min-h-14"
+      />
+    </div>
+  );
 }
 
 export function QuestionChoices({
@@ -68,6 +111,7 @@ export function QuestionChoices({
   busy = false,
   onPick,
   onWrite,
+  onSeparate,
   fold = false,
   startOpen = false,
 }: {
@@ -76,6 +120,8 @@ export function QuestionChoices({
   onPick: (patch: Partial<Holder>) => void;
   /** Writes options for a question that has none. */
   onWrite?: () => void;
+  /** Takes a kept second question out and makes it a question of its own. */
+  onSeparate?: (o: QuestionOption) => void;
   /** Keep the versions behind a button until asked for. On the list eight
    *  open versions under one question were most of the page. */
   fold?: boolean;
@@ -86,41 +132,70 @@ export function QuestionChoices({
   const kept = opts.filter((o) => o.keep);
   const rest = opts.filter((o) => !o.keep);
   const [shown, setShown] = useState(startOpen);
+  const [editing, setEditing] = useState<number | null>(null);
   const open = shown || (!fold && !x.optionChosen);
 
   return (
     <>
       {kept.length > 0 && (
         <ul className="mt-1.5 space-y-1">
-          {kept.map((o) => (
-            <li key={o.text} className="text-sm">
-              <p className="text-ink">
-                <span className="mr-1.5 text-[11px] font-semibold text-emerald-700">Also kept, if that falls flat:</span>
-                {o.text}
-              </p>
-              {/* Either one can end up the question: this swaps them, and the
-                  one it replaces stays kept in its place. */}
-              <div className="mt-0.5 flex gap-3 text-xs font-medium">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = pickOption(x, o);
-                    // The question it replaces is kept as the second way, not lost among the versions.
-                    next.options = next.options.map((c) => (c.kind === "Yours before" ? { ...c, keep: true, kind: "Kept" } : c));
-                    onPick(next);
-                  }}
-                  className="text-[var(--accent)] hover:underline"
-                >
-                  Use this one instead
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onPick(keepOption(x, o, false))}
-                  className="text-muted hover:text-ink hover:underline"
-                >
-                  Don&apos;t keep it
-                </button>
-              </div>
+          {kept.map((o, i) => (
+            // By place: the key must not change as its words are typed.
+            <li key={i} className="text-sm">
+              {editing === i ? (
+                <>
+                  <KeptFields
+                    option={o}
+                    onChange={(p) => onPick({ suggested: undefined, options: opts.map((c) => (c === o ? { ...c, ...p } : c)) })}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setEditing(null)}
+                    className="mt-1 text-xs font-medium text-[var(--accent)] hover:underline"
+                  >
+                    Done
+                  </button>
+                </>
+              ) : (
+                <>
+                  <p className="text-[11px] font-semibold text-emerald-700">Also kept, if that falls flat:</p>
+                  {/* A version can differ only in its setup, so without this
+                      it read as the same question twice. */}
+                  {o.setup && <p className="leading-relaxed text-ink/65">{o.setup}</p>}
+                  <p className="text-ink">{o.text}</p>
+                  {/* Either one can end up the question. */}
+                  <div className="mt-0.5 flex flex-wrap gap-x-3 text-xs font-medium">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditing(null);
+                        onPick(swapKept(x, o));
+                      }}
+                      className="text-[var(--accent)] hover:underline"
+                    >
+                      Use this one instead
+                    </button>
+                    <button type="button" onClick={() => setEditing(i)} className="text-muted hover:text-ink hover:underline">
+                      Edit
+                    </button>
+                    {onSeparate && o.text !== x.text && (
+                      <button type="button" onClick={() => onSeparate(o)} className="text-muted hover:text-ink hover:underline">
+                        Make it its own question
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditing(null);
+                        onPick(keepOption(x, o, false));
+                      }}
+                      className="text-muted hover:text-ink hover:underline"
+                    >
+                      Don&apos;t keep it
+                    </button>
+                  </div>
+                </>
+              )}
             </li>
           ))}
         </ul>
@@ -170,7 +245,7 @@ export function QuestionChoices({
               so the eye reads the question rather than a column of links. */}
           <ul className="mt-1 divide-y divide-border">
             {rest.map((o) => (
-              <li key={o.text} className="py-2 first:pt-1 last:pb-0">
+              <li key={`${o.setup || ""}|${o.text}`} className="py-2 first:pt-1 last:pb-0">
                 {/* A version rewritten for particular panelists says so:
                     without it, it read as the same question reworded. */}
                 {o.kind.startsWith("For ") && (

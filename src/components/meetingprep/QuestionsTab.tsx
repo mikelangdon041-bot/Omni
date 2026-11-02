@@ -49,7 +49,7 @@ import {
   Search,
 } from "lucide-react";
 import { AskMode } from "@/components/meetingprep/AskMode";
-import { AskWho, ForChip, QuestionChoices, askList, choicesOf, panelNames } from "@/components/meetingprep/QuestionChoices";
+import { AskWho, ForChip, KeptFields, QuestionChoices, askList, choicesOf, panelNames, pickOption, sameOption, swapKept } from "@/components/meetingprep/QuestionChoices";
 import { ReviewPanel } from "@/components/meetingprep/ReviewPanel";
 import { useReview } from "@/lib/meetingprep/useReview";
 import { Button } from "@/components/ui/Button";
@@ -60,7 +60,7 @@ import { useToast } from "@/components/ui/Feedback";
 import { htmlToPlain } from "@/lib/writer/types";
 import type { SaveState } from "@/lib/meetingprep/hooks";
 import { matchSource, withReading } from "@/lib/meetingprep/reading";
-import type { ReadingSource } from "@/lib/meetingprep/types";
+import type { QuestionOption, ReadingSource } from "@/lib/meetingprep/types";
 
 // The reading list, for the source line under a question to link into.
 // Context rather than a prop: that line sits several components deep.
@@ -595,6 +595,36 @@ export function QuestionsTab({
   }
 
   /** Before adding a question: is it here already? Handles it and says so. */
+  /** A kept second question becomes a card of its own, straight after the first. */
+  function splitOff(q: QuestionItem, o: QuestionOption) {
+    if (alreadyHere(o.text)) return;
+    setItems(
+      items.flatMap((x) =>
+        x.id !== q.id
+          ? [x]
+          : [
+              { ...x, options: (x.options || []).filter((c) => !sameOption(c, o)) },
+              {
+                ...x,
+                id: newId(),
+                text: o.text,
+                followUp: o.followUp || x.followUp,
+                setup: o.setup || x.setup,
+                forWhom: o.forWhom || x.forWhom,
+                options: undefined,
+                suggested: undefined,
+                optionChosen: undefined,
+                mustAsk: false,
+                backup: false,
+                asked: false,
+                rank: 0,
+                order: x.order + 0.5,
+              },
+            ],
+      ),
+    );
+  }
+
   function alreadyHere(text: string): boolean {
     const dup = sameQuestion(items, text);
     if (!dup) return false;
@@ -1843,6 +1873,7 @@ export function QuestionsTab({
                                     busy={versioningIds.includes(q.id)}
                                     onPick={(p) => patch(q.id, p)}
                                     onWrite={() => void sharpen([q])}
+                                    onSeparate={(o) => splitOff(q, o)}
                                   />
                                   {q.setup === "" && (
                                     <button
@@ -2046,11 +2077,14 @@ export function QuestionsTab({
                         compact && !openRows.has(q.id) ? (
                           <button type="button" onClick={() => toggleRow(q.id)} className="block w-full text-left" title="Open it: setup, probe, other ways">
                             <p className="text-sm text-ink">{q.text}</p>
-                            {q.forWhom && (
-                              <span className="mt-1 inline-block">
-                                <ForChip who={q.forWhom} />
-                              </span>
-                            )}
+                            <span className="mt-1 flex flex-wrap items-center gap-1.5 empty:hidden">
+                              {q.forWhom && <ForChip who={q.forWhom} />}
+                              {(q.options || []).some((o) => o.keep) && (
+                                <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800">
+                                  + a second way kept
+                                </span>
+                              )}
+                            </span>
                           </button>
                         ) : (
                         <>
@@ -2063,6 +2097,7 @@ export function QuestionsTab({
                         onWriteVersions={() => void sharpen([q])}
                         startOpen={freshVersions.has(q.id)}
                         onToggle={compact ? () => toggleRow(q.id) : undefined}
+                        onSeparate={(o) => splitOff(q, o)}
                       />
                           <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted">
                             <AskWho
@@ -2196,6 +2231,7 @@ export function QuestionsTab({
           panel={panel}
           onToggleAsked={(q) => patch(q.id, { asked: !q.asked })}
           onResetTicks={() => setItems(items.map((q) => ({ ...q, asked: false })))}
+          onUseKept={(q, o) => patch(q.id, swapKept(q, o))}
         />
       )}
 
@@ -2235,36 +2271,37 @@ export function QuestionsTab({
         standing={guidance}
         onClose={() => setReworkId(null)}
         onApply={(text, followUp, setup, forWho) => {
-          if (reworkId) patch(reworkId, { text, followUp, ...(setup ? { setup } : {}), ...(forWho ? { forWhom: forWho } : {}) });
+          const q = live.find((x) => x.id === reworkId);
+          // Through the same swap as anywhere else, so the words it replaces
+          // stay under the question instead of being gone.
+          if (q) patch(q.id, pickOption(q, { kind: "Reworked", text, followUp, setup, forWhom: forWho || undefined }));
           setReworkId(null);
           toast("success", "Swapped in");
         }}
         onAdd={(text, followUp, setup, forWho) => {
-          if (alreadyHere(text)) return;
-          const from = live.find((x) => x.id === reworkId);
-          const maxOrder = picked.length ? Math.max(...picked.map((p) => p.order)) : -1;
-          setItems([
-            ...items,
-            {
-              id: newId(),
-              text,
-              category: from?.category || "Mine",
-              why: from?.why || "",
-              followUp,
-              setup: setup || from?.setup,
-              forWhom: forWho || from?.forWhom || "",
-              rank: 0,
-              // Straight into the list: they said they wanted this one, so
-              // making them go and find it in the suggestions is a step for
-              // nothing.
-              picked: true,
-              backup: false,
-              asked: false,
-              order: maxOrder + 1,
-              source: "ai",
+          // Kept under this question, the same as "Keep both". It used to make
+          // a new card at the end of the list, so nothing appeared here, and a
+          // version with a new setup was turned away as a duplicate of itself.
+          const id = reworkId;
+          if (!id) return;
+          const fresh = latest.current.questions?.items || [];
+          save({
+            questions: {
+              ...latest.current.questions,
+              items: fresh.map((x) => {
+                if (x.id !== id) return x;
+                const have = x.options || [];
+                const it = { text, setup };
+                return {
+                  ...x,
+                  options: have.some((o) => sameOption(o, it))
+                    ? have.map((o) => (sameOption(o, it) ? { ...o, keep: true } : o))
+                    : [...have, { kind: "Kept", text, followUp, setup: setup || undefined, forWhom: forWho, keep: true, rework: true }],
+                };
+              }),
             },
-          ]);
-          toast("success", "Added to your list");
+          });
+          toast("success", "Kept under this question");
         }}
         onSave={(vs) => {
           // Kept on the question: closing the window used to lose them.
@@ -2613,6 +2650,7 @@ function SpokenQuestion({
   onPatch,
   versioning = false,
   onWriteVersions,
+  onSeparate,
   startOpen = false,
   onToggle,
 }: {
@@ -2626,6 +2664,7 @@ function SpokenQuestion({
   onPatch?: (p: Partial<QuestionItem>) => void;
   versioning?: boolean;
   onWriteVersions?: () => void;
+  onSeparate?: (o: QuestionOption) => void;
 }) {
   return (
     <>
@@ -2649,6 +2688,7 @@ function SpokenQuestion({
           busy={versioning}
           onPick={(p) => onPatch(p)}
           onWrite={onWriteVersions}
+          onSeparate={onSeparate}
         />
       )}
       {/* Left bare on purpose ("") is a judgement, and the writer may not
@@ -2793,7 +2833,7 @@ function ReworkModal({
   standing: string;
   onClose: () => void;
   onApply: (text: string, followUp: string, setup?: string, forWhom?: string) => void;
-  /** Keep a version as well as, rather than instead of, what is there. */
+  /** Keep a version under the question as well as, rather than instead of, what is there. */
   onAdd: (text: string, followUp: string, setup?: string, forWhom?: string) => void;
   /** Keeps what came back on the question, so it is there next time. */
   onSave: (vs: QuestionVariant[]) => void;
@@ -2820,7 +2860,7 @@ function ReworkModal({
     const t = (window.getSelection()?.toString() || "").replace(/\s+/g, " ").trim();
     setSel(t.length >= 2 ? t : "");
   };
-  const [added, setAdded] = useState<number[]>([]);
+  const keptHere = (v: QuestionVariant) => (q?.options || []).some((o) => o.keep && sameOption(o, v));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const pct = useProgress(busy, 20000);
@@ -2834,8 +2874,8 @@ function ReworkModal({
     return n ? Math.min(8, Math.max(1, n)) : undefined;
   }
 
-  /** more: keep what is showing and add new ones underneath. */
-  async function run(more = false) {
+  /** What is showing stays, with the new ones on top. */
+  async function run() {
     if (!q) return;
     setBusy(true);
     setError("");
@@ -2851,7 +2891,6 @@ function ReworkModal({
       onSave(got);
       // New ones on top; the earlier ones stay underneath rather than vanish.
       setOptions((o) => [...got, ...o]);
-      if (!more) setAdded([]);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -3011,15 +3050,12 @@ function ReworkModal({
                       <Button
                         size="sm"
                         variant="ghost"
-                        disabled={added.includes(i)}
-                        onClick={() => {
-                          onAdd(v.text, v.followUp || "", v.setup || q.setup, v.forWhom);
-                          setAdded((a) => [...a, i]);
-                        }}
+                        disabled={keptHere(v)}
+                        onClick={() => onAdd(v.text, v.followUp || "", v.setup, v.forWhom)}
                       >
-                        {added.includes(i) ? (
+                        {keptHere(v) ? (
                           <>
-                            <Check size={13} /> Added
+                            <Check size={13} /> Kept
                           </>
                         ) : (
                           <>
@@ -3031,10 +3067,9 @@ function ReworkModal({
                   </li>
                 ))}
               </ul>
-              {added.length > 0 && (
+              {options.some(keptHere) && (
                 <p className="mt-2 text-xs text-muted">
-                  {added.length} added to your list. The original is still here until you
-                  swap it or close.
+                  Kept under your question, to ask if it falls flat. You can swap it in or edit it there.
                 </p>
               )}
             </>
@@ -3045,7 +3080,7 @@ function ReworkModal({
               Keep it as it is
             </Button>
             {options.length > 0 && (
-              <Button variant="secondary" disabled={busy} onClick={() => void run(true)} title="Keeps these and adds new ones">
+              <Button variant="secondary" disabled={busy} onClick={() => void run()} title="Keeps these and adds new ones">
                 <Plus size={14} /> More
               </Button>
             )}
@@ -3618,6 +3653,16 @@ function QuestionEditor({
         onChange={(e) => onPatch({ followUp: e.target.value })}
         placeholder="What you ask next if they give you nothing"
       />
+      {/* Edit the words reaches every word on the card, the kept question too. */}
+      {(q.options || []).map((o, i) =>
+        o.keep ? (
+          <KeptFields
+            key={i}
+            option={o}
+            onChange={(p) => onPatch({ options: (q.options || []).map((c, k) => (k === i ? { ...c, ...p } : c)) })}
+          />
+        ) : null,
+      )}
       <Input
         label="Who to put it to"
         value={q.forWhom}
