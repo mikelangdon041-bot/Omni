@@ -832,6 +832,14 @@ export function QuestionsTab({
       toast("info", "Those questions are not in the list any more.");
       return;
     }
+    // A probe note changes the probe and nothing else: sent through the
+    // rewrite, it would have replaced a question they had finished.
+    if (n.action === "probe" && n.probe) {
+      setItems(items.map((q) => (ids.includes(q.id) ? { ...q, followUp: n.probe! } : q)));
+      review.patchNote(n.id, { done: true });
+      toast("success", "Probe changed");
+      return;
+    }
     if (n.action === "bin") {
       setItems(items.map((q) => (ids.includes(q.id) ? { ...q, deleted: true, picked: false } : q)));
       review.patchNote(n.id, { done: true });

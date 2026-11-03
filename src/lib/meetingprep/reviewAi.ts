@@ -37,7 +37,9 @@ export interface WrittenNote {
    */
   keepRef: number;
   /** What to do to those questions, when it is something safe to do. */
-  action?: "rewrite" | "bin";
+  action?: "rewrite" | "bin" | "probe";
+  /** For a note about a probe: the new probe, word for word. Only the probe changes. */
+  probe?: string;
   /**
    * The exact lines in the brief the note is about, word for word. "Cut the
    * editing note left inside a question" told the writer a line existed and
@@ -71,7 +73,8 @@ const REVIEW_SCHEMA = {
           severity: { type: "string" as const, enum: ["high", "medium", "low"] },
           questionRefs: { type: "array" as const, items: { type: "number" as const } },
           keepRef: { type: "number" as const },
-          action: { type: "string" as const, enum: ["rewrite", "bin", ""] },
+          action: { type: "string" as const, enum: ["rewrite", "bin", "probe", ""] },
+          probe: { type: "string" as const },
           quotes: { type: "array" as const, items: { type: "string" as const } },
         },
         required: [
@@ -84,6 +87,7 @@ const REVIEW_SCHEMA = {
           "questionRefs",
           "keepRef",
           "action",
+          "probe",
           "quotes",
         ],
         additionalProperties: false,
@@ -107,7 +111,10 @@ export async function reviewPrep({
   questionCount = 0,
   sectionKeys = [],
   research = "",
+  planCount = 0,
 }: {
+  /** How many of the numbered questions are the running order; the rest is the bank. */
+  planCount?: number;
   meeting: MeetingPayload;
   kolBlock?: string;
   /** The brief as plain text, box by box, each headed by its key and title. */
@@ -125,9 +132,9 @@ export async function reviewPrep({
     research && `The research this pack was built from:\n${research.slice(0, 12000)}`,
     briefText && `THE BRIEF AS IT STANDS:\n${briefText.slice(0, 24000)}`,
     questionsText &&
-      `THE QUESTION BANK AS IT STANDS, numbered. Use these numbers in questionRefs whenever a note is about the questions:\n${questionsText.slice(
+      `THEIR QUESTIONS AS THEY STAND, numbered. Use these numbers in questionRefs whenever a note is about the questions:\n${questionsText.slice(
         0,
-        12000,
+        30000,
       )}`,
   ]
     .filter(Boolean)
@@ -147,11 +154,13 @@ What a good note is about:
 - Order and emphasis. What they open on, what comes too late to matter, which section is doing the real work and is buried under one that isn't, what they should cut to make room.
 - The gap. Something this meeting obviously needs that nothing in the pack covers, given the subject and who is in the room.
 - The weak part. A section that is vague where it should be concrete, that gives direction without the words, that would read the same for any meeting in any industry, or that contradicts another section.
-- Repetition. Three questions that are the same question, a point made in two boxes, a talking point that is already in the agenda.
+- Repetition. Two questions in the RUNNING ORDER that ask the same thing, a point made in two boxes, a talking point that is already in the agenda. Two questions are not duplicates because they share a subject: they are duplicates only when the answer to one would answer the other. A must-ask and a reserve question on a nearby theme is a backup, not a duplicate.
+- The probes. Each question in the running order has a probe, the follow-up for when the answer is thin. A probe that no longer fits its question (it follows a question that has since been rewritten, it asks what the question already asked, it can be answered yes or no, it sounds like an accusation, or it points at a source the room has not heard of) is worth a note with action "probe": questionRefs is that one question, and probe is the new probe word for word, open, friendly and about what this question asks now. One note per probe. Never "rewrite" for a probe: that replaces the whole question.
 - Risk. Something in here they would regret saying out loud: a claim that needs checking first, a number with no source, a line that assumes a fact nobody gave.
 - What they will actually do in the room. Where the pack will fail them under pressure: no plan for the quiet person, nothing to say if the first question lands badly, no way back if they run short of time.
 
 What a note is NEVER about:
+- The bank. Questions under THE BANK are suggestions they did not pick and will not ask. Never a note about cutting, tidying, merging or de-duplicating them. They may only appear as a better replacement for a question in the running order, named in keepRef.
 - Praise. If a section is good, say nothing about it. There is no "strengths" note.
 - Generic meeting advice ("listen actively", "build rapport", "be prepared"). If the note would be true of every meeting ever held, it is not a note.
 - Formatting, length, tone, or the writing itself, unless it changes what happens in the room.
@@ -160,7 +169,7 @@ What a note is NEVER about:
 Fields:
 - title: the advice itself, as one short instruction the writer could act on. Start with a verb. Under 12 words. Not a question, not a heading.
 - detail: one or two sentences on why it matters here and what good looks like. Concrete. Name the actual section, question or moment you mean.
-- target: exactly one of — "section:<key>" using a key from the list of sections below, or "questions" for the question bank, or "setup" for something missing from what they told us, or "" when it is about the pack as a whole. Never invent a section key.
+- target: "questions" for every note about the questions in the running order, their probes included. Otherwise exactly one of — "section:<key>" using a key from the list of sections below, or "questions" for the question bank, or "setup" for something missing from what they told us, or "" when it is about the pack as a whole. Never invent a section key.
 - targetLabel: how to say that target to a person ("Agenda", "Your questions", "Setup"). Two or three words.
 - fix: the same advice rewritten as an instruction addressed to whoever will rewrite that section, specific enough to act on without the rest of this note. This gets handed over verbatim, so no "consider" and no "maybe" — say what to do.
 - severity: "high" if the meeting goes materially worse without it, "medium" if it is a real improvement, "low" if it is a tidy-up.
@@ -171,6 +180,7 @@ Fields:
 - action: what should happen to those questions, when it is something that can simply be done.
   - "bin" when the questions themselves should go: duplicates, a question that asks what another already asks, one that no longer fits the subject. List ONLY the ones to remove in questionRefs, never the one that is being kept. Say in the detail which one you are keeping and why. Use it only when your fix is to be rid of the question outright — if the fix says to move it, re-file it, or keep it for somewhere else in the running order, the action is "", because the button would otherwise promise something your own note does not say.
   - "rewrite" when the questions should stay but be asked better, and your fix says how.
+  - "probe" when only the probe should change; see the probes above.
   - "" for everything else, including anything about the ORDER they are asked in. Order is the writer's to arrange, and a note that reshuffles their list out from under them is worse than one that tells them where to drag it.
 - quotes: the exact words in the brief this note is about, so the writer can see what you mean without hunting for it. Copy each one character for character from THE BRIEF AS IT STANDS: the whole sentence or bullet, under 40 words, at most 3. REQUIRED whenever the note is about something specific that is written there: a line, a claim, a duplicated point, the opening of a box, a question inside a brief box. A quote that is not word for word in the brief is thrown away, so never paraphrase. Questions from the numbered bank go in questionRefs, not here. [] only for a note about something missing.
 
@@ -196,8 +206,14 @@ The sections that exist, by key: ${sectionKeys.length ? sectionKeys.join(", ") :
     // A target the model made up would put a "Fix it" button on a box that
     // does not exist, so anything unrecognised falls back to whole-pack.
     const raw = String(n?.target || "").trim();
-    const target =
-      raw === "questions" || raw === "setup" || allowed.has(raw) ? raw : "";
+    // A note that names questions from the running order and says what to do
+    // to them is about the questions, whatever box it was filed under: filed
+    // under a brief section, a probe note lost its "Use this probe" button.
+    const namesPlan =
+      Array.isArray(n?.questionRefs) &&
+      (n.questionRefs as unknown[]).map(Number).some((x) => x >= 1 && (!planCount || x <= planCount)) &&
+      ["probe", "rewrite", "bin"].includes(String(n?.action || ""));
+    const target = namesPlan ? "questions" : raw === "questions" || raw === "setup" || allowed.has(raw) ? raw : "";
     const severity = ["high", "medium", "low"].includes(String(n?.severity))
       ? (String(n.severity) as WrittenNote["severity"])
       : "medium";
@@ -218,15 +234,23 @@ The sections that exist, by key: ${sectionKeys.length ? sectionKeys.join(", ") :
     const rawKeep = Number(n?.keepRef);
     const keepRef =
       Number.isInteger(rawKeep) && rawKeep >= 1 && rawKeep <= questionCount ? rawKeep : 0;
-    const refs = questionRefs.filter((r) => r !== keepRef);
+    // Notes about questions are about the running order. A note that only
+    // names questions from the bank is advice about suggestions they never
+    // picked ("cut the bank"), so it goes.
+    const inPlan = (r: number) => !planCount || r <= planCount;
+    if (planCount && questionRefs.length && !questionRefs.some(inPlan)) continue;
+    const refs = questionRefs.filter((r) => r !== keepRef && inPlan(r));
     const rawAction = String(n?.action || "").trim();
+    const probe = String(n?.probe || "").trim();
     // An action is only ever offered on questions it actually named. Without
     // the numbers there is nothing to do it to, and a button that cannot say
     // what it will change is a button nobody should press.
     const action =
       target === "questions" && refs.length && (rawAction === "rewrite" || rawAction === "bin")
         ? (rawAction as "rewrite" | "bin")
-        : undefined;
+        : target === "questions" && refs.length === 1 && rawAction === "probe" && probe
+          ? ("probe" as const)
+          : undefined;
     const pack = flat(`${briefText}\n${questionsText}`);
     const quotes = (Array.isArray(n?.quotes) ? (n.quotes as unknown[]) : [])
       .map((q) => String(q || "").trim().replace(/^["\u201c]|["\u201d]$/g, ""))
@@ -242,7 +266,98 @@ The sections that exist, by key: ${sectionKeys.length ? sectionKeys.join(", ") :
       severity,
       questionRefs: refs,
       keepRef,
+      ...(action === "probe" ? { probe } : {}),
       action,
+    });
+  }
+  return out;
+}
+
+const PROBES_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    probes: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: {
+          index: { type: "number" as const },
+          works: { type: "boolean" as const },
+          why: { type: "string" as const },
+          probe: { type: "string" as const },
+        },
+        required: ["index", "works", "why", "probe"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["probes"],
+  additionalProperties: false,
+};
+
+/**
+ * Every probe in the running order, checked against its question as it is
+ * now. The read-through gives a handful of notes about the whole pack, so a
+ * probe left behind by a rewritten question came up one run and not the
+ * next. This looks at every one, every time, and writes the replacement.
+ */
+export async function reviewProbes({
+  meeting,
+  plan,
+}: {
+  meeting: MeetingPayload;
+  plan: { setup: string; text: string; probe: string; who: string }[];
+}): Promise<WrittenNote[]> {
+  const list = plan.map((q, i) => ({ ...q, n: i + 1 })).filter((q) => q.text.trim());
+  if (!list.length) return [];
+  const res = await anthropic().messages.create({
+    model: WRITER_MODEL,
+    max_tokens: 6000,
+    output_config: { format: { type: "json_schema", schema: PROBES_SCHEMA } },
+    system: `You check the probes a moderator will use on a panel. A probe is the follow-up they ask, out loud, when the first answer to a question is thin.
+
+${SEAT_RULE}
+
+A probe works when it:
+- follows THIS question as it is now, and digs further into what was asked, rather than asking it again or following an older version of the question.
+- is open: it cannot be answered yes or no, and it does not offer two options to pick from.
+- sounds like curiosity, never an accusation or a test: no "be honest", no "are you just guessing", nothing that implies the panelist has been doing it wrong in front of their peers.
+- can be said in one breath, word for word, and needs no source the room has not heard of.
+- fits the person it is put to and what their job lets them answer.
+
+For each question give: index, works, why (when it does not work, one short plain sentence on what is wrong; "" when it works), and probe (when it does not work, the replacement word for word, short, open, warm, about what this question asks; "" when it works). Be strict about the rules above and do not rewrite a probe that already works just to improve its wording.
+
+Plain prose. Never an em dash or en dash.`,
+    messages: [
+      {
+        role: "user",
+        content: `${meetingContext(meeting, "")}\n\nTHE RUNNING ORDER:\n${list
+          .map((q) => `${q.n}.${q.who ? ` [for ${q.who}]` : ""}\nSetup: ${q.setup || "(none)"}\nQuestion: ${q.text}\nProbe: ${q.probe || "(none)"}`)
+          .join("\n\n")}`,
+      },
+    ],
+  });
+  if (res.stop_reason === "refusal") return [];
+  const parsed = JSON.parse(firstText(res) || "{}");
+  const out: WrittenNote[] = [];
+  for (const p of Array.isArray(parsed.probes) ? parsed.probes : []) {
+    const n = Number(p?.index);
+    const q = list.find((x) => x.n === n);
+    const probe = String(p?.probe || "").replace(/[\u2013\u2014]/g, ",").trim();
+    if (!q || p?.works || !probe || probe === q.probe) continue;
+    const why = String(p?.why || "").trim();
+    out.push({
+      title: q.probe ? "Change this probe" : "Give this question a probe",
+      detail: why || "The probe no longer fits the question.",
+      target: "questions",
+      targetLabel: "Your questions",
+      fix: `Use this probe: ${probe}`,
+      severity: "medium",
+      questionRefs: [n],
+      keepRef: 0,
+      action: "probe",
+      probe,
+      quotes: [],
     });
   }
   return out;

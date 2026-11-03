@@ -65,10 +65,34 @@ export function useReview({
       // the best the reviewer could manage was "cut the duplicates down to
       // one", which leaves the writer hunting their own list for the pair it
       // had in mind. The same array resolves those numbers back to ids below.
-      const asked = (m.questions?.items || []).filter((q) => !q.deleted);
-      const questionsText = asked
-        .map((q, i) => `${i + 1}. (${q.category}) ${q.text}`)
-        .join("\n");
+      // The running order first, as they will say it: setup, question,
+      // probe, who it is for, must-ask or reserve. Handed the whole bank as
+      // one flat list, the read-through found "duplicates" among suggestions
+      // they never picked, told them to cut the bank, and could not see a
+      // probe to check it.
+      const live = (m.questions?.items || []).filter((q) => !q.deleted);
+      const plan = live.filter((q) => q.picked).sort((a, b) => a.order - b.order);
+      const bank = live.filter((q) => !q.picked);
+      const asked = [...plan, ...bank];
+      const planLine = (q: (typeof plan)[number], i: number) =>
+        [
+          `${i + 1}. ${q.backup ? "[reserve, only if there is time]" : q.mustAsk ? "[must ask]" : "[in the running order]"}${
+            q.askWho ? ` [asked of ${q.askWho}]` : q.forWhom ? ` [for ${q.forWhom}]` : ""
+          }`,
+          q.setup ? `   Setup: ${q.setup}` : "   Setup: (none)",
+          `   Question: ${q.text}`,
+          `   Probe: ${q.followUp || "(none)"}`,
+        ].join("\n");
+      const questionsText = [
+        `THE RUNNING ORDER: what they will actually ask, in this order.\n${plan.map(planLine).join("\n")}`,
+        bank.length
+          ? `THE BANK: suggestions they have NOT picked and will not ask. Not part of the plan; never a note about these.\n${bank
+              .map((q, i) => `${plan.length + i + 1}. ${q.text}`)
+              .join("\n")}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n");
       const res = await fetch("/api/meeting/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -88,11 +112,16 @@ export function useReview({
             objectives: m.objectives,
             background: m.background,
             concerns: m.concerns,
+            // The documents they gave: without them a figure taken from one
+            // was flagged as having no source.
+            documents: (m.documents || []).map((d) => ({ name: d.name, note: d.note, text: d.text, purpose: d.purpose })),
           },
           kolId: m.kol_id || "",
           briefText,
           questionsText,
           questionCount: asked.length,
+          planCount: plan.length,
+          plan: plan.map((q) => ({ setup: q.setup || "", text: q.text, probe: q.followUp || "", who: q.askWho || q.forWhom || "" })),
           sectionKeys: sections.map((s) => s.key),
           research: m.brief?.research?.notes || "",
         }),

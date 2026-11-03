@@ -188,6 +188,12 @@ export function useMpMeeting(id: string, userId: string | null) {
 
   const pendingRef = useRef<Partial<MpMeeting>>({});
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Every edit made while a read-back is on its way. Clicking into the Outlook
+  // pane starts a read-back on focus, before the click lands; the click's edit
+  // then showed, the older row arrived and painted over it, and it came back
+  // only on the next read. "Not needed" notes reappeared that way, and edits
+  // seemed to take a while to show.
+  const sinceReadRef = useRef<Partial<MpMeeting> | null>(null);
 
   const flush = useCallback(async () => {
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -217,9 +223,14 @@ export function useMpMeeting(id: string, userId: string | null) {
   const reload = useCallback(async () => {
     await flush();
     if (deletedRef.current) return;
+    sinceReadRef.current = {};
     const { data } = await supabase.from("mp_meetings").select("*").eq("id", id).maybeSingle();
-    const row = (data as MpMeeting) || null;
-    if (!row) return;
+    const edited = sinceReadRef.current || {};
+    sinceReadRef.current = null;
+    const fetched = (data as MpMeeting) || null;
+    if (!fetched) return;
+    // What they changed while it was on its way wins over the older copy.
+    const row = { ...fetched, ...edited };
     setMeeting(row);
     if (userId) setCached(`mtg:${userId}:${id}`, { _t: Date.now(), row });
   }, [flush, id, userId]);
@@ -282,6 +293,7 @@ export function useMpMeeting(id: string, userId: string | null) {
     (partial: Partial<MpMeeting>) => {
       setMeeting((prev) => (prev ? { ...prev, ...partial } : prev));
       pendingRef.current = { ...pendingRef.current, ...partial };
+      if (sinceReadRef.current) sinceReadRef.current = { ...sinceReadRef.current, ...partial };
       setSaveState("pending");
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => void flush(), 800);

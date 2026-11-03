@@ -279,6 +279,13 @@ export function AskMode({
                     Room for a reserve question: go to it
                   </button>
                 )}
+                {/* Time in hand before a whole new question: the probe, or a
+                    second voice on this one. */}
+                {clock.spare >= 1.5 && (
+                  <span className="text-muted">
+                    {clock.spare >= 3 ? "Ahead: use the probe, or ask another panelist to come in on this one." : "A little ahead: room for the probe."}
+                  </span>
+                )}
                 <button type="button" onClick={() => startClock(false)} className="ml-auto text-muted hover:text-ink hover:underline">
                   Reset clock
                 </button>
@@ -326,18 +333,29 @@ export function AskMode({
 
             {/* Said first, so it reads first, a size down: the question is
                 the line that has to survive a glance. */}
+            {/* Laid out to be said: the setup a sentence a line, so each break
+                is a breath, numbers in bold to land on, then the question.
+                One block of grey was hard to keep your place in. */}
             {stripAskedQuestion(cur.setup, cur.text) && (
-              <p className={`mt-5 text-lg leading-relaxed text-ink/75 sm:text-xl ${cur.asked ? "opacity-40" : ""}`}>
-                {stripAskedQuestion(cur.setup, cur.text)}
-              </p>
+              <div className={`mt-5 ${cur.asked ? "opacity-40" : ""}`}>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Say first</p>
+                <div className="mt-1.5 space-y-1.5 text-lg leading-relaxed text-ink/80 sm:text-xl">
+                  {sentences(stripAskedQuestion(cur.setup, cur.text)).map((line, i) => (
+                    <p key={i}>
+                      <Spoken text={line} />
+                    </p>
+                  ))}
+                </div>
+              </div>
             )}
-            <p
-              className={`${cur.setup ? "mt-3" : "mt-5"} text-balance text-2xl font-semibold leading-tight tracking-tight text-ink sm:text-[2rem] ${
-                cur.asked ? "opacity-40" : ""
-              }`}
-            >
-              {cur.text}
-            </p>
+            <div className={`${cur.setup ? "mt-5" : "mt-5"} ${cur.asked ? "opacity-40" : ""}`}>
+              {stripAskedQuestion(cur.setup, cur.text) && (
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">Then ask</p>
+              )}
+              <p className="mt-1 text-balance text-2xl font-semibold leading-tight tracking-tight text-ink sm:text-[2rem]">
+                <Spoken text={cur.text} names={panel} />
+              </p>
+            </div>
 
             {(cur.options || []).some((o) => o.keep) && (
               <div className="mt-6 rounded-xl border border-border bg-surface p-4">
@@ -535,5 +553,30 @@ function AskRow({
         )}
       </button>
     </li>
+  );
+}
+
+/** A setup split where you would breathe: one sentence a line. */
+function sentences(t: string): string[] {
+  return t
+    .trim()
+    .split(/(?<=[.!?])\s+(?=[A-Z0-9"\u201c])/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Words to be said, with what to land on marked: numbers and percentages in
+ * bold, and a panelist's name at the start in colour, the cue to turn to them.
+ */
+function Spoken({ text, names = [] }: { text: string; names?: string[] }) {
+  const lead = names.find((n) => n && new RegExp(`^${n.replace(/[^A-Za-z]/g, "")}\\b`, "i").test(text));
+  const rest = lead ? text.slice(lead.length) : text;
+  const parts = rest.split(/(\b\d[\d,.]*(?:\s?(?:percent|%|x|times|billion|million))?)/i);
+  return (
+    <>
+      {lead && <span className="text-[var(--accent)]">{text.slice(0, lead.length)}</span>}
+      {parts.map((p, i) => (i % 2 ? <strong key={i} className="font-semibold text-ink">{p}</strong> : <span key={i}>{p}</span>))}
+    </>
   );
 }

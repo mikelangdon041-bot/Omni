@@ -242,6 +242,14 @@ export function ReviewPanel({
                         )}
                         {text}
                         <Where id={id} where={questionWhere} onShow={onShowQuestion} />
+                        {n.action === "probe" && n.probe && (
+                          <span className="mt-1 block text-ink">
+                            <span className="mr-1 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+                              New probe
+                            </span>
+                            {n.probe}
+                          </span>
+                        )}
                       </li>
                     ) : null;
                   })}
@@ -265,7 +273,9 @@ export function ReviewPanel({
                       ? `Bin ${n.questionIds!.length === 1 ? "it" : `those ${n.questionIds!.length}`}`
                       : n.action === "rewrite"
                         ? `Rewrite ${n.questionIds!.length === 1 ? "it" : `those ${n.questionIds!.length}`}`
-                        : "Do it for me"}
+                        : n.action === "probe"
+                          ? "Use this probe"
+                          : "Do it for me"}
                   </Button>
                 )}
                 <Button size="sm" variant="ghost" onClick={() => onToggleDone(n)}>

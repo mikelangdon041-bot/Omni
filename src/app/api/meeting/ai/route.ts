@@ -38,7 +38,7 @@ import {
   writeSetups,
   writeVariants,
 } from "@/lib/meetingprep/questionsAi";
-import { reviewPrep } from "@/lib/meetingprep/reviewAi";
+import { reviewPrep, reviewProbes } from "@/lib/meetingprep/reviewAi";
 import {
   buildReading,
   digestMaterial,
@@ -414,17 +414,34 @@ export async function POST(req: Request) {
     if (action === "review") {
       const meeting: MeetingPayload = body?.meeting || {};
       const kolBlock = await kolBlockFor(supabase, String(body?.kolId || ""));
-      const notes = await reviewPrep({
+      // The probes get their own look, every one of them, beside the
+      // read-through of the pack.
+      const plan = Array.isArray(body?.plan)
+        ? (body.plan as { setup?: unknown; text?: unknown; probe?: unknown; who?: unknown }[]).slice(0, 40).map((q) => ({
+            setup: String(q?.setup || "").slice(0, 1500),
+            text: String(q?.text || "").slice(0, 600),
+            probe: String(q?.probe || "").slice(0, 600),
+            who: String(q?.who || "").slice(0, 120),
+          }))
+        : [];
+      const probeNotes = plan.length ? reviewProbes({ meeting: body?.meeting || {}, plan }).catch(() => []) : Promise.resolve([]);
+      const packNotes = await reviewPrep({
         meeting,
         kolBlock,
         briefText: String(body?.briefText || "").slice(0, 24000),
-        questionsText: String(body?.questionsText || "").slice(0, 12000),
+        questionsText: String(body?.questionsText || "").slice(0, 30000),
         questionCount: Math.max(0, Math.min(500, Number(body?.questionCount) || 0)),
+        planCount: Math.max(0, Math.min(500, Number(body?.planCount) || 0)),
         sectionKeys: Array.isArray(body?.sectionKeys)
           ? body.sectionKeys.map(String).slice(0, 40)
           : [],
         research: String(body?.research || "").slice(0, 12000),
       });
+      // A probe the read-through already rewrote is not said twice.
+      const fromProbes = (await probeNotes).filter(
+        (p) => !packNotes.some((n) => n.action === "probe" && n.questionRefs[0] === p.questionRefs[0]),
+      );
+      const notes = [...packNotes, ...fromProbes];
       return NextResponse.json({ notes });
     }
 
