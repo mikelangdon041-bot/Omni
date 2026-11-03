@@ -20,6 +20,7 @@ import {
   CircleHelp,
   GripVertical,
   ListChecks,
+  X,
   Pencil,
   Play,
   Plus,
@@ -2305,6 +2306,11 @@ export function QuestionsTab({
         key={reworkId || "none"}
         q={live.find((x) => x.id === reworkId) || null}
         onSplit={(setup, text) => reworkId && patch(reworkId, { setup, text })}
+        onDismiss={(v) => {
+          // Gone for good, unless they kept it: it was saved on the question.
+          const q = live.find((x) => x.id === reworkId);
+          if (q) patch(q.id, { options: (q.options || []).filter((o) => o.keep || !o.rework || !sameOption(o, v)) });
+        }}
         standing={guidance}
         onClose={() => setReworkId(null)}
         onMany={(p) => {
@@ -2999,8 +3005,11 @@ function ReworkModal({
   fetchVariants,
   onMany,
   onSplit,
+  onDismiss,
 }: {
   q: QuestionItem | null;
+  /** Takes a version they do not want off the question. */
+  onDismiss: (v: QuestionVariant) => void;
   /** Makes the lead-in typed into the question its setup. */
   onSplit: (setup: string, text: string) => void;
   /** Their standing instruction, shown so they know it is still on. */
@@ -3275,7 +3284,7 @@ function ReworkModal({
                     >
                       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                         <span className="text-sm font-medium text-ink">{v.angle}</span>
-                        <span className="flex flex-wrap items-center gap-1.5">
+                        <span className="ml-auto flex flex-wrap items-center gap-1.5">
                           {!sameWho(v.forWhom) && <ForChip who={v.forWhom || ""} />}
                           {(setupChanged || textChanged) && (
                             <span
@@ -3286,6 +3295,20 @@ function ReworkModal({
                               {diff ? `${Math.abs(diff)} sec ${diff > 0 ? "shorter" : "longer"}` : "Same length"}
                             </span>
                           )}
+                          <button
+                            type="button"
+                            aria-label="Remove this version"
+                            title="Remove this version"
+                            onClick={() => {
+                              onDismiss(v);
+                              setOptions((all) => all.filter((_, k) => k !== i));
+                              if (i < fresh) setFresh((f) => f - 1);
+                              setEditIdx((k) => (k === null || k === i ? null : k > i ? k - 1 : k));
+                            }}
+                            className="rounded-md p-1 text-muted hover:bg-canvas hover:text-ink"
+                          >
+                            <X size={14} />
+                          </button>
                         </span>
                       </div>
                       {editIdx === i ? (

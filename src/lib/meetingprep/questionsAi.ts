@@ -795,10 +795,11 @@ const VARIANTS_SCHEMA = {
           setup: { type: "string" as const },
           forWhom: { type: "string" as const },
           link: { type: "string" as const },
+          handover: { type: "string" as const },
           changed: { type: "string" as const, enum: ["setup", "question", "both"] },
           group: { type: "string" as const },
         },
-        required: ["angle", "text", "followUp", "setup", "forWhom", "changed", "group", "link"],
+        required: ["angle", "text", "followUp", "setup", "forWhom", "changed", "group", "link", "handover"],
         additionalProperties: false,
       },
     },
@@ -886,6 +887,9 @@ export async function writeVariants({
 }): Promise<QuestionVariant[]> {
   // A shorter setup for a question with none: there is nothing to cut.
   if (!rough && length === "shorter" && part === "setup" && !(question.setup || "").trim()) return [];
+  // What the checks will turn down in the setup as it stands. Told to keep
+  // their words, the model kept "Most teams still" and two of three cuts died.
+  const setupNowProblem = !rough && question.setup ? spokenProblem(question.setup, question.text) : null;
   const res = await anthropic().messages.create({
     // Three short rewrites of a sentence the writer already likes. The heavy
     // model was spending the better part of a minute on it while they sat
@@ -945,7 +949,7 @@ ${rough ? "WHAT TO WRITE. Every question gets a setup of its own, unless it trul
                   length === "longer" ? " beyond what the research says about this same point" : ""
                 }. The versions differ only in what they ${length === "shorter" ? "keep and what they cut" : "add"}, and angle says that ("Keeps the number", "Keeps the image"). Versions they have already seen are other ${
                   length === "shorter" ? "cuts" : "versions"
-                }, not a reason to move further from what they wrote. The cut must still lead into the question: keep the part of the setup the question picks up, the idea or words that make it the obvious next thing to ask. A setup about how people are graded leads into a question about a new KPI; cut the grading and the question arrives as a jump. Its last sentence is the hand-over: it turns toward exactly what the question asks, so the question follows straight on with no gap. Here, a setup that ends on who MSLs end up meeting, followed by a question about a new KPI for the value they bring, is a gap; ending on what the count fails to capture closes it. Before you answer, say each setup and then the question in your head as the room will hear them, and if the question comes out of nowhere, put the link back.${guidance ? " If what the writer wants below asks for something new, it wins." : ""}`
+                }, not a reason to move further from what they wrote. The cut must still lead into the question: keep the part of the setup the question picks up, the idea or words that make it the obvious next thing to ask. A setup about how people are graded leads into a question about a new KPI; cut the grading and the question arrives as a jump. The one thing you may add is the hand-over sentence described under setup below, when the cut no longer reaches the question; it counts toward the length. Before you answer, say each setup and then the question in your head as the room will hear them, and if the question comes out of nowhere, put the link back.${guidance ? " If what the writer wants below asks for something new, it wins." : ""}`
           }`
         : ""
     }
@@ -954,13 +958,20 @@ Fields:
 - angle: three or four words on what this version does differently, so they can choose at a glance. "Blunter", "Puts a number on it", "Through a scenario". Not a description of the question.
 - text: the question.
 - followUp: the probe for when the answer is thin, written word for word.
-- setup: the question is said after a setup (given below when there is one). When this version needs a different lead-in, or what the writer wants different is about the setup, write the new setup in full, two to four spoken sentences that lay out the substance, never pointing at a document the room has not heard of, never saying what the question says. Otherwise "", and the current setup stays.
+- setup: the question is said after a setup (given below when there is one). When this version needs a different lead-in, or what the writer wants different is about the setup, write the new setup in full, two to four spoken sentences that lay out the substance, never pointing at a document the room has not heard of, never saying what the question says. Otherwise "", and the current setup stays. ${HANDOVER_RULE}${
+      rough ? "" : ` The question's key words are: ${keyWordsOf(question.text).join(", ")}. The last sentence of every setup you write contains at least one of them.`
+    }
 - forWhom: When the context names the people in the room, forWhom is the first names of those who can answer THIS version from their own direct work, strictly: a question about managing MSLs fits nobody who does not manage MSLs, a question about KOL meetings does not fit people who never meet KOLs, a question about hiring fits only people who hire. "Everyone" only when all of them truly can. "" when it fits none of them, or when no names are given.
 - changed: "setup" when only the setup is new (text is the question unchanged), "question" when only the question is new (setup ""), "both" when both are.
 - link: ${
       !rough && length !== "same" && question.setup
         ? `the words of the CURRENT setup that the question picks up, quoted exactly as they are there, a few words (for a question about a new KPI, the part about how people are graded or measured). Every setup you write keeps those words or their plain equivalent, and its last sentence turns toward what the question asks.`
         : `"".`
+    }
+- handover: ${
+      rough
+        ? `"".`
+        : `one short spoken sentence, under 20 words, that closes this version's setup and leads straight into the question: it names the gap the question asks them to fill, in one of the question's key words, true to the setup's point and adding no new fact. For a question about a new KPI after a setup about counting meetings: "And none of that count captures the value you actually bring." When the setup already ends that way, still give it.`
     }
 - group: ${rough && groups.length ? `which of these groups the question belongs in, spelled exactly as here, or "" when none fits: ${groups.join("; ")}.` : `"".`}
 
@@ -978,7 +989,9 @@ Plain prose. No markdown, no quotation marks around the question. Never an em da
             : ""
         }${
           avoid.length ? `\n\nVersions the writer has already seen; write new ones, not these again:\n${avoid.map((a) => `- ${a}`).join("\n")}` : ""
-        }${question.setup ? `\n\nThe setup said before it now:\n${question.setup}` : ""}\n\n${rough ? "What they have so far" : `The question to rework${question.category ? `, filed under "${question.category}"` : ""}`}:\n${question.text}${
+        }${question.setup ? `\n\nThe setup said before it now:\n${question.setup}` : ""}${
+          setupNowProblem && part !== "question" ? `\nOne thing in it must change in every setup you write, even while keeping their words: ${setupNowProblem}.` : ""
+        }\n\n${rough ? "What they have so far" : `The question to rework${question.category ? `, filed under "${question.category}"` : ""}`}:\n${question.text}${
           question.why ? `\nWhy it was picked: ${question.why}` : ""
         }${question.followUp ? `\nIts current probe: ${question.followUp}` : ""}`,
       },
@@ -1021,6 +1034,14 @@ Plain prose. No markdown, no quotation marks around the question. Never an em da
       changed = "question";
     }
     if (part === "setup" && !setup) continue;
+    // A new setup that never reaches the question leaves the room a jump.
+    // Asked to cut, the model cuts and never adds the line that hands over,
+    // so it writes that line on its own and it goes on the end when needed.
+    if (setup && !rough && !leadsInto(setup, said)) {
+      const hand = String(v?.handover || "").replace(/[\u2013\u2014]/g, ",").trim();
+      if (!hand || !leadsInto(hand, said) || spokenProblem(hand, said) || wordCount(hand) > 22) continue;
+      setup = `${setup.replace(/\s+$/, "")} ${hand}`;
+    }
     // Shorter or longer is the same setup, cut or filled out. A redo that
     // came back with a scenario and a point from another question was a new
     // setup, not a shorter one. Most of its words have to be the writer's.
@@ -1083,6 +1104,31 @@ Plain prose. No markdown, no quotation marks around the question. Never an em da
   return result;
 }
 
+/**
+ * The setup's last sentence is the hand-over to the question. A cut that ended
+ * on hard-to-reach experts, before a question about a new KPI for the value
+ * they bring, left the room to make the jump on its own.
+ */
+const HANDOVER_RULE = `The setup's last sentence is the hand-over: it names what the question is about, in one of the question's own key words, so the question follows straight on. A setup about counting meetings against hard-to-reach experts, before a question about a new KPI for the value they bring, leaves a jump; a last sentence like "And none of that count captures the value you actually bring" closes it.`;
+
+const HANDOVER_STOP = new Set(
+  "the and you your you're had has have are was were for but not all can how who why its our one any get got way say new what when where which would could should about there their they this that with does into from them then than actually really just even still tomorrow today right like more most much many some every think know make made being been will also only over very well thing things kind sort lot".split(" "),
+);
+const wordsOf = (t: string) => (t.toLowerCase().match(/[a-z][a-z']{2,}/g) || []).filter((w) => !HANDOVER_STOP.has(w));
+/** The words a question turns on, for the setup to end on one. */
+function keyWordsOf(question: string): string[] {
+  return [...new Set(wordsOf(question).filter((w) => w.length > 3 || /kpi|msl|kol|rwe/.test(w)))];
+}
+/** Whether the setup's last sentence shares a key word with the question. */
+export function leadsInto(setup: string, question: string): boolean {
+  const keys = (t: string) => wordsOf(t).map((w) => w.slice(0, 5));
+  const want = new Set(keys(question));
+  if (!want.size) return true;
+  const sentences = setup.trim().split(/(?<=[.!?])\s+/).filter(Boolean);
+  const last = sentences[sentences.length - 1] || "";
+  return keys(last).some((k) => want.has(k));
+}
+
 /** How much of a new passage is made of the old one's words, 0 to 1. */
 function sharedWords(now: string, was: string): number {
   const bag = (t: string) => (t.toLowerCase().match(/[a-z0-9']{4,}/g) || []);
@@ -1108,8 +1154,13 @@ const MANY_SCHEMA = {
       type: "array" as const,
       items: {
         type: "object" as const,
-        properties: { index: { type: "number" as const }, setup: { type: "string" as const }, text: { type: "string" as const } },
-        required: ["index", "setup", "text"],
+        properties: {
+          index: { type: "number" as const },
+          setup: { type: "string" as const },
+          text: { type: "string" as const },
+          handover: { type: "string" as const },
+        },
+        required: ["index", "setup", "text", "handover"],
         additionalProperties: false,
       },
     },
@@ -1163,10 +1214,14 @@ export async function reworkMany({
     length === "same" || (length === "shorter" ? wordCount(now) < wordCount(was) : wordCount(now) > wordCount(was))
       ? ""
       : `the ${what} came back ${wordCount(now)} words, and it had to be ${length === "shorter" ? "under" : "over"} ${wordCount(was)}`;
-  const check = (r: { setup?: unknown; text?: unknown }, i: number): { setup: string; text: string } | string => {
+  const check = (r: { setup?: unknown; text?: unknown; handover?: unknown }, i: number): { setup: string; text: string } | string => {
     const was = items[i];
-    const setup = part === "question" ? was.setup : String(r?.setup || "").replace(/\s*\bquietly\b/gi, "").trim() || was.setup;
+    let setup = part === "question" ? was.setup : String(r?.setup || "").replace(/\s*\bquietly\b/gi, "").trim() || was.setup;
     const text = part === "setup" ? was.text : String(r?.text || "").replace(/\s*\bquietly\b/gi, "").trim() || was.text;
+    // The line that hands over to the question, on the end when the cut lost it.
+    const hand = String(r?.handover || "").trim();
+    if (setup && setup !== was.setup && !leadsInto(setup, text) && hand && leadsInto(hand, text) && wordCount(hand) <= 22)
+      setup = `${setup.replace(/\s+$/, "")} ${hand}`;
     const newSetup = setup !== was.setup;
     const newText = text !== was.text;
     tried[i] = `${setup} / ${text}`;
@@ -1175,7 +1230,10 @@ export async function reworkMany({
     if (part === "question" && !newText) return "the question came back unchanged";
     if (/[\u2013\u2014]/.test(`${setup} ${text}`)) return "it used a long dash";
     if (newSetup) {
-      const bad = sized(setup, was.setup, "setup") || spokenProblem(setup, text);
+      const bad =
+        sized(setup, was.setup, "setup") ||
+        spokenProblem(setup, text) ||
+        (leadsInto(setup, text) ? "" : "its last sentence does not lead into the question: end it on what the question asks about, in one of the question's own key words");
       if (bad) return `in the setup, ${bad}`;
       const named = namedSource(setup, allow, houses);
       if (named) return `the setup names a source out loud (${named})`;
@@ -1215,7 +1273,7 @@ A setup still has to work on its own, said to a room that has heard nothing befo
 
 ${OPEN_QUESTION_RULE}
 
-Never change a fact, swap a term for another or add a claim that was not there, unless the writer asks for it by name.
+Never change a fact, swap a term for another or add a claim that was not there, unless the writer asks for it by name. ${HANDOVER_RULE} For each item also give handover: one short spoken sentence, under 20 words, that closes its setup and leads into its question in one of the question's key words, adding no new fact.
 ${instruction ? `\nWHAT THE WRITER WANTS. This outranks every rule above except that the setup must not ask the question:\n${instruction}\n` : ""}${standing ? `\nTheir standing instruction about how everything is written:\n${standing}\n` : ""}
 Return one entry per number you are given, with the whole setup and the whole question, changed or not. Plain prose, no markdown, never an em dash or en dash.`,
       messages: [
