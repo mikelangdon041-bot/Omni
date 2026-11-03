@@ -3082,6 +3082,11 @@ function ReworkModal({
           >
             {q.setup && <p className="leading-relaxed text-ink/70">{stripAskedQuestion(q.setup, q.text)}</p>}
             <p className={`font-medium text-ink ${q.setup ? "mt-1.5" : ""}`}>{q.text}</p>
+            {/* What each version below is measured against. */}
+            <p className="mt-1 text-[11px] text-muted">
+              Now: {q.setup ? `setup ${words(stripAskedQuestion(q.setup, q.text))} words, ` : ""}question {words(q.text)} words, about{" "}
+              {secondsOf(`${stripAskedQuestion(q.setup || "", q.text)} ${q.text}`)} sec to say
+            </p>
           </div>
           {/* Select any words above to keep them or lose them. */}
           {sel ? (
@@ -3228,6 +3233,22 @@ function ReworkModal({
                       </span>
                       {v.forWhom && <ForChip who={v.forWhom} />}
                     </span>
+                    {(() => {
+                      // How it compares with what is there now, part by part.
+                      const setupNow = stripAskedQuestion(q.setup || "", q.text);
+                      const setupNew = v.setup || setupNow;
+                      const diff = secondsOf(`${setupNow} ${q.text}`) - secondsOf(`${setupNew} ${v.text}`);
+                      const bits = [
+                        v.setup && v.setup !== setupNow ? `setup ${words(v.setup)} words, was ${words(setupNow)}` : "",
+                        v.text !== q.text ? `question ${words(v.text)} words, was ${words(q.text)}` : "",
+                      ].filter(Boolean);
+                      return bits.length ? (
+                        <span className={`mt-1 block text-[11px] font-medium ${diff > 0 ? "text-emerald-700" : diff < 0 ? "text-amber-700" : "text-muted"}`}>
+                          {bits.join(" · ")}
+                          {diff ? ` · ${Math.abs(diff)} sec ${diff > 0 ? "shorter" : "longer"}` : " · about the same to say"}
+                        </span>
+                      ) : null;
+                    })()}
                     {v.setup && <span className="mt-1 block text-sm leading-relaxed text-ink/70">{v.setup}</span>}
                     <span className={`mt-1 block text-sm font-medium ${v.changed === "setup" ? "text-ink/60" : "text-ink"}`}>{v.text}</span>
                     {v.followUp && (
