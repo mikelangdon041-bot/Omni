@@ -168,7 +168,7 @@ What a note is NEVER about:
 
 Fields:
 - title: the advice itself, as one short instruction the writer could act on. Start with a verb. Under 12 words. Not a question, not a heading.
-- detail: one or two sentences on why it matters here and what good looks like. Concrete. Name the actual section, question or moment you mean.
+- detail: one or two plain sentences: what is wrong, then what the change does. Concrete. Name the actual section, question or moment you mean. Never call something fine and then say what is wrong with it; say only what is wrong.
 - target: "questions" for every note about the questions in the running order, their probes included. Otherwise exactly one of — "section:<key>" using a key from the list of sections below, or "questions" for the question bank, or "setup" for something missing from what they told us, or "" when it is about the pack as a whole. Never invent a section key.
 - targetLabel: how to say that target to a person ("Agenda", "Your questions", "Setup"). Two or three words.
 - fix: the same advice rewritten as an instruction addressed to whoever will rewrite that section, specific enough to act on without the rest of this note. This gets handed over verbatim, so no "consider" and no "maybe" — say what to do.

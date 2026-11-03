@@ -145,6 +145,8 @@ export function QuestionsTab({
   const [busyLabel, setBusyLabel] = useState("");
   // The question the writer wants said a different way.
   const [reworkId, setReworkId] = useState<string | null>(null);
+  // What Rework opens with in its box, when a read-through note opened it.
+  const [reworkStart, setReworkStart] = useState("");
   // Which question has its note open. One at a time, because the note is a
   // scratch line and not a second body of text.
   const [openNote, setOpenNote] = useState<string | null>(null);
@@ -844,6 +846,14 @@ export function QuestionsTab({
       setItems(items.map((q) => (ids.includes(q.id) ? { ...q, deleted: true, picked: false } : q)));
       review.patchNote(n.id, { done: true });
       toast("success", `${ids.length} sent to the bin — open it to get one back`);
+      return;
+    }
+    // One question: open Rework with the note's advice in the box, so they
+    // see the new versions beside theirs and pick, rather than having it
+    // swapped out sight unseen.
+    if (n.action === "rewrite" && ids.length === 1) {
+      setReworkStart(n.fix);
+      setReworkId(ids[0]);
       return;
     }
     if (n.action === "rewrite") {
@@ -1560,6 +1570,7 @@ export function QuestionsTab({
         onRerun={() => !blocked() && void review.runReview()}
         rerunning={review.reviewing}
         questionText={(id) => items.find((q) => q.id === id && !q.deleted)?.text}
+        questionProbe={(id) => items.find((q) => q.id === id && !q.deleted)?.followUp}
         questionWhere={(id) => {
           const q = items.find((x) => x.id === id && !x.deleted);
           if (!q) return undefined;
@@ -2314,6 +2325,7 @@ export function QuestionsTab({
       <ReworkModal
         key={reworkId || "none"}
         q={live.find((x) => x.id === reworkId) || null}
+        startWith={reworkStart}
         onSplit={(setup, text) => reworkId && patch(reworkId, { setup, text })}
         onDismiss={(v) => {
           // Gone for good, unless they kept it: it was saved on the question.
@@ -2321,7 +2333,10 @@ export function QuestionsTab({
           if (q) patch(q.id, { options: (q.options || []).filter((o) => o.keep || !o.rework || !sameOption(o, v)) });
         }}
         standing={guidance}
-        onClose={() => setReworkId(null)}
+        onClose={() => {
+          setReworkId(null);
+          setReworkStart("");
+        }}
         onMany={(p) => {
           setReworkId(null);
           setManyPreset({ ...p, n: Date.now() });
@@ -3031,8 +3046,11 @@ function ReworkModal({
   onMany,
   onSplit,
   onDismiss,
+  startWith = "",
 }: {
   q: QuestionItem | null;
+  /** Advice to start from, when a read-through note opened this. */
+  startWith?: string;
   /** Takes a version they do not want off the question. */
   onDismiss: (v: QuestionVariant) => void;
   /** Makes the lead-in typed into the question its setup. */
@@ -3053,7 +3071,7 @@ function ReworkModal({
   /** The same choices, for every question in the list. */
   onMany: (p: Omit<ManyPreset, "n">) => void;
 }) {
-  const [instruction, setInstruction] = useState("");
+  const [instruction, setInstruction] = useState(startWith);
   // What came back last time, kept on the question, is here again.
   const saved = (q?.options || []).filter((o) => o.rework);
   // The last round, when it was written in the last little while: reopened

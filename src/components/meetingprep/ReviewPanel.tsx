@@ -29,6 +29,7 @@ export function ReviewPanel({
   onDismiss,
   onClear,
   questionText,
+  questionProbe,
   questionWhere,
   onShowQuestion,
   onRerun,
@@ -43,6 +44,8 @@ export function ReviewPanel({
   onFix?: (n: ReviewNote) => void;
   /** Looks up a question the note named, so the note can quote it. */
   questionText?: (id: string) => string | undefined;
+  /** Its probe as it is now, shown beside a new one so the two can be compared. */
+  questionProbe?: (id: string) => string | undefined;
   /** Where that question is now ("Your list, 4", "Bank: AI and digital"). */
   questionWhere?: (id: string) => string | undefined;
   /** Takes the writer to it. */
@@ -242,20 +245,39 @@ export function ReviewPanel({
                         )}
                         {text}
                         <Where id={id} where={questionWhere} onShow={onShowQuestion} />
+                        {/* The probe it has now, then the new one: shown only the
+                            new one, there was nothing to compare it with. */}
                         {n.action === "probe" && n.probe && (
-                          <span className="mt-1 block text-ink">
-                            <span className="mr-1 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
-                              New probe
+                          <>
+                            <span className="mt-1 block text-ink/70">
+                              <span className="mr-1 rounded bg-slate-100 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                                Probe now
+                              </span>
+                              {questionProbe?.(id) || "None yet"}
                             </span>
-                            {n.probe}
-                          </span>
+                            <span className="mt-1 block text-ink">
+                              <span className="mr-1 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+                                New probe
+                              </span>
+                              {n.probe}
+                            </span>
+                          </>
                         )}
                       </li>
                     ) : null;
                   })}
                 </ul>
               )}
-              <Quotes n={n} />
+              {/* A quote that is one of the questions already shown above is
+                  the same words twice. */}
+              <Quotes
+                n={{
+                  ...n,
+                  quotes: (n.quotes || []).filter(
+                    (qt) => !(n.questionIds || []).some((id) => (questionText?.(id) || "").toLowerCase().includes(qt.toLowerCase().slice(0, 40))),
+                  ),
+                }}
+              />
               {/* A note from before notes said exactly what they meant. It will
                   never grow its quotes, so say what to do instead of leaving
                   the writer to hunt for it. */}
@@ -272,7 +294,9 @@ export function ReviewPanel({
                     {n.action === "bin"
                       ? `Bin ${n.questionIds!.length === 1 ? "it" : `those ${n.questionIds!.length}`}`
                       : n.action === "rewrite"
-                        ? `Rewrite ${n.questionIds!.length === 1 ? "it" : `those ${n.questionIds!.length}`}`
+                        ? n.questionIds!.length === 1
+                          ? "See other ways to ask it"
+                          : `Rewrite those ${n.questionIds!.length}`
                         : n.action === "probe"
                           ? "Use this probe"
                           : "Do it for me"}
@@ -338,7 +362,16 @@ export function ReviewPanel({
                     <li key={n.id}>
                       <span className="font-medium text-ink">{n.targetLabel}</span> — {n.title}
                       <QuestionList n={n} questionText={questionText} />
-                      <Quotes n={n} />
+                      {/* A quote that is one of the questions already shown above is
+                  the same words twice. */}
+              <Quotes
+                n={{
+                  ...n,
+                  quotes: (n.quotes || []).filter(
+                    (qt) => !(n.questionIds || []).some((id) => (questionText?.(id) || "").toLowerCase().includes(qt.toLowerCase().slice(0, 40))),
+                  ),
+                }}
+              />
                     </li>
                   ))}
                 </ul>
