@@ -423,6 +423,8 @@ export interface QuestionOption {
   rework?: boolean;
   /** What a reworked version changed: the setup, the question, or both. */
   changed?: "setup" | "question" | "both";
+  /** When Rework wrote it, so the newest show first and the last round is marked. */
+  at?: number;
 }
 
 export interface SharperQuestion {

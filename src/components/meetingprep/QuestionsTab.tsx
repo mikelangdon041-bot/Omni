@@ -2363,6 +2363,7 @@ export function QuestionsTab({
               items: fresh.map((x) => {
                 if (x.id !== id) return x;
                 const have = x.options || [];
+                const stamp = Date.now();
                 const add = vs
                   .filter((v) => !have.some((o) => norm(o.text) === norm(v.text) && norm(o.setup || "") === norm(v.setup || "")))
                   .map((v) => ({
@@ -2373,6 +2374,7 @@ export function QuestionsTab({
                     forWhom: v.forWhom,
                     rework: true,
                     changed: v.changed,
+                    at: stamp,
                   }));
                 return add.length ? { ...x, options: [...have, ...add] } : x;
               }),
@@ -3030,9 +3032,20 @@ function ReworkModal({
 }) {
   const [instruction, setInstruction] = useState("");
   // What came back last time, kept on the question, is here again.
+  const saved = (q?.options || []).filter((o) => o.rework);
+  // The last round, when it was written in the last little while: reopened
+  // after a reload, it is still the one they were looking at.
+  const lastAt = Math.max(0, ...saved.map((o) => o.at || 0));
+  const [fresh, setFresh] = useState(() =>
+    lastAt > Date.now() - 30 * 60 * 1000 ? saved.filter((o) => o.at === lastAt).length : 0,
+  );
   const [options, setOptions] = useState<QuestionVariant[]>(() =>
-    (q?.options || [])
-      .filter((o) => o.rework)
+    // Saved in the order written, so newest is last; shown newest first.
+    saved
+      .map((o, i) => ({ o, i }))
+      // Newer rounds first; inside a round, the order it came in.
+      .sort((a, b) => (b.o.at || 0) - (a.o.at || 0) || (a.o.at ? a.i - b.i : b.i - a.i))
+      .map(({ o }) => o)
       .map((o) => ({
         angle: o.kind,
         text: o.text,
@@ -3052,9 +3065,8 @@ function ReworkModal({
   const [sel, setSel] = useState("");
   // The version being edited in place, before using or keeping it.
   const [editIdx, setEditIdx] = useState<number | null>(null);
-  // How many at the top came from the last press, so the new ones can be told
-  // from the ones already seen. They all looked alike.
-  const [fresh, setFresh] = useState(0);
+  // How many at the top came from the last press (declared above, with what
+  // is saved), so the new ones can be told from the ones already seen.
   const editOption = (i: number, p: Partial<QuestionVariant>) =>
     setOptions((all) =>
       all.map((o, k) => {
