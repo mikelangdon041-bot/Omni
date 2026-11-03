@@ -6,7 +6,7 @@
 // arm's length, and a way to get to the next one.
 
 import { useEffect, useState } from "react";
-import { ArrowLeft, ArrowRight, Check, ListChecks, Star, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, ListChecks, Star, Timer, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { stripAskedQuestion, type QuestionItem, type QuestionOption } from "@/lib/meetingprep/types";
 
@@ -32,6 +32,11 @@ export function AskMode({
   onToggleAsked,
   onResetTicks,
   onUseKept,
+  minutesOf,
+  slotMin,
+  leadMin = 0,
+  endMin = 0,
+  clockKey = "",
 }: {
   onClose: () => void;
   /** The subject, on screen while you are standing in front of the room. */
@@ -44,6 +49,15 @@ export function AskMode({
   onResetTicks: () => void;
   /** Swaps a kept second question in for the main one. */
   onUseKept?: (q: QuestionItem, o: QuestionOption) => void;
+  /** How long a question runs, the same reckoning as the list's. */
+  minutesOf?: (q: QuestionItem) => number;
+  /** The whole slot, in minutes. */
+  slotMin?: number | null;
+  /** Before the first question: introductions and the opening. */
+  leadMin?: number;
+  /** After the last: the close, and any audience questions. */
+  endMin?: number;
+  clockKey?: string;
 }) {
   // In the room you may only want the must-asks, or one person's share.
   const [show, setShow] = useState<string>("all");
@@ -57,10 +71,59 @@ export function AskMode({
     { key: "reserve", label: "In reserve", n: all.filter((q) => q.backup).length },
     ...panel.map((n) => ({ key: n, label: n, n: all.filter((q) => asks(q).includes(n)).length })),
   ].filter((f) => f.key === "all" || f.n > 0);
+  // The clock, kept through closing Ask mode or the pane.
+  const clockStore = `mp:clock:${clockKey}`;
+  const [startedAt, setStartedAt] = useState<number | null>(() => {
+    try {
+      const v = Number(localStorage.getItem(clockStore));
+      return v > 0 ? v : null;
+    } catch {
+      return null;
+    }
+  });
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!startedAt) return;
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [startedAt]);
+  const startClock = (on: boolean) => {
+    const v = on ? Date.now() : null;
+    setStartedAt(v);
+    setNow(Date.now());
+    try {
+      if (v) localStorage.setItem(clockStore, String(v));
+      else localStorage.removeItem(clockStore);
+    } catch {}
+  };
+
   const main = picked.filter((q) => !q.backup);
   const backups = picked.filter((q) => q.backup);
   const flow = [...main, ...backups];
+
+  // Against the whole running order, whatever is filtered: the time left
+  // after every main question you have not ticked yet is what is spare.
+  const clock = (() => {
+    if (!minutesOf || !slotMin || !startedAt) return null;
+    const gone = Math.max(0, (now - startedAt) / 60000);
+    const toCome = all.filter((q) => !q.backup && !q.asked).reduce((n, q) => n + minutesOf(q), 0) + Math.max(0, leadMin - gone);
+    const left = slotMin - endMin - gone;
+    const spare = left - toCome;
+    const reserve = all.find((q) => q.backup && !q.asked && minutesOf(q) <= spare);
+    return { gone, left, spare, reserve };
+  })();
+  const goTo = (q: QuestionItem) => {
+    setShow("all");
+    setMode("one");
+    const order = [...all.filter((x) => !x.backup), ...all.filter((x) => x.backup)];
+    setAt(Math.max(0, order.findIndex((x) => x.id === q.id)));
+  };
+  const mmss = (min: number) => {
+    const t = Math.max(0, Math.round(min * 60));
+    return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
+  };
   const done = picked.filter((q) => q.asked).length;
+
   const [mode, setMode] = useState<"one" | "all">("one");
   const [at, setAt] = useState(0);
   const here = Math.max(0, Math.min(at, flow.length - 1));
@@ -163,6 +226,45 @@ export function AskMode({
             ))}
           </div>
         )}
+        {/* Ahead or behind, and whether a reserve question fits. One number,
+            spare time, after everything still to come in the running order. */}
+        {minutesOf && slotMin ? (
+          <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-x-3 gap-y-1 px-4 pb-2.5 text-xs">
+            {!clock ? (
+              <>
+                <Button size="sm" variant="secondary" onClick={() => startClock(true)}>
+                  <Timer size={13} /> Start the clock
+                </Button>
+                <span className="text-muted">Start it when the panel starts, to see if you&apos;re ahead and when a reserve question fits.</span>
+              </>
+            ) : (
+              <>
+                <span className="font-mono text-sm font-semibold tabular-nums text-ink">{mmss(clock.gone)}</span>
+                <span className="text-muted">{clock.left > 0 ? `${Math.round(clock.left)} min left` : "Time's up"}</span>
+                <span
+                  className={`rounded-full px-2 py-0.5 font-semibold ${
+                    clock.spare >= 1 ? "bg-emerald-50 text-emerald-800" : clock.spare <= -1 ? "bg-amber-100 text-amber-900" : "bg-canvas text-ink/80"
+                  }`}
+                  title="Time left, after every question in your running order you haven't ticked yet. Tick each one as you finish it."
+                >
+                  {clock.spare >= 1
+                    ? `About ${Math.round(clock.spare)} min spare`
+                    : clock.spare <= -1
+                      ? `About ${Math.round(-clock.spare)} min over: skip one that isn't a must-ask`
+                      : "On time"}
+                </span>
+                {clock.reserve && (
+                  <button type="button" onClick={() => goTo(clock.reserve!)} className="font-medium text-[var(--accent)] hover:underline">
+                    Room for a reserve question: go to it
+                  </button>
+                )}
+                <button type="button" onClick={() => startClock(false)} className="ml-auto text-muted hover:text-ink hover:underline">
+                  Reset clock
+                </button>
+              </>
+            )}
+          </div>
+        ) : null}
         {/* How far through you are, which is the one number that matters
             when you are watching the clock. */}
         <div className="h-1 bg-border">

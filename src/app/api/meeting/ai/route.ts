@@ -30,10 +30,10 @@ import {
   trimRepeatedSetup,
   regroupQuestions,
   searchQuestions,
-  type ReworkPart, type SetupResize,
+  type ReworkPart, type ReworkLength,
   orderForConversation,
   placeQuestion,
-  resizeSetups,
+  reworkMany,
   writeQuestions,
   writeSetups,
   writeVariants,
@@ -456,6 +456,7 @@ export async function POST(req: Request) {
         drop: Array.isArray(body?.drop) ? body.drop.map(String).slice(0, 8) : [],
         rough: Boolean(body?.rough),
         groups: Array.isArray(body?.groups) ? body.groups.map(String).slice(0, 40) : [],
+        length: (["shorter", "longer"].includes(body?.length) ? body.length : "same") as ReworkLength,
       });
       return NextResponse.json({ variants });
     }
@@ -550,8 +551,8 @@ export async function POST(req: Request) {
       return NextResponse.json({ texts: items.map((_: unknown, i: number) => cut.get(i) || "") });
     }
 
-    // Setups shorter or longer, shown to the writer before anything changes.
-    if (action === "resize_setups") {
+    // Rework for several questions at once, shown to the writer before anything changes.
+    if (action === "rework_many") {
       const meeting: MeetingPayload = body?.meeting || {};
       const items = (Array.isArray(body?.items) ? body.items : []).slice(0, 12).map(
         (x: { setup?: unknown; text?: unknown }) => ({
@@ -559,16 +560,17 @@ export async function POST(req: Request) {
           text: String(x?.text || "").slice(0, 1000),
         }),
       );
-      const setups = await resizeSetups({
+      const results = await reworkMany({
         meeting,
         research: String(body?.research || "").slice(0, 12000),
         items,
-        direction: (["shorter", "longer"].includes(body?.direction) ? body.direction : "same") as SetupResize,
+        part: (["setup", "question", "both"].includes(body?.part) ? body.part : "auto") as ReworkPart,
+        length: (["shorter", "longer"].includes(body?.length) ? body.length : "same") as ReworkLength,
         instruction: String(body?.instruction || "").slice(0, 2000),
         avoid: Array.isArray(body?.avoid) ? body.avoid.map(String).slice(0, 12) : [],
         standing: String(body?.standing || "").slice(0, 2000),
       });
-      return NextResponse.json({ setups });
+      return NextResponse.json({ results });
     }
 
     // Other ways to ask each question under its setup, to choose from.

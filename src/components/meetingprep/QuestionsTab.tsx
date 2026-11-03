@@ -65,7 +65,7 @@ import type { QuestionOption, ReadingSource } from "@/lib/meetingprep/types";
 // The reading list, for the source line under a question to link into.
 // Context rather than a prop: that line sits several components deep.
 const ReadingSources = createContext<ReadingSource[]>([]);
-import type { QuestionVariant, ReworkPart, SetupResize } from "@/lib/meetingprep/questionsAi";
+import type { QuestionVariant, ReworkLength, ReworkPart } from "@/lib/meetingprep/questionsAi";
 import {
   QUESTIONS_ENGINE,
   engineBehind,
@@ -127,8 +127,9 @@ export function QuestionsTab({
   const [showHelp, setShowHelp] = useState(false);
   const [helpRough, setHelpRough] = useState("");
   const [helping, setHelping] = useState(false);
-  // Making setups shorter or longer: for all of them, or one card's (the id).
-  const [resizeFor, setResizeFor] = useState<"all" | string | null>(null);
+  // Rework for several at once, opened with the choices it was started with.
+  const [manyOpen, setManyOpen] = useState(false);
+  const [manyPreset, setManyPreset] = useState<ManyPreset>({ part: "auto", length: "same", instruction: "", n: 0 });
   const [resizing, setResizing] = useState(false);
   // One dialog, not two. "Write me 20 more" and "Guide the questions" were
   // separate boxes that each took an instruction and did different things
@@ -682,7 +683,7 @@ export function QuestionsTab({
                     : helping
                       ? "Writing your question"
                       : resizing
-                        ? "Rewriting setups"
+                        ? "Reworking your questions"
                         : "";
   const working = Boolean(runningLabel);
   const blocked = () => {
@@ -1443,13 +1444,13 @@ export function QuestionsTab({
                 </MenuItem>
               )}
               <MenuItem
-                icon={<Scissors size={13} />}
+                icon={<Wand2 size={13} />}
                 onClick={() => {
                   close();
-                  setResizeFor("all");
+                  setManyOpen(true);
                 }}
               >
-                Make the setups shorter or longer
+                Rework several at once: shorter, longer, or as you say
               </MenuItem>
               <MenuItem
                 icon={<ListOrdered size={13} />}
@@ -1956,17 +1957,6 @@ export function QuestionsTab({
                                 >
                                   Rework it: other wording or setup
                                 </MenuItem>
-                                {Boolean(q.setup) && (
-                                  <MenuItem
-                                    icon={<Scissors size={13} />}
-                                    onClick={() => {
-                                      close();
-                                      setResizeFor(q.id);
-                                    }}
-                                  >
-                                    Make the setup shorter or longer
-                                  </MenuItem>
-                                )}
                                 <MenuItem
                                   icon={<StickyNote size={13} />}
                                   onClick={() => {
@@ -2273,6 +2263,11 @@ export function QuestionsTab({
           onToggleAsked={(q) => patch(q.id, { asked: !q.asked })}
           onResetTicks={() => setItems(items.map((q) => ({ ...q, asked: false })))}
           onUseKept={(q, o) => patch(q.id, swapKept(q, o))}
+          minutesOf={(q) => minutesFor(q, panel.length, timing)}
+          slotMin={m.duration_min || null}
+          leadMin={timing.introMin * panel.length + 1}
+          endMin={1 + timing.qaMin}
+          clockKey={m.id}
         />
       )}
 
@@ -2311,6 +2306,11 @@ export function QuestionsTab({
         q={live.find((x) => x.id === reworkId) || null}
         standing={guidance}
         onClose={() => setReworkId(null)}
+        onMany={(p) => {
+          setReworkId(null);
+          setManyPreset({ ...p, n: Date.now() });
+          setManyOpen(true);
+        }}
         onApply={(text, followUp, setup, forWho) => {
           const q = live.find((x) => x.id === reworkId);
           // Through the same swap as anywhere else, so the words it replaces
@@ -2399,6 +2399,7 @@ export function QuestionsTab({
               count: extra?.count || 3,
               avoid: extra?.avoid || [],
               part: extra?.part || "auto",
+              length: extra?.length || "same",
               keep: extra?.keep || [],
               drop: extra?.drop || [],
               guidance: instruction,
@@ -2411,11 +2412,12 @@ export function QuestionsTab({
         }}
       />
 
-      <SetupResizeModal
+      <ReworkManyModal
+        key={manyPreset.n}
+        preset={manyPreset}
         meetingId={m.id}
-        only={resizeFor && resizeFor !== "all" ? resizeFor : null}
-        open={resizeFor !== null}
-        onClose={() => setResizeFor(null)}
+        open={manyOpen}
+        onClose={() => setManyOpen(false)}
         list={picked}
         bank={live.filter((q) => !q.picked)}
         working={working}
@@ -2425,41 +2427,39 @@ export function QuestionsTab({
           return true;
         }}
         release={() => setResizing(false)}
-        fetchSetups={async (list, direction, instruction, avoid) => {
+        fetchMany={async (list, opts) => {
           const res = await fetch("/api/meeting/ai", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             credentials: "same-origin",
             body: JSON.stringify({
-              action: "resize_setups",
+              action: "rework_many",
               meeting: payloadOf(m),
               research: withReading(m.brief?.research?.notes || "", m),
               items: list.map((q) => ({ setup: stripAskedQuestion(q.setup || "", q.text), text: q.text })),
-              direction,
-              instruction,
-              avoid,
+              ...opts,
               standing: guidance,
             }),
           });
           const json = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(json.error || "Could not rewrite the setups");
-          return (json.setups || []) as string[];
+          if (!res.ok) throw new Error(json.error || "Could not rework them");
+          return (json.results || []) as ({ setup: string; text: string } | { why: string })[];
         }}
         onApply={(done) => {
-          // Through the same swap as picking a version, so the setup it
-          // replaces stays under the question as another way to ask it.
-          const byId = new Map(done.map((d) => [d.id, d.setup]));
+          // Through the same swap as picking a version, so what it replaces
+          // stays under the question as another way to ask it.
+          const byId = new Map(done.map((d) => [d.id, d]));
           const fresh = latest.current.questions?.items || [];
           save({
             questions: {
               ...latest.current.questions,
               items: fresh.map((x) => {
-                const setup = byId.get(x.id);
-                return setup ? { ...x, ...pickOption(x, { kind: "Setup", text: x.text, followUp: x.followUp, setup }) } : x;
+                const d = byId.get(x.id);
+                return d ? { ...x, ...pickOption(x, { kind: "Reworked", text: d.text, followUp: x.followUp, setup: d.setup }) } : x;
               }),
             },
           });
-          toast("success", done.length === 1 ? "Setup changed" : `${done.length} setups changed`);
+          toast("success", done.length === 1 ? "Changed" : `${done.length} changed`);
         }}
       />
 
@@ -2993,6 +2993,7 @@ function ReworkModal({
   onAdd,
   onSave,
   fetchVariants,
+  onMany,
 }: {
   q: QuestionItem | null;
   /** Their standing instruction, shown so they know it is still on. */
@@ -3006,8 +3007,10 @@ function ReworkModal({
   fetchVariants: (
     q: QuestionItem,
     instruction: string,
-    extra?: { count?: number; avoid?: string[]; part?: ReworkPart; keep?: string[]; drop?: string[] },
+    extra?: { count?: number; avoid?: string[]; part?: ReworkPart; length?: ReworkLength; keep?: string[]; drop?: string[] },
   ) => Promise<QuestionVariant[]>;
+  /** The same choices, for every question in the list. */
+  onMany: (p: Omit<ManyPreset, "n">) => void;
 }) {
   const [instruction, setInstruction] = useState("");
   // What came back last time, kept on the question, is here again.
@@ -3019,6 +3022,7 @@ function ReworkModal({
   // Which part to change, and words marked to keep or lose. The writer liked
   // part of a question and had no way to say which part.
   const [part, setPart] = useState<ReworkPart>("auto");
+  const [length, setLength] = useState<ReworkLength>("same");
   const [keepWords, setKeepWords] = useState<string[]>([]);
   const [dropWords, setDropWords] = useState<string[]>([]);
   const [sel, setSel] = useState("");
@@ -3050,6 +3054,7 @@ function ReworkModal({
         count: askedCount(instruction) || 3,
         avoid: options.map((o) => `${o.setup ? `${o.setup} ` : ""}${o.text}`),
         part,
+        length,
         keep: keepWords,
         drop: dropWords,
       });
@@ -3154,6 +3159,31 @@ function ReworkModal({
               </button>
             ))}
           </div>
+          {/* How long, for whichever part is changing: the same choice as
+              the part, not a separate tool. */}
+          <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="font-medium text-ink">Length</span>
+            {(
+              [
+                ["same", "As it is"],
+                ["shorter", "Shorter"],
+                ["longer", "Longer"],
+              ] as const
+            ).map(([k, label]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setLength(k)}
+                className={`rounded-full border px-2.5 py-0.5 transition ${
+                  length === k
+                    ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
+                    : "border-border text-muted hover:text-ink"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
 
           <div className="mt-3">
             <Textarea
@@ -3241,7 +3271,15 @@ function ReworkModal({
             </>
           )}
 
-          <div className="mt-4 flex items-center justify-end gap-2">
+          <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => onMany({ part, length, instruction: instruction.trim() })}
+              className="mr-auto text-xs font-medium text-[var(--accent)] hover:underline"
+              title="The same choices for each question in your list, each one shown for you to approve"
+            >
+              Do this to every question in my list
+            </button>
             <Button variant="ghost" onClick={onClose}>
               Keep it as it is
             </Button>
@@ -3658,12 +3696,18 @@ function IconBtn({
   );
 }
 
-type SetupDraft = {
+type ManyPreset = { part: ReworkPart; length: ReworkLength; instruction: string; n: number };
+
+type ManyDraft = {
   /** What is proposed, editable before it is approved. */
   setup: string;
-  /** The setup it would replace. */
+  text: string;
+  /** What it would replace. */
   before: string;
+  beforeText: string;
   status: "busy" | "ready" | "failed" | "approved";
+  /** Why the last try was turned down, in plain words. */
+  why?: string;
   /** Their suggestion for this one. */
   note: string;
   /** Tries they turned down, so Try again brings something new. */
@@ -3673,13 +3717,14 @@ type SetupDraft = {
 const secondsOf = (t: string) => Math.round((words(t) / 150) * 60);
 
 /**
- * Setups shorter or longer, one at a time. Nothing changes on a question until
- * it is approved: each shows what is there now beside what is proposed, and
- * can be typed over, tried again with a suggestion, or left alone.
+ * Rework, for several questions at once: the same choices as for one (which
+ * part, how long, what you want different), and nothing changes on a question
+ * until it is approved. Each shows what is there now beside what is proposed,
+ * and can be typed over, tried again with a suggestion, or left alone.
  */
-function SetupResizeModal({
+function ReworkManyModal({
+  preset,
   meetingId,
-  only,
   open,
   onClose,
   list,
@@ -3687,12 +3732,11 @@ function SetupResizeModal({
   working,
   claim,
   release,
-  fetchSetups,
+  fetchMany,
   onApply,
 }: {
+  preset: ManyPreset;
   meetingId: string;
-  /** One question's setup, from its card, instead of all of them. */
-  only: string | null;
   open: boolean;
   onClose: () => void;
   list: QuestionItem[];
@@ -3701,15 +3745,18 @@ function SetupResizeModal({
   /** False when another job is running: one at a time. */
   claim: () => boolean;
   release: () => void;
-  fetchSetups: (qs: QuestionItem[], direction: SetupResize, instruction: string, avoid: string[]) => Promise<string[]>;
-  onApply: (done: { id: string; setup: string }[]) => void;
+  fetchMany: (
+    qs: QuestionItem[],
+    opts: { part: ReworkPart; length: ReworkLength; instruction: string; avoid: string[] },
+  ) => Promise<({ setup: string; text: string } | { why: string })[]>;
+  onApply: (done: { id: string; setup: string; text: string }[]) => void;
 }) {
-  const storeKey = `mp:setup-drafts:${meetingId}`;
+  const storeKey = `mp:rework-many:${meetingId}`;
   // Kept through closing the window or the Outlook pane: they cost a wait.
-  const [drafts, setDrafts] = useState<Record<string, SetupDraft>>(() => {
+  const [drafts, setDrafts] = useState<Record<string, ManyDraft>>(() => {
     try {
-      const saved = JSON.parse(localStorage.getItem(storeKey) || "{}") as Record<string, SetupDraft>;
-      return Object.fromEntries(Object.entries(saved).filter(([, d]) => d.status !== "busy"));
+      const saved = JSON.parse(localStorage.getItem(storeKey) || "{}") as Record<string, ManyDraft>;
+      return Object.fromEntries(Object.entries(saved).filter(([, d]) => d.status !== "busy" && typeof d.text === "string"));
     } catch {
       return {};
     }
@@ -3719,26 +3766,33 @@ function SetupResizeModal({
       localStorage.setItem(storeKey, JSON.stringify(drafts));
     } catch {}
   }, [drafts, storeKey]);
-  const [direction, setDirection] = useState<SetupResize>("shorter");
-  const [instruction, setInstruction] = useState("");
+  const [part, setPart] = useState<ReworkPart>(preset.part);
+  const [length, setLength] = useState<ReworkLength>(preset.length);
+  const [instruction, setInstruction] = useState(preset.instruction);
   const [withBank, setWithBank] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
 
-  const all = [...list, ...bank];
-  const scope = (only ? all.filter((q) => q.id === only) : withBank ? all : list).filter((q) => q.setup?.trim());
+  const scope = (withBank ? [...list, ...bank] : list).filter((q) => part !== "setup" || q.setup?.trim());
   const rows = scope.filter((q) => drafts[q.id]);
   const ready = rows.filter((q) => drafts[q.id].status === "ready");
   const busyCount = rows.filter((q) => drafts[q.id].status === "busy").length;
-  const saves = (ids: QuestionItem[]) => ids.reduce((n, q) => n + secondsOf(q.setup || "") - secondsOf(drafts[q.id].setup), 0);
-  const patchDraft = (id: string, p: Partial<SetupDraft>) => setDrafts((d) => (d[id] ? { ...d, [id]: { ...d[id], ...p } } : d));
+  const said = (setup: string, text: string) => secondsOf(`${setup} ${text}`);
+  const saves = (qs: QuestionItem[]) =>
+    qs.reduce((n, q) => n + said(drafts[q.id].before, drafts[q.id].beforeText) - said(drafts[q.id].setup, drafts[q.id].text), 0);
+  const patchDraft = (id: string, p: Partial<ManyDraft>) => setDrafts((d) => (d[id] ? { ...d, [id]: { ...d[id], ...p } } : d));
+  const canRun = length !== "same" || instruction.trim().length > 0;
 
   async function write(qs: QuestionItem[], note: string, avoid: string[]) {
-    const got = await fetchSetups(qs, direction, note, avoid);
+    const got = await fetchMany(qs, { part, length, instruction: note, avoid });
     setDrafts((d) => {
       const next = { ...d };
       qs.forEach((q, i) => {
-        next[q.id] = { ...next[q.id], setup: got[i] || "", status: got[i] ? "ready" : "failed" };
+        const r = got[i];
+        next[q.id] =
+          r && "text" in r
+            ? { ...next[q.id], setup: r.setup, text: r.text, status: "ready", why: undefined }
+            : { ...next[q.id], status: "failed", why: (r && "why" in r && r.why) || "nothing came back for it" };
       });
       return next;
     });
@@ -3751,7 +3805,8 @@ function SetupResizeModal({
     setError("");
     setDrafts((d) => {
       const next = { ...d };
-      for (const q of todo) next[q.id] = { setup: "", before: q.setup || "", status: "busy", note: "", seen: [] };
+      for (const q of todo)
+        next[q.id] = { setup: q.setup || "", text: q.text, before: q.setup || "", beforeText: q.text, status: "busy", note: "", seen: [] };
       return next;
     });
     // Six to a call, three calls at a time, so they arrive as they are done.
@@ -3766,7 +3821,9 @@ function SetupResizeModal({
       );
     } catch (e) {
       setError((e as Error).message);
-      setDrafts((d) => Object.fromEntries(Object.entries(d).map(([k, v]) => [k, v.status === "busy" ? { ...v, status: "failed" as const } : v])));
+      setDrafts((d) =>
+        Object.fromEntries(Object.entries(d).map(([k, v]) => [k, v.status === "busy" ? { ...v, status: "failed" as const, why: (e as Error).message } : v])),
+      );
     } finally {
       setRunning(false);
       release();
@@ -3776,7 +3833,8 @@ function SetupResizeModal({
   async function retry(q: QuestionItem) {
     const d = drafts[q.id];
     if (!claim()) return;
-    const seen = d.setup ? [...d.seen, d.setup] : d.seen;
+    const shown = `${d.setup} ${d.text}`.trim();
+    const seen = d.status === "ready" && shown ? [...d.seen, shown] : d.seen;
     patchDraft(q.id, { status: "busy", seen });
     setError("");
     try {
@@ -3790,7 +3848,7 @@ function SetupResizeModal({
   }
 
   function approve(qs: QuestionItem[]) {
-    onApply(qs.map((q) => ({ id: q.id, setup: drafts[q.id].setup.trim() })));
+    onApply(qs.map((q) => ({ id: q.id, setup: drafts[q.id].setup.trim(), text: drafts[q.id].text.trim() })));
     setDrafts((d) => {
       const next = { ...d };
       for (const q of qs) next[q.id] = { ...next[q.id], status: "approved" };
@@ -3798,10 +3856,10 @@ function SetupResizeModal({
     });
   }
 
-  function undo(q: QuestionItem) {
-    const d = drafts[q.id];
-    onApply([{ id: q.id, setup: d.before }]);
-    patchDraft(q.id, { status: "ready" });
+  function undo(id: string) {
+    const d = drafts[id];
+    onApply([{ id, setup: d.before, text: d.beforeText }]);
+    patchDraft(id, { status: "ready" });
   }
 
   const dropDraft = (id: string) =>
@@ -3811,62 +3869,78 @@ function SetupResizeModal({
       return next;
     });
 
+  const chip = (on: boolean) =>
+    `rounded-full border px-2.5 py-0.5 transition ${
+      on ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]" : "border-border text-muted hover:text-ink"
+    }`;
+  const approvedRows = Object.entries(drafts).filter(([id, d]) => d.status === "approved" && !scope.some((q) => q.id === id));
+
   return (
-    <Modal open={open} onClose={onClose} title={only ? "Make this setup shorter or longer" : "Make the setups shorter or longer"} movable resizable size="lg">
+    <Modal open={open} onClose={onClose} title="Rework several at once" movable resizable size="lg">
       <div className="space-y-3">
-        <p className="text-sm text-muted">Nothing changes until you approve it. Your questions stay word for word.</p>
+        <p className="text-sm text-muted">The same choices as Rework, for each question. Nothing changes until you approve it.</p>
         <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="font-medium text-ink">Change</span>
           {(
             [
-              ["shorter", "Shorter, about half"],
-              ["longer", "Longer"],
-              ["same", "Same length"],
-            ] as [SetupResize, string][]
+              ["auto", "Whatever I say below"],
+              ["setup", "Just the setup"],
+              ["question", "Just the question"],
+              ["both", "Both"],
+            ] as const
           ).map(([k, label]) => (
-            <button
-              key={k}
-              type="button"
-              onClick={() => setDirection(k)}
-              className={`rounded-full border px-2.5 py-1 font-medium transition ${
-                direction === k
-                  ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-fg)]"
-                  : "border-border bg-surface text-ink/80 hover:border-[var(--accent)]"
-              }`}
-            >
+            <button key={k} type="button" onClick={() => setPart(k)} className={chip(part === k)}>
               {label}
             </button>
           ))}
-          {!only && (
-            <label className="ml-auto inline-flex items-center gap-1.5 text-muted">
-              <input type="checkbox" checked={withBank} onChange={(e) => setWithBank(e.target.checked)} />
-              The bank too ({bank.filter((q) => q.setup?.trim()).length})
-            </label>
-          )}
         </div>
-        <Input
-          label="Anything else? (optional)"
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="font-medium text-ink">Length</span>
+          {(
+            [
+              ["same", "As it is"],
+              ["shorter", "Shorter"],
+              ["longer", "Longer"],
+            ] as const
+          ).map(([k, label]) => (
+            <button key={k} type="button" onClick={() => setLength(k)} className={chip(length === k)}>
+              {label}
+            </button>
+          ))}
+          <label className="ml-auto inline-flex items-center gap-1.5 text-muted">
+            <input type="checkbox" checked={withBank} onChange={(e) => setWithBank(e.target.checked)} />
+            The bank too ({bank.filter((q) => part !== "setup" || q.setup?.trim()).length})
+          </label>
+        </div>
+        <Textarea
+          label="What's not right about them? (optional)"
           value={instruction}
           onChange={(e) => setInstruction(e.target.value)}
           placeholder="One sentence each, keep the numbers, sound less formal"
+          className="min-h-14"
         />
-        <div className="flex items-center justify-end gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           <span className="mr-auto text-xs text-muted">
-            {running ? `${scope.filter((q) => drafts[q.id] && drafts[q.id].status !== "busy").length} of ${scope.length} ready. You can close this.` : ""}
+            {running
+              ? `${scope.filter((q) => drafts[q.id] && drafts[q.id].status !== "busy").length} of ${scope.length} ready. You can close this.`
+              : !canRun
+                ? "Pick shorter or longer, or say what you want."
+                : ""}
           </span>
           {ready.length > 1 && (
             <Button variant="secondary" disabled={running} onClick={() => approve(ready)}>
               <Check size={14} /> Approve all {ready.length}
             </Button>
           )}
-          <Button disabled={running || working || !scope.length} onClick={() => void runAll()}>
-            <Scissors size={14} />
-            {running ? "Writing…" : rows.length ? "Write them again" : `Write ${scope.length === 1 ? "it" : `${scope.length} setups`}`}
+          <Button disabled={running || working || !scope.length || !canRun} onClick={() => void runAll()}>
+            <Wand2 size={14} />
+            {running ? "Writing…" : `Rework ${scope.length} ${scope.length === 1 ? "question" : "questions"}`}
           </Button>
         </div>
         {error && <p className="text-sm text-status-error">{error}</p>}
-        {ready.length > 0 && !busyCount && (
+        {ready.length > 0 && !busyCount && saves(ready) !== 0 && (
           <p className="text-xs text-muted">
-            {saves(ready) >= 0
+            {saves(ready) > 0
               ? `Approving these ${ready.length} takes about ${fmtMin(saves(ready) / 60)} min off.`
               : `Approving these ${ready.length} adds about ${fmtMin(-saves(ready) / 60)} min.`}
           </p>
@@ -3874,38 +3948,57 @@ function SetupResizeModal({
         <ul className="space-y-2">
           {rows.map((q) => {
             const d = drafts[q.id];
-            const diff = secondsOf(d.before) - secondsOf(d.setup);
+            const diff = said(d.before, d.beforeText) - said(d.setup, d.text);
+            const newSetup = d.setup !== d.before;
+            const newText = d.text !== d.beforeText;
             return (
-              <li key={q.id} data-resize={q.id} className={`rounded-xl border p-3 ${d.status === "approved" ? "border-emerald-300 bg-emerald-50/40" : "border-border bg-surface"}`}>
-                <p className="text-sm font-medium text-ink">{q.text}</p>
-                <p className="mt-2 text-[11px] font-semibold text-muted">
-                  Now, {words(d.before)} words, {secondsOf(d.before)} sec
+              <li
+                key={q.id}
+                data-rework={q.id}
+                className={`rounded-xl border p-3 ${d.status === "approved" ? "border-emerald-300 bg-emerald-50/40" : "border-border bg-surface"}`}
+              >
+                <p className="text-[11px] font-semibold text-muted">
+                  Now, {words(`${d.before} ${d.beforeText}`)} words, {said(d.before, d.beforeText)} sec
                 </p>
-                <p className="text-sm leading-relaxed text-ink/60">{d.before}</p>
+                {d.before && <p className="text-sm leading-relaxed text-ink/60">{d.before}</p>}
+                <p className="mt-0.5 text-sm font-medium text-ink/80">{d.beforeText}</p>
                 {d.status === "busy" ? (
                   <p className="mt-2 inline-flex items-center gap-2 text-xs font-medium text-[var(--accent)]">
                     <Loader2 size={13} className="animate-spin" /> Writing it…
                   </p>
                 ) : d.status === "failed" ? (
-                  <p className="mt-2 text-sm text-status-error">That try didn&apos;t pass the checks.</p>
+                  <p className="mt-2 text-sm text-status-error">
+                    Couldn&apos;t write one that works: {d.why || "it didn't pass the checks"}. Try again, or say what you want in the box below.
+                  </p>
                 ) : d.status === "approved" ? (
                   <>
                     <p className="mt-2 text-[11px] font-semibold text-emerald-700">
-                      Approved, {words(d.setup)} words, {secondsOf(d.setup)} sec
+                      Approved, {words(`${d.setup} ${d.text}`)} words, {said(d.setup, d.text)} sec
                     </p>
-                    <p className="text-sm leading-relaxed text-ink">{d.setup}</p>
+                    {d.setup && <p className="text-sm leading-relaxed text-ink">{d.setup}</p>}
+                    <p className="mt-0.5 text-sm font-medium text-ink">{d.text}</p>
                   </>
                 ) : (
                   <>
                     <p className="mt-2 text-[11px] font-semibold text-[var(--accent)]">
-                      Proposed, {words(d.setup)} words, {secondsOf(d.setup)} sec
+                      Proposed, {words(`${d.setup} ${d.text}`)} words, {said(d.setup, d.text)} sec
                       {diff ? `, ${Math.abs(diff)} sec ${diff > 0 ? "shorter" : "longer"}` : ""}
                     </p>
-                    <Textarea aria-label="Proposed setup" value={d.setup} onChange={(e) => patchDraft(q.id, { setup: e.target.value })} className="min-h-16" />
+                    {(newSetup || part !== "question") && d.before && (
+                      <Textarea aria-label="Proposed setup" value={d.setup} onChange={(e) => patchDraft(q.id, { setup: e.target.value })} className="min-h-14" />
+                    )}
+                    {(newText || part === "question" || part === "both") && (
+                      <Textarea
+                        aria-label="Proposed question"
+                        value={d.text}
+                        onChange={(e) => patchDraft(q.id, { text: e.target.value })}
+                        className="mt-1.5 min-h-12 font-medium"
+                      />
+                    )}
                   </>
                 )}
                 {d.status === "approved" ? (
-                  <button type="button" onClick={() => undo(q)} className="mt-1.5 text-xs font-medium text-muted hover:text-ink hover:underline">
+                  <button type="button" onClick={() => undo(q.id)} className="mt-1.5 text-xs font-medium text-muted hover:text-ink hover:underline">
                     Undo
                   </button>
                 ) : (
@@ -3919,7 +4012,7 @@ function SetupResizeModal({
                       />
                       <div className="flex flex-wrap items-center gap-2">
                         {d.status === "ready" && (
-                          <Button size="sm" variant="secondary" disabled={!d.setup.trim()} onClick={() => approve([q])}>
+                          <Button size="sm" variant="secondary" disabled={!d.text.trim()} onClick={() => approve([q])}>
                             <Check size={13} /> Approve
                           </Button>
                         )}
@@ -3937,6 +4030,11 @@ function SetupResizeModal({
             );
           })}
         </ul>
+        {approvedRows.length > 0 && (
+          <p className="text-xs text-muted">
+            {approvedRows.length} approved earlier {approvedRows.length === 1 ? "is" : "are"} outside what is showing.
+          </p>
+        )}
       </div>
     </Modal>
   );
