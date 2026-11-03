@@ -795,8 +795,9 @@ const VARIANTS_SCHEMA = {
           setup: { type: "string" as const },
           forWhom: { type: "string" as const },
           changed: { type: "string" as const, enum: ["setup", "question", "both"] },
+          group: { type: "string" as const },
         },
-        required: ["angle", "text", "followUp", "setup", "forWhom", "changed"],
+        required: ["angle", "text", "followUp", "setup", "forWhom", "changed", "group"],
         additionalProperties: false,
       },
     },
@@ -816,6 +817,8 @@ export interface QuestionVariant {
   forWhom?: string;
   /** Which part this version changed. */
   changed?: "setup" | "question" | "both";
+  /** For a question written from scratch: which of their groups it belongs in. */
+  group?: string;
 }
 
 export type ReworkPart = "auto" | "setup" | "question" | "both";
@@ -842,11 +845,20 @@ export async function writeVariants({
   part = "auto",
   keep = [],
   drop = [],
+  rough = false,
+  groups = [],
+  retried = false,
 }: {
   meeting: MeetingPayload;
   kolBlock?: string;
   research?: string;
   question: { text: string; why?: string; followUp?: string; category?: string; setup?: string };
+  /** The second pass for a rough start that came back short. */
+  retried?: boolean;
+  /** The text is not a question they like but a start: a topic, half a thought, a clumsy draft. */
+  rough?: boolean;
+  /** The groups their questions are filed in, for one written from a rough start. */
+  groups?: string[];
   /** Which part to change. "auto" works it out from what the writer said. */
   part?: ReworkPart;
   /** Words the writer marked to keep, exactly as they are. */
@@ -875,11 +887,17 @@ export async function writeVariants({
     model: CHECK_MODEL,
     max_tokens: 16000,
     output_config: { format: { type: "json_schema", schema: VARIANTS_SCHEMA } },
-    system: `You are rewriting one question for someone who is going to ask it out loud. They like it. They do not like how it lands.
+    system: `${
+      rough
+        ? `You are helping someone write one question they are going to ask out loud. All they have so far is a start: a topic, half a thought, some notes, or a clumsy attempt at the question. It may also say who it is for or what they are after. That is what they want to ask about, so stay on it: their subject, their point, their angle, and their own words where those are good. Do not swap it for a neighbouring subject you find more interesting.
+
+Give exactly ${count} finished questions from it, far enough apart that choosing between them is a real choice. One might be blunter, one might come at it sideways, one might put a scenario in front of it. Never ${count} rewordings of the same sentence. Do not repeat a question already in their list or bank.`
+        : `You are rewriting one question for someone who is going to ask it out loud. They like it. They do not like how it lands.
 
 Give exactly ${count} versions of THIS question, unless what the writer wants below asks for new questions rather than versions, in which case give ${count} of those. Not new questions by default: ways of asking the same thing, far enough apart that choosing between them is a real choice. One might be blunter, one might come at it sideways, one might put a number or a scenario in front of it. Never three rewordings of the same sentence.
 
-The writer may keep more than one of them, so make each one able to stand on its own in a running order next to the others, rather than three mutually exclusive takes on one slot.
+The writer may keep more than one of them, so make each one able to stand on its own in a running order next to the others, rather than three mutually exclusive takes on one slot.`
+    }
 
 ${SEAT_RULE}
 
@@ -892,8 +910,10 @@ Every version:
 
 ${OPEN_QUESTION_RULE}
 ${guidance ? `\nWHAT THE WRITER WANTS DIFFERENT ABOUT THIS ONE. This outranks every rule above:\n${guidance}\n` : ""}${standing ? `\nTheir standing instruction about how all their questions must be written, which still applies:\n${standing}\n` : ""}
-WHAT TO CHANGE. ${
-      part === "setup"
+${rough ? "WHAT TO WRITE. Every question gets a setup of its own, unless it truly works with none. changed is \"both\" every time." : "WHAT TO CHANGE."} ${
+      rough
+        ? ""
+        : part === "setup"
         ? "The writer wants a different SETUP. Keep the question word for word as it is. Only if a new setup genuinely stops leading into the question may you touch the question, and then change as few words as possible and set changed to \"both\"."
         : part === "question"
           ? "The writer wants a different QUESTION under the same setup. setup is \"\" in every version, so the current setup stays."
@@ -909,6 +929,7 @@ Fields:
 - setup: the question is said after a setup (given below when there is one). When this version needs a different lead-in, or what the writer wants different is about the setup, write the new setup in full, two to four spoken sentences that lay out the substance, never pointing at a document the room has not heard of, never saying what the question says. Otherwise "", and the current setup stays.
 - forWhom: When the context names the people in the room, forWhom is the first names of those who can answer THIS version from their own direct work, strictly: a question about managing MSLs fits nobody who does not manage MSLs, a question about KOL meetings does not fit people who never meet KOLs, a question about hiring fits only people who hire. "Everyone" only when all of them truly can. "" when it fits none of them, or when no names are given.
 - changed: "setup" when only the setup is new (text is the question unchanged), "question" when only the question is new (setup ""), "both" when both are.
+- group: ${rough && groups.length ? `which of these groups the question belongs in, spelled exactly as here, or "" when none fits: ${groups.join("; ")}.` : `"".`}
 
 Plain prose. No markdown, no quotation marks around the question. Never an em dash or en dash.`,
     messages: [
@@ -918,13 +939,13 @@ Plain prose. No markdown, no quotation marks around the question. Never an em da
           research ? `\n\nThe research this meeting was prepared from:\n${research.slice(0, 8000)}` : ""
         }${
           others.length
-            ? `\n\nThe writer's other questions, for reference only, numbered exactly as the writer sees them: "question four" means the line marked 4 in their list. You are rewriting ONE question, not these. They are here so an instruction like "combine this with question four" or "make sure it does not overlap the others" is something you can act on rather than guess at:\n${others
+            ? `\n\nThe writer's other questions, for reference only, numbered exactly as the writer sees them: "question four" means the line marked 4 in their list. You are ${rough ? "writing ONE new question" : "rewriting ONE question"}, not these. They are here so an instruction like "combine this with question four" or "make sure it does not overlap the others" is something you can act on rather than guess at:\n${others
                 .join("\n")
                 .slice(0, 8000)}`
             : ""
         }${
           avoid.length ? `\n\nVersions the writer has already seen; write new ones, not these again:\n${avoid.map((a) => `- ${a}`).join("\n")}` : ""
-        }${question.setup ? `\n\nThe setup said before it now:\n${question.setup}` : ""}\n\nThe question to rework${question.category ? `, filed under "${question.category}"` : ""}:\n${question.text}${
+        }${question.setup ? `\n\nThe setup said before it now:\n${question.setup}` : ""}\n\n${rough ? "What they have so far" : `The question to rework${question.category ? `, filed under "${question.category}"` : ""}`}:\n${question.text}${
           question.why ? `\nWhy it was picked: ${question.why}` : ""
         }${question.followUp ? `\nIts current probe: ${question.followUp}` : ""}`,
       },
@@ -943,9 +964,11 @@ Plain prose. No markdown, no quotation marks around the question. Never an em da
     // The same guard every question goes through. An alternative that names a
     // source is not an alternative.
     // A version that closes the question down is not offered either.
-    if (!text || namedSource(text, allow, houses) || closedQuestion(text)) continue;
+    // The question they already have is theirs: checked as new, every "just
+    // the setup" version of an either/or question was thrown away.
+    if (!text || (text !== question.text && (namedSource(text, allow, houses) || closedQuestion(text)))) continue;
     let setup = String(v?.setup || "").trim();
-    let changed = (["setup", "question", "both"].includes(v?.changed) ? v.changed : setup ? "both" : "question") as QuestionVariant["changed"];
+    let changed = (rough ? "both" : ["setup", "question", "both"].includes(v?.changed) ? v.changed : setup ? "both" : "question") as QuestionVariant["changed"];
     let said = text;
     // The part they did not ask to change stays as it was. Asked for a better
     // setup, the writer got four new questions and lost the one they liked.
@@ -972,6 +995,7 @@ Plain prose. No markdown, no quotation marks around the question. Never an em da
       setup,
       forWhom: String(v?.forWhom || "").trim(),
       changed,
+      group: String(v?.group || "").trim(),
     });
   }
   // Words they marked to keep must be there; a version that dropped them is
@@ -980,7 +1004,126 @@ Plain prose. No markdown, no quotation marks around the question. Never an em da
   const kept = keep.length
     ? out.filter((v) => keep.every((k) => low(`${v.setup || question.setup || ""} ${v.text}`).includes(low(k))))
     : out;
-  return kept.length ? kept : out;
+  const result = kept.length ? kept : out;
+  // Drafts the checks turned away left "three ways" as one. Once, for the rest.
+  if (rough && !retried && result.length < count) {
+    const more = await writeVariants({
+      meeting,
+      kolBlock,
+      research,
+      question,
+      others,
+      guidance,
+      standing,
+      count: count - result.length,
+      avoid: [...avoid, ...result.map((v) => v.text)],
+      rough,
+      groups,
+      retried: true,
+    });
+    return [...result, ...more];
+  }
+  return result;
+}
+
+const RESIZE_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    setups: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: { index: { type: "number" as const }, setup: { type: "string" as const } },
+        required: ["index", "setup"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["setups"],
+  additionalProperties: false,
+};
+
+export type SetupResize = "shorter" | "longer" | "same";
+
+const wordCount = (t: string) => t.split(/\s+/).filter(Boolean).length;
+
+/**
+ * Setups made shorter or longer, for the writer to approve one by one. The
+ * questions do not come back: there is no field for them, so they cannot
+ * change. Returns one setup per item, in order; "" where none passed.
+ */
+export async function resizeSetups({
+  meeting,
+  research = "",
+  items,
+  direction,
+  instruction = "",
+  avoid = [],
+  standing = "",
+}: {
+  meeting: MeetingPayload;
+  research?: string;
+  items: { setup: string; text: string }[];
+  direction: SetupResize;
+  /** What the writer wants, in their words: for all of them, or the one being redone. */
+  instruction?: string;
+  /** Tries already seen, when one is being redone. */
+  avoid?: string[];
+  standing?: string;
+}): Promise<string[]> {
+  const aim = (setup: string) => {
+    const n = wordCount(setup);
+    return direction === "shorter" ? Math.max(12, Math.round(n * 0.5)) : direction === "longer" ? Math.round(n * 1.4) : n;
+  };
+  const allow = allowedNames(meeting.attendees);
+  const houses = housesIn(research);
+  const out: string[] = items.map(() => "");
+  const passes = (setup: string, i: number) => {
+    const n = wordCount(setup);
+    const was = wordCount(items[i].setup);
+    if (!setup || /[\u2013\u2014]/.test(setup)) return false;
+    if (direction === "shorter" && n >= was) return false;
+    if (direction === "longer" && n <= was) return false;
+    return !spokenProblem(setup, items[i].text) && !namedSource(setup, allow, houses);
+  };
+  for (let pass = 0; pass < 2; pass++) {
+    const todo = items.map((_, i) => i).filter((i) => !out[i]);
+    if (!todo.length) break;
+    const res = await anthropic().messages.create({
+      model: CHECK_MODEL,
+      max_tokens: 16000,
+      output_config: { format: { type: "json_schema", schema: RESIZE_SCHEMA } },
+      system: `A moderator says each setup out loud, then asks the question after it. ${
+        direction === "shorter"
+          ? "People who heard them said the setups run too long, though the thinking in them is good. Compress each one to about the number of words given. Keep the single point that makes the question land, keep the writer's own phrasing where you can, and cut everything the question does not need: second examples, restated ideas, throat clearing. This is cutting, not rewriting."
+          : direction === "longer"
+            ? "These setups are too thin. Bring each up to about the number of words given by adding substance the question stands on, drawn from the material here. Never pad."
+            : "Rework each setup as the writer asks, at about its current length."
+      }
+
+Each setup still has to work on its own, said to a room that has heard nothing before it. It leads into the question and never asks or repeats it. It is plain speech someone can say in one go: no document or source named or pointed at, no reference to an earlier question, no filler opening, no statement of one view as if everyone holds it. It ends as a statement, never with a question mark. Never change a fact, swap a term for another or add a claim the setup did not make, unless it was asked for by name.
+${instruction ? `\nWHAT THE WRITER WANTS. This outranks every rule above except that the setup must not ask the question:\n${instruction}\n` : ""}${standing ? `\nTheir standing instruction about how everything is written:\n${standing}\n` : ""}
+Return one entry per number you are given. Plain prose, no markdown, never an em dash or en dash.`,
+      messages: [
+        {
+          role: "user",
+          content: `${meetingContext(meeting, "")}${direction === "longer" && research ? `\n\nResearch to draw on:\n${research.slice(0, 8000)}` : ""}${
+            avoid.length ? `\n\nTries the writer has already turned down; do not write these again:\n${avoid.map((a) => `- ${a}`).join("\n")}` : ""
+          }\n\n${todo
+            .map((i) => `${i}. About ${aim(items[i].setup)} words.\nSetup now: ${items[i].setup}\nThe question after it: ${items[i].text}`)
+            .join("\n\n")}`,
+        },
+      ],
+    });
+    if (res.stop_reason === "refusal") break;
+    const parsed = JSON.parse(firstText(res) || "{}");
+    for (const r of Array.isArray(parsed.setups) ? parsed.setups : []) {
+      const i = Number(r?.index);
+      const setup = String(r?.setup || "").replace(/\s*\bquietly\b/gi, "").trim();
+      if (todo.includes(i) && passes(setup, i)) out[i] = setup;
+    }
+  }
+  return out;
 }
 
 const FILL_SCHEMA = {

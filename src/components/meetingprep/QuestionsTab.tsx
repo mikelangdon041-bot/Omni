@@ -65,7 +65,7 @@ import type { QuestionOption, ReadingSource } from "@/lib/meetingprep/types";
 // The reading list, for the source line under a question to link into.
 // Context rather than a prop: that line sits several components deep.
 const ReadingSources = createContext<ReadingSource[]>([]);
-import type { QuestionVariant, ReworkPart } from "@/lib/meetingprep/questionsAi";
+import type { QuestionVariant, ReworkPart, SetupResize } from "@/lib/meetingprep/questionsAi";
 import {
   QUESTIONS_ENGINE,
   engineBehind,
@@ -122,6 +122,14 @@ export function QuestionsTab({
   const [busy, setBusy] = useState(false);
   const [showAsk, setShowAsk] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  // Writing one question with help. What they typed lives here so "Type one
+  // of my own" can hand it across, and it survives closing the window.
+  const [showHelp, setShowHelp] = useState(false);
+  const [helpRough, setHelpRough] = useState("");
+  const [helping, setHelping] = useState(false);
+  // Making setups shorter or longer: for all of them, or one card's (the id).
+  const [resizeFor, setResizeFor] = useState<"all" | string | null>(null);
+  const [resizing, setResizing] = useState(false);
   // One dialog, not two. "Write me 20 more" and "Guide the questions" were
   // separate boxes that each took an instruction and did different things
   // with it, and there was no way at all to say "write me new ones about X"
@@ -671,7 +679,11 @@ export function QuestionsTab({
                   ? "Writing probes"
                   : versioningIds.length
                     ? "Writing other ways to ask it"
-                    : "";
+                    : helping
+                      ? "Writing your question"
+                      : resizing
+                        ? "Rewriting setups"
+                        : "";
   const working = Boolean(runningLabel);
   const blocked = () => {
     if (!working) return false;
@@ -1371,6 +1383,15 @@ export function QuestionsTab({
                 Write me more
               </MenuItem>
               <MenuItem
+                icon={<Wand2 size={13} />}
+                onClick={() => {
+                  close();
+                  setShowHelp(true);
+                }}
+              >
+                Help me write one
+              </MenuItem>
+              <MenuItem
                 icon={<Pencil size={13} />}
                 onClick={() => {
                   close();
@@ -1421,6 +1442,15 @@ export function QuestionsTab({
                   {`Write the ${missingProbes} missing probe${missingProbes === 1 ? "" : "s"}`}
                 </MenuItem>
               )}
+              <MenuItem
+                icon={<Scissors size={13} />}
+                onClick={() => {
+                  close();
+                  setResizeFor("all");
+                }}
+              >
+                Make the setups shorter or longer
+              </MenuItem>
               <MenuItem
                 icon={<ListOrdered size={13} />}
                 disabled={working}
@@ -1926,6 +1956,17 @@ export function QuestionsTab({
                                 >
                                   Rework it: other wording or setup
                                 </MenuItem>
+                                {Boolean(q.setup) && (
+                                  <MenuItem
+                                    icon={<Scissors size={13} />}
+                                    onClick={() => {
+                                      close();
+                                      setResizeFor(q.id);
+                                    }}
+                                  >
+                                    Make the setup shorter or longer
+                                  </MenuItem>
+                                )}
                                 <MenuItem
                                   icon={<StickyNote size={13} />}
                                   onClick={() => {
@@ -2370,10 +2411,135 @@ export function QuestionsTab({
         }}
       />
 
+      <SetupResizeModal
+        meetingId={m.id}
+        only={resizeFor && resizeFor !== "all" ? resizeFor : null}
+        open={resizeFor !== null}
+        onClose={() => setResizeFor(null)}
+        list={picked}
+        bank={live.filter((q) => !q.picked)}
+        working={working}
+        claim={() => {
+          if (blocked()) return false;
+          setResizing(true);
+          return true;
+        }}
+        release={() => setResizing(false)}
+        fetchSetups={async (list, direction, instruction, avoid) => {
+          const res = await fetch("/api/meeting/ai", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({
+              action: "resize_setups",
+              meeting: payloadOf(m),
+              research: withReading(m.brief?.research?.notes || "", m),
+              items: list.map((q) => ({ setup: stripAskedQuestion(q.setup || "", q.text), text: q.text })),
+              direction,
+              instruction,
+              avoid,
+              standing: guidance,
+            }),
+          });
+          const json = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(json.error || "Could not rewrite the setups");
+          return (json.setups || []) as string[];
+        }}
+        onApply={(done) => {
+          // Through the same swap as picking a version, so the setup it
+          // replaces stays under the question as another way to ask it.
+          const byId = new Map(done.map((d) => [d.id, d.setup]));
+          const fresh = latest.current.questions?.items || [];
+          save({
+            questions: {
+              ...latest.current.questions,
+              items: fresh.map((x) => {
+                const setup = byId.get(x.id);
+                return setup ? { ...x, ...pickOption(x, { kind: "Setup", text: x.text, followUp: x.followUp, setup }) } : x;
+              }),
+            },
+          });
+          toast("success", done.length === 1 ? "Setup changed" : `${done.length} setups changed`);
+        }}
+      />
+
+      <HelpWriteModal
+        open={showHelp}
+        onClose={() => setShowHelp(false)}
+        rough={helpRough}
+        onRough={setHelpRough}
+        working={working}
+        isHere={(text) => Boolean(sameQuestion(items, text))}
+        fetchQuestions={async (rough, avoid) => {
+          if (blocked()) return null;
+          setHelping(true);
+          try {
+            const res = await fetch("/api/meeting/ai", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              credentials: "same-origin",
+              body: JSON.stringify({
+                action: "variants",
+                rough: true,
+                meeting: payloadOf(m),
+                kolId: m.kol_id || "",
+                research: withReading(m.brief?.research?.notes || "", m),
+                question: { text: rough },
+                groups: allCategories,
+                others: [
+                  ...picked.map((x, i) => `${i + 1}. ${x.text}`),
+                  ...live.filter((x) => !x.picked).map((x) => `Bank: ${x.text}`),
+                ],
+                count: 3,
+                avoid,
+                standing: guidance,
+              }),
+            });
+            const json = await res.json();
+            if (!res.ok) throw new Error(json.error || "Could not write that one");
+            return (json.variants || []) as QuestionVariant[];
+          } finally {
+            setHelping(false);
+          }
+        }}
+        onAdd={(v, toList) => {
+          if (sameQuestion(items, v.text)) {
+            if (toList) alreadyHere(v.text);
+            else toast("info", "You already have that question.");
+            return;
+          }
+          const fresh: QuestionItem = {
+            id: newId(),
+            text: v.text,
+            category: allCategories.includes(v.group || "") ? v.group! : "Mine",
+            why: "",
+            followUp: v.followUp,
+            setup: v.setup || "",
+            forWhom: v.forWhom || "",
+            rank: 0,
+            picked: toList,
+            backup: false,
+            asked: false,
+            order: toList ? (picked.length ? Math.max(...picked.map((p) => p.order)) : -1) + 1 : items.length,
+            // Theirs: "Rewrite them" must not replace it.
+            source: "user",
+          };
+          const next = [...items, fresh];
+          setItems(next);
+          toast("success", toList ? "Added to the end of your list" : "Added to the bank");
+          if (!v.followUp) void fillOut(fresh, next);
+        }}
+      />
+
       <AddOwnModal
         open={showAdd}
         onClose={() => setShowAdd(false)}
         categories={allCategories}
+        onHelp={(text) => {
+          setHelpRough(text);
+          setShowAdd(false);
+          setShowHelp(true);
+        }}
         onAdd={(text, category, followUp, forWhom) => {
           if (alreadyHere(text)) {
             setShowAdd(false);
@@ -3492,16 +3658,421 @@ function IconBtn({
   );
 }
 
+type SetupDraft = {
+  /** What is proposed, editable before it is approved. */
+  setup: string;
+  /** The setup it would replace. */
+  before: string;
+  status: "busy" | "ready" | "failed" | "approved";
+  /** Their suggestion for this one. */
+  note: string;
+  /** Tries they turned down, so Try again brings something new. */
+  seen: string[];
+};
+
+const secondsOf = (t: string) => Math.round((words(t) / 150) * 60);
+
+/**
+ * Setups shorter or longer, one at a time. Nothing changes on a question until
+ * it is approved: each shows what is there now beside what is proposed, and
+ * can be typed over, tried again with a suggestion, or left alone.
+ */
+function SetupResizeModal({
+  meetingId,
+  only,
+  open,
+  onClose,
+  list,
+  bank,
+  working,
+  claim,
+  release,
+  fetchSetups,
+  onApply,
+}: {
+  meetingId: string;
+  /** One question's setup, from its card, instead of all of them. */
+  only: string | null;
+  open: boolean;
+  onClose: () => void;
+  list: QuestionItem[];
+  bank: QuestionItem[];
+  working: boolean;
+  /** False when another job is running: one at a time. */
+  claim: () => boolean;
+  release: () => void;
+  fetchSetups: (qs: QuestionItem[], direction: SetupResize, instruction: string, avoid: string[]) => Promise<string[]>;
+  onApply: (done: { id: string; setup: string }[]) => void;
+}) {
+  const storeKey = `mp:setup-drafts:${meetingId}`;
+  // Kept through closing the window or the Outlook pane: they cost a wait.
+  const [drafts, setDrafts] = useState<Record<string, SetupDraft>>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(storeKey) || "{}") as Record<string, SetupDraft>;
+      return Object.fromEntries(Object.entries(saved).filter(([, d]) => d.status !== "busy"));
+    } catch {
+      return {};
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(storeKey, JSON.stringify(drafts));
+    } catch {}
+  }, [drafts, storeKey]);
+  const [direction, setDirection] = useState<SetupResize>("shorter");
+  const [instruction, setInstruction] = useState("");
+  const [withBank, setWithBank] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState("");
+
+  const all = [...list, ...bank];
+  const scope = (only ? all.filter((q) => q.id === only) : withBank ? all : list).filter((q) => q.setup?.trim());
+  const rows = scope.filter((q) => drafts[q.id]);
+  const ready = rows.filter((q) => drafts[q.id].status === "ready");
+  const busyCount = rows.filter((q) => drafts[q.id].status === "busy").length;
+  const saves = (ids: QuestionItem[]) => ids.reduce((n, q) => n + secondsOf(q.setup || "") - secondsOf(drafts[q.id].setup), 0);
+  const patchDraft = (id: string, p: Partial<SetupDraft>) => setDrafts((d) => (d[id] ? { ...d, [id]: { ...d[id], ...p } } : d));
+
+  async function write(qs: QuestionItem[], note: string, avoid: string[]) {
+    const got = await fetchSetups(qs, direction, note, avoid);
+    setDrafts((d) => {
+      const next = { ...d };
+      qs.forEach((q, i) => {
+        next[q.id] = { ...next[q.id], setup: got[i] || "", status: got[i] ? "ready" : "failed" };
+      });
+      return next;
+    });
+  }
+
+  async function runAll() {
+    const todo = scope.filter((q) => drafts[q.id]?.status !== "approved");
+    if (!todo.length || !claim()) return;
+    setRunning(true);
+    setError("");
+    setDrafts((d) => {
+      const next = { ...d };
+      for (const q of todo) next[q.id] = { setup: "", before: q.setup || "", status: "busy", note: "", seen: [] };
+      return next;
+    });
+    // Six to a call, three calls at a time, so they arrive as they are done.
+    const chunks: QuestionItem[][] = [];
+    for (let i = 0; i < todo.length; i += 6) chunks.push(todo.slice(i, i + 6));
+    try {
+      let at = 0;
+      await Promise.all(
+        [0, 1, 2].map(async () => {
+          while (at < chunks.length) await write(chunks[at++], instruction.trim(), []);
+        }),
+      );
+    } catch (e) {
+      setError((e as Error).message);
+      setDrafts((d) => Object.fromEntries(Object.entries(d).map(([k, v]) => [k, v.status === "busy" ? { ...v, status: "failed" as const } : v])));
+    } finally {
+      setRunning(false);
+      release();
+    }
+  }
+
+  async function retry(q: QuestionItem) {
+    const d = drafts[q.id];
+    if (!claim()) return;
+    const seen = d.setup ? [...d.seen, d.setup] : d.seen;
+    patchDraft(q.id, { status: "busy", seen });
+    setError("");
+    try {
+      await write([q], [instruction.trim(), d.note.trim()].filter(Boolean).join(". "), seen);
+    } catch (e) {
+      setError((e as Error).message);
+      patchDraft(q.id, { status: "failed" });
+    } finally {
+      release();
+    }
+  }
+
+  function approve(qs: QuestionItem[]) {
+    onApply(qs.map((q) => ({ id: q.id, setup: drafts[q.id].setup.trim() })));
+    setDrafts((d) => {
+      const next = { ...d };
+      for (const q of qs) next[q.id] = { ...next[q.id], status: "approved" };
+      return next;
+    });
+  }
+
+  function undo(q: QuestionItem) {
+    const d = drafts[q.id];
+    onApply([{ id: q.id, setup: d.before }]);
+    patchDraft(q.id, { status: "ready" });
+  }
+
+  const dropDraft = (id: string) =>
+    setDrafts((d) => {
+      const next = { ...d };
+      delete next[id];
+      return next;
+    });
+
+  return (
+    <Modal open={open} onClose={onClose} title={only ? "Make this setup shorter or longer" : "Make the setups shorter or longer"} movable resizable size="lg">
+      <div className="space-y-3">
+        <p className="text-sm text-muted">Nothing changes until you approve it. Your questions stay word for word.</p>
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          {(
+            [
+              ["shorter", "Shorter, about half"],
+              ["longer", "Longer"],
+              ["same", "Same length"],
+            ] as [SetupResize, string][]
+          ).map(([k, label]) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => setDirection(k)}
+              className={`rounded-full border px-2.5 py-1 font-medium transition ${
+                direction === k
+                  ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-fg)]"
+                  : "border-border bg-surface text-ink/80 hover:border-[var(--accent)]"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+          {!only && (
+            <label className="ml-auto inline-flex items-center gap-1.5 text-muted">
+              <input type="checkbox" checked={withBank} onChange={(e) => setWithBank(e.target.checked)} />
+              The bank too ({bank.filter((q) => q.setup?.trim()).length})
+            </label>
+          )}
+        </div>
+        <Input
+          label="Anything else? (optional)"
+          value={instruction}
+          onChange={(e) => setInstruction(e.target.value)}
+          placeholder="One sentence each, keep the numbers, sound less formal"
+        />
+        <div className="flex items-center justify-end gap-2">
+          <span className="mr-auto text-xs text-muted">
+            {running ? `${scope.filter((q) => drafts[q.id] && drafts[q.id].status !== "busy").length} of ${scope.length} ready. You can close this.` : ""}
+          </span>
+          {ready.length > 1 && (
+            <Button variant="secondary" disabled={running} onClick={() => approve(ready)}>
+              <Check size={14} /> Approve all {ready.length}
+            </Button>
+          )}
+          <Button disabled={running || working || !scope.length} onClick={() => void runAll()}>
+            <Scissors size={14} />
+            {running ? "Writing…" : rows.length ? "Write them again" : `Write ${scope.length === 1 ? "it" : `${scope.length} setups`}`}
+          </Button>
+        </div>
+        {error && <p className="text-sm text-status-error">{error}</p>}
+        {ready.length > 0 && !busyCount && (
+          <p className="text-xs text-muted">
+            {saves(ready) >= 0
+              ? `Approving these ${ready.length} takes about ${fmtMin(saves(ready) / 60)} min off.`
+              : `Approving these ${ready.length} adds about ${fmtMin(-saves(ready) / 60)} min.`}
+          </p>
+        )}
+        <ul className="space-y-2">
+          {rows.map((q) => {
+            const d = drafts[q.id];
+            const diff = secondsOf(d.before) - secondsOf(d.setup);
+            return (
+              <li key={q.id} data-resize={q.id} className={`rounded-xl border p-3 ${d.status === "approved" ? "border-emerald-300 bg-emerald-50/40" : "border-border bg-surface"}`}>
+                <p className="text-sm font-medium text-ink">{q.text}</p>
+                <p className="mt-2 text-[11px] font-semibold text-muted">
+                  Now, {words(d.before)} words, {secondsOf(d.before)} sec
+                </p>
+                <p className="text-sm leading-relaxed text-ink/60">{d.before}</p>
+                {d.status === "busy" ? (
+                  <p className="mt-2 inline-flex items-center gap-2 text-xs font-medium text-[var(--accent)]">
+                    <Loader2 size={13} className="animate-spin" /> Writing it…
+                  </p>
+                ) : d.status === "failed" ? (
+                  <p className="mt-2 text-sm text-status-error">That try didn&apos;t pass the checks.</p>
+                ) : d.status === "approved" ? (
+                  <>
+                    <p className="mt-2 text-[11px] font-semibold text-emerald-700">
+                      Approved, {words(d.setup)} words, {secondsOf(d.setup)} sec
+                    </p>
+                    <p className="text-sm leading-relaxed text-ink">{d.setup}</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="mt-2 text-[11px] font-semibold text-[var(--accent)]">
+                      Proposed, {words(d.setup)} words, {secondsOf(d.setup)} sec
+                      {diff ? `, ${Math.abs(diff)} sec ${diff > 0 ? "shorter" : "longer"}` : ""}
+                    </p>
+                    <Textarea aria-label="Proposed setup" value={d.setup} onChange={(e) => patchDraft(q.id, { setup: e.target.value })} className="min-h-16" />
+                  </>
+                )}
+                {d.status === "approved" ? (
+                  <button type="button" onClick={() => undo(q)} className="mt-1.5 text-xs font-medium text-muted hover:text-ink hover:underline">
+                    Undo
+                  </button>
+                ) : (
+                  d.status !== "busy" && (
+                    <div className="mt-2 space-y-2">
+                      <Input
+                        aria-label="Your suggestion for this one"
+                        value={d.note}
+                        onChange={(e) => patchDraft(q.id, { note: e.target.value })}
+                        placeholder="Your suggestion for this one (optional)"
+                      />
+                      <div className="flex flex-wrap items-center gap-2">
+                        {d.status === "ready" && (
+                          <Button size="sm" variant="secondary" disabled={!d.setup.trim()} onClick={() => approve([q])}>
+                            <Check size={13} /> Approve
+                          </Button>
+                        )}
+                        <Button size="sm" variant="ghost" disabled={working} onClick={() => void retry(q)}>
+                          <RefreshCw size={13} /> {d.note.trim() ? "Redo with my suggestion" : "Try again"}
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => dropDraft(q.id)}>
+                          Keep mine
+                        </Button>
+                      </div>
+                    </div>
+                  )
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * One question, written together. "Write me more" writes a batch of its own
+ * choosing and "Type one of my own" takes the words as they are, so a question
+ * you could only half say had nowhere to go. A topic or a rough attempt goes
+ * in, finished questions come out, and the same box steers the next try.
+ */
+function HelpWriteModal({
+  open,
+  onClose,
+  rough,
+  onRough,
+  working,
+  isHere,
+  fetchQuestions,
+  onAdd,
+}: {
+  open: boolean;
+  onClose: () => void;
+  rough: string;
+  onRough: (t: string) => void;
+  /** Any AI job on the page: only one runs at a time. */
+  working: boolean;
+  isHere: (text: string) => boolean;
+  /** Null when another job is running. */
+  fetchQuestions: (rough: string, avoid: string[]) => Promise<QuestionVariant[] | null>;
+  onAdd: (v: QuestionVariant, toList: boolean) => void;
+}) {
+  const [options, setOptions] = useState<QuestionVariant[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const pct = useProgress(busy, 30000);
+
+  async function run() {
+    setBusy(true);
+    setError("");
+    try {
+      const got = await fetchQuestions(rough.trim(), options.map((o) => o.text));
+      if (got && !got.length) throw new Error("Nothing usable came back. Try saying it differently.");
+      // New ones on top; the earlier ones stay underneath rather than vanish.
+      if (got) setOptions((o) => [...got.filter((v) => !o.some((x) => x.text === v.text)), ...o]);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="Help me write a question" movable resizable size="lg">
+      <div className="space-y-3">
+        <Textarea
+          label="What do you want to ask about?"
+          autoFocus
+          value={rough}
+          onChange={(e) => onRough(e.target.value)}
+          placeholder="A topic, half a thought or a rough question, and who it's for if you know. For example: whether MSLs should be paid on outcomes, maybe for Ajay"
+          className="min-h-20"
+        />
+        <div className="flex items-center justify-end gap-2">
+          {options.length > 0 && (
+            <Button
+              variant="ghost"
+              disabled={busy}
+              onClick={() => {
+                setOptions([]);
+                onRough("");
+                setError("");
+              }}
+            >
+              Start over
+            </Button>
+          )}
+          <Button disabled={!rough.trim() || busy || working} onClick={() => void run()}>
+            <Wand2 size={14} />
+            {busy ? "Writing…" : options.length ? "Write more from that" : "Write it with me"}
+          </Button>
+        </div>
+        {busy && <ProgressBar pct={pct} label="Writing them. You can close this; they'll be here." />}
+        {error && <p className="text-sm text-status-error">{error}</p>}
+        {options.length > 0 && (
+          <ul className="space-y-2">
+            {options.map((v) => {
+              const here = isHere(v.text);
+              return (
+                <li key={v.text} className="rounded-xl border border-border bg-surface p-3">
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--accent)]">{v.angle}</span>
+                    {v.forWhom && <ForChip who={v.forWhom} />}
+                  </span>
+                  {v.setup && <p className="mt-1 text-sm leading-relaxed text-ink/70">{v.setup}</p>}
+                  <p className="mt-1 text-sm font-medium text-ink">{v.text}</p>
+                  {v.followUp && <p className="mt-1 text-xs italic text-muted">Probe: {v.followUp}</p>}
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    {here ? (
+                      <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700">
+                        <Check size={13} /> Added
+                      </span>
+                    ) : (
+                      <>
+                        <Button size="sm" variant="secondary" onClick={() => onAdd(v, true)}>
+                          <Plus size={13} /> Add to my list
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => onAdd(v, false)}>
+                          Add to the bank
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 function AddOwnModal({
   open,
   onClose,
   categories,
   onAdd,
+  onHelp,
 }: {
   open: boolean;
   onClose: () => void;
   categories: string[];
   onAdd: (text: string, category: string, followUp: string, forWhom: string) => void;
+  /** Carries what they have typed across to writing it with help. */
+  onHelp: (text: string) => void;
 }) {
   const [text, setText] = useState("");
   const [category, setCategory] = useState("");
@@ -3536,7 +4107,16 @@ function AddOwnModal({
           onChange={setCategory}
           placeholder="Mine"
         />
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
+          <Button
+            variant="ghost"
+            onClick={() => {
+              onHelp(text);
+              setText("");
+            }}
+          >
+            <Wand2 size={14} /> Help me write it
+          </Button>
           <Button
             disabled={!text.trim()}
             onClick={() => {

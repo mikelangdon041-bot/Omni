@@ -30,9 +30,10 @@ import {
   trimRepeatedSetup,
   regroupQuestions,
   searchQuestions,
-  type ReworkPart,
+  type ReworkPart, type SetupResize,
   orderForConversation,
   placeQuestion,
+  resizeSetups,
   writeQuestions,
   writeSetups,
   writeVariants,
@@ -453,6 +454,8 @@ export async function POST(req: Request) {
         part: (["setup", "question", "both"].includes(body?.part) ? body.part : "auto") as ReworkPart,
         keep: Array.isArray(body?.keep) ? body.keep.map(String).slice(0, 8) : [],
         drop: Array.isArray(body?.drop) ? body.drop.map(String).slice(0, 8) : [],
+        rough: Boolean(body?.rough),
+        groups: Array.isArray(body?.groups) ? body.groups.map(String).slice(0, 40) : [],
       });
       return NextResponse.json({ variants });
     }
@@ -545,6 +548,27 @@ export async function POST(req: Request) {
       );
       const cut = await trimRepeatedSetup(items);
       return NextResponse.json({ texts: items.map((_: unknown, i: number) => cut.get(i) || "") });
+    }
+
+    // Setups shorter or longer, shown to the writer before anything changes.
+    if (action === "resize_setups") {
+      const meeting: MeetingPayload = body?.meeting || {};
+      const items = (Array.isArray(body?.items) ? body.items : []).slice(0, 12).map(
+        (x: { setup?: unknown; text?: unknown }) => ({
+          setup: String(x?.setup || "").slice(0, 3000),
+          text: String(x?.text || "").slice(0, 1000),
+        }),
+      );
+      const setups = await resizeSetups({
+        meeting,
+        research: String(body?.research || "").slice(0, 12000),
+        items,
+        direction: (["shorter", "longer"].includes(body?.direction) ? body.direction : "same") as SetupResize,
+        instruction: String(body?.instruction || "").slice(0, 2000),
+        avoid: Array.isArray(body?.avoid) ? body.avoid.map(String).slice(0, 12) : [],
+        standing: String(body?.standing || "").slice(0, 2000),
+      });
+      return NextResponse.json({ setups });
     }
 
     // Other ways to ask each question under its setup, to choose from.
