@@ -197,7 +197,8 @@ export const ACTIONS: ActionDef[] = [
     when: "Add a question the writer will ASK in the meeting, to their question bank and running order. This is the one for \"add a question\", \"write me a question about X\", \"add that to my questions\".",
     params: {
       "meetingId?": "leave empty for the meeting on screen",
-      question: "the question, word for word, as it would be said out loud",
+      question: "the question only, word for word, as it would be said out loud; the lead-in before it goes in setup, never in here",
+      "setup?": "the setup said before the question, word for word, when one was worked out or the question needs one: the point or finding it stands on, two to four spoken sentences",
       "followUp?": "the probe to use if the first answer is thin",
       "category?": "which group it belongs in, matching one already in the bank where there is one",
       "forWhom?": "who to put it to, when that matters",

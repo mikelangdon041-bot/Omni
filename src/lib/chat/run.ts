@@ -339,6 +339,9 @@ export async function runAction(
       };
       const items = Array.isArray(bank.items) ? bank.items : [];
       const question = need(str(p.question, 500), "question");
+      // The setup worked out in the chat comes with it. It used to be dropped,
+      // so a question added from the chat arrived without the lead-in agreed there.
+      const setup = str(p.setup, 1500);
       const live = items.filter((q) => !q.deleted);
       // Straight into the running order, at the end. A question added by
       // asking for it is one they want; leaving it unpicked would file it
@@ -358,6 +361,7 @@ export async function runAction(
               {
                 id: `q${Date.now()}`,
                 text: question,
+                ...(setup ? { setup } : {}),
                 // Its own group unless it was told one that already exists,
                 // so a stray name cannot scatter the bank into singletons.
                 category:
@@ -387,7 +391,9 @@ export async function runAction(
         .eq("id", id);
       if (error) throw new Error(error.message);
       return {
-        message: "Added it to your questions, at the end of your list.",
+        message: setup
+          ? "Added it to your questions with its setup, at the end of your list."
+          : "Added it to your questions, at the end of your list.",
         href: `/meeting-prep/${id}`,
       };
     }
