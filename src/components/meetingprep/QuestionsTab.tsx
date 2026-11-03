@@ -2375,6 +2375,7 @@ export function QuestionsTab({
                     rework: true,
                     changed: v.changed,
                     at: stamp,
+                    ...(v.check ? { check: v.check } : {}),
                   }));
                 return add.length ? { ...x, options: [...have, ...add] } : x;
               }),
@@ -3054,6 +3055,7 @@ function ReworkModal({
         // A new setup never changes who answers: older ones were labelled by guess.
         forWhom: o.changed === "setup" ? q?.forWhom : o.forWhom,
         changed: o.changed,
+        check: o.check,
       })),
   );
   // Which part to change, and words marked to keep or lose. The writer liked
@@ -3360,6 +3362,7 @@ function ReworkModal({
                           </ReworkPartText>
                         </>
                       )}
+                      {v.check && <p className="mt-1.5 rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-900">{v.check}</p>}
                       {v.followUp && <p className="mt-1.5 text-xs italic text-muted">Probe: {v.followUp}</p>}
                       <div className="mt-2.5 flex flex-wrap items-center gap-1.5 border-t border-border/60 pt-2.5">
                         <Button

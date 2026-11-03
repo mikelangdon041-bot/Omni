@@ -425,6 +425,8 @@ export interface QuestionOption {
   changed?: "setup" | "question" | "both";
   /** When Rework wrote it, so the newest show first and the last round is marked. */
   at?: number;
+  /** A claim it says differently from the writer's setup, with what the research says. */
+  check?: string;
 }
 
 export interface SharperQuestion {

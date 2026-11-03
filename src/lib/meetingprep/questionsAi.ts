@@ -821,6 +821,8 @@ export interface QuestionVariant {
   changed?: "setup" | "question" | "both";
   /** For a question written from scratch: which of their groups it belongs in. */
   group?: string;
+  /** A claim this version says differently from their setup, because the research does. */
+  check?: string;
 }
 
 export type ReworkPart = "auto" | "setup" | "question" | "both";
@@ -1077,7 +1079,25 @@ Plain prose. No markdown, no quotation marks around the question. Never an em da
     if (v.text !== question.text) parts.push([v.text, question.text]);
     return parts.every(([now, was]) => (length === "shorter" ? wordCount(now) < wordCount(was) : wordCount(now) > wordCount(was)));
   };
-  const result = length === "same" ? sized : sized.filter(fits);
+  let result = length === "same" ? sized : sized.filter(fits);
+  // A cut must say the same things about the same people. One turned "the
+  // people they talk to are younger" into "they're younger": a different
+  // claim, said out loud to the people it is about.
+  if (!rough && length !== "same" && question.setup) {
+    const cut = result.filter((v) => v.setup && v.setup !== question.setup);
+    if (cut.length) {
+      const verdicts = await meaningKept(withDocuments(research, meeting), cut.map((v) => ({ was: question.setup || "", now: v.setup || "" })));
+      result = result.filter((v) => {
+        const k = cut.indexOf(v);
+        if (k < 0) return true;
+        const d = verdicts[k];
+        if (!d?.changed) return true;
+        if (!d.research) return false;
+        v.check = `This says it differently from your setup: ${d.changed.replace(/[.\s]+$/, "")}. Your research says: "${d.research}"`;
+        return true;
+      });
+    }
+  }
   // Drafts the checks turned away left "three ways" as one. Once, for the
   // rest; for a rework, only when nothing at all came through.
   if (!retried && (rough ? result.length < count : !result.length)) {
@@ -1302,8 +1322,86 @@ Return one entry per number you are given, with the whole setup and the whole qu
       else out[i] = got;
     }
     for (const i of todo) if (!out[i] && !why[i]) why[i] = "nothing came back for it";
+    // Same claims about the same people, or it goes back with what changed.
+    const cut = todo.filter((i) => out[i] && out[i]!.setup !== items[i].setup && items[i].setup);
+    if (cut.length) {
+      const verdicts = await meaningKept(withDocuments(research, meeting), cut.map((i) => ({ was: items[i].setup, now: out[i]!.setup })));
+      cut.forEach((i, k) => {
+        const d = verdicts[k];
+        // No note to show a changed claim beside here, so any change goes back.
+        if (d?.changed) {
+          why[i] = `it changed what the setup says: ${d.changed.replace(/[.\s]+$/, "")}. Keep the writer's claim as they made it`;
+          out[i] = null;
+        }
+      });
+    }
   }
   return out.map((o, i) => o || { why: why[i] || "it didn't pass the checks" });
+}
+
+/** The research plus the documents they gave, which is where most of a setup's facts come from. */
+function withDocuments(research: string, meeting: MeetingPayload): string {
+  const docs = (meeting.documents || []).map((d) => `${d.name || "Document"}:\n${d.text || ""}`).join("\n\n");
+  return `${research}\n\n${docs}`.slice(0, 40000);
+}
+
+const MEANING_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    results: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: { index: { type: "number" as const }, changed: { type: "string" as const }, research: { type: "string" as const } },
+        required: ["index", "changed", "research"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["results"],
+  additionalProperties: false,
+};
+
+/**
+ * Whether a shorter or longer setup still says what the writer's said. Leaving
+ * a detail out is fine; saying something of different people, a different
+ * number or a different claim is not. When the research says the new claim
+ * and not the writer's, that comes back too, so it can be shown rather than
+ * thrown away.
+ */
+async function meaningKept(research: string, pairs: { was: string; now: string }[]): Promise<{ changed: string; research: string }[]> {
+  try {
+    const res = await anthropic().messages.create({
+      model: CHECK_MODEL,
+      max_tokens: 4000,
+      output_config: { format: { type: "json_schema", schema: MEANING_SCHEMA } },
+      system: `You check shortened or lengthened versions of a spoken setup against the writer's own. For each version, say whether it makes the same claims about the same people and things.
+
+Fine: leaving a detail or an example out, shorter wording, a closing line that leads into the question.
+Not fine: saying something of a different group than the writer did (the writer said the people HCPs talk to are younger, the version says HCPs are younger), merging two groups into one, a different number, a claim made stronger or weaker or turned into a different one, or a vague phrase read as something specific (the writer's "the people they talk to" made into "patients", or "assets" made into "scientific information"): keep the writer's phrase instead.
+
+changed: when it is not fine, what changed, in plain words, one short sentence naming both versions of the claim. "" when it is fine.
+research: when the research below says it the way the version does and not the way the writer did, the research's words for it, a short quote. "" otherwise.`,
+      messages: [
+        {
+          role: "user",
+          content: `${research ? `The research:\n${research.slice(0, 12000)}\n\n` : ""}${pairs
+            .map((p, i) => `${i + 1}.\nWriter's setup: ${p.was}\nVersion: ${p.now}`)
+            .join("\n\n")}`,
+        },
+      ],
+    });
+    const parsed = JSON.parse(firstText(res) || "{}");
+    const out = pairs.map(() => ({ changed: "", research: "" }));
+    for (const r of Array.isArray(parsed.results) ? parsed.results : []) {
+      const i = Number(r?.index) - 1;
+      if (i >= 0 && i < out.length) out[i] = { changed: String(r?.changed || "").trim(), research: String(r?.research || "").trim() };
+    }
+    return out;
+  } catch {
+    // The check is a guard, not the work: if it cannot run, the versions stand.
+    return pairs.map(() => ({ changed: "", research: "" }));
+  }
 }
 
 const FILL_SCHEMA = {
