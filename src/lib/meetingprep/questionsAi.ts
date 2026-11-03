@@ -853,8 +853,8 @@ export async function writeVariants({
   meeting: MeetingPayload;
   kolBlock?: string;
   research?: string;
-  question: { text: string; why?: string; followUp?: string; category?: string; setup?: string };
-  /** The second pass for a rough start that came back short. */
+  question: { text: string; why?: string; followUp?: string; category?: string; setup?: string; who?: string };
+  /** The second pass, for a rough start that came back short or a cut that came back as nothing. */
   retried?: boolean;
   /** Shorter or longer: the part being changed, by about half. */
   length?: ReworkLength;
@@ -923,13 +923,27 @@ ${rough ? "WHAT TO WRITE. Every question gets a setup of its own, unless it trul
           : part === "both"
             ? "The writer wants both the setup and the question reworked."
             : "Work out from what the writer says which part they are unhappy with. When it is the setup, write new setups and keep the question word for word; when it is the question, keep the setup (setup \"\"). Change both only when they ask for both, or when the new part truly cannot work with the old one, and then change the other part as little as possible. Never rewrite a part they did not complain about just to make the version look different. With no instruction at all, vary the question and keep the setup."
+    }${
+      !rough && question.who
+        ? `\n\nWHO IT IS FOR. The writer is putting this question to ${question.who}. Every version is for ${question.who} too, and forWhom is "${question.who}", unless what the writer wants below asks for someone else.`
+        : ""
     }${keep.length ? `\nKeep these words exactly as they are, in every version, wherever they appear: ${keep.map((k) => `"${k}"`).join("; ")}.` : ""}${drop.length ? `\nLeave these words out of every version: ${drop.map((k) => `"${k}"`).join("; ")}.` : ""}${
       length !== "same"
         ? `\nLENGTH. Make the part you change ${
             length === "shorter"
               ? "about half as long as it is now. Cut: keep the point that makes it land and the writer's own phrasing, drop second examples, restated ideas and throat clearing"
               : "about half as long again, with substance it stands on, never padding"
-          }. The setup is now ${wordCount(question.setup || "")} words and the question ${wordCount(question.text)}.`
+          }. The setup is now ${wordCount(question.setup || "")} words and the question ${wordCount(question.text)}.${
+            rough
+              ? ""
+              : ` This outranks "far enough apart" above: every version is ${
+                  length === "shorter" ? "a cut of" : "the same"
+                } the part they have, with the same facts, the same point and the same order, in their words wherever possible. No new facts, examples, numbers or scenarios, and nothing taken from their other questions${
+                  length === "longer" ? " beyond what the research says about this same point" : ""
+                }. The versions differ only in what they ${length === "shorter" ? "keep and what they cut" : "add"}, and angle says that ("Keeps the number", "Keeps the image"). Versions they have already seen are other ${
+                  length === "shorter" ? "cuts" : "versions"
+                }, not a reason to move further from what they wrote. The cut must still lead into the question: keep the part of the setup the question picks up, the idea or words that make it the obvious next thing to ask. A setup about how people are graded leads into a question about a new KPI; cut the grading and the question arrives as a jump. Before you answer, say each setup and then the question in your head as the room will hear them, and if the question comes out of nowhere, put the link back.${guidance ? " If what the writer wants below asks for something new, it wins." : ""}`
+          }`
         : ""
     }
 
@@ -999,12 +1013,19 @@ Plain prose. No markdown, no quotation marks around the question. Never an em da
       changed = "question";
     }
     if (part === "setup" && !setup) continue;
+    // Shorter or longer is the same setup, cut or filled out. A redo that
+    // came back with a scenario and a point from another question was a new
+    // setup, not a shorter one. Most of its words have to be the writer's.
+    if (setup && length !== "same" && !rough && !guidance && question.setup && sharedWords(setup, question.setup) < 0.5) continue;
     out.push({
       angle: String(v?.angle || "").trim() || "Another way",
       text: said,
       followUp: String(v?.followUp || "").trim(),
       setup,
-      forWhom: String(v?.forWhom || "").trim(),
+      // Who it is for stays theirs unless they said otherwise: a new setup
+      // does not change who answers the question, and the model guessed
+      // afresh every time, so a question for Ajay came back "For Everyone".
+      forWhom: question.who && (changed === "setup" || !namesSomeone(guidance, meeting)) ? question.who : String(v?.forWhom || "").trim(),
       changed,
       group: String(v?.group || "").trim(),
     });
@@ -1024,8 +1045,9 @@ Plain prose. No markdown, no quotation marks around the question. Never an em da
     return parts.every(([now, was]) => (length === "shorter" ? wordCount(now) < wordCount(was) : wordCount(now) > wordCount(was)));
   };
   const result = length === "same" ? sized : sized.filter(fits).length ? sized.filter(fits) : sized;
-  // Drafts the checks turned away left "three ways" as one. Once, for the rest.
-  if (rough && !retried && result.length < count) {
+  // Drafts the checks turned away left "three ways" as one. Once, for the
+  // rest; for a rework, only when nothing at all came through.
+  if (!retried && (rough ? result.length < count : !result.length)) {
     const more = await writeVariants({
       meeting,
       kolBlock,
@@ -1040,10 +1062,31 @@ Plain prose. No markdown, no quotation marks around the question. Never an em da
       groups,
       retried: true,
       length,
+      part,
+      keep,
+      drop,
     });
     return [...result, ...more];
   }
   return result;
+}
+
+/** How much of a new passage is made of the old one's words, 0 to 1. */
+function sharedWords(now: string, was: string): number {
+  const bag = (t: string) => (t.toLowerCase().match(/[a-z0-9']{4,}/g) || []);
+  const old = new Set(bag(was));
+  const mine = bag(now);
+  return mine.length ? mine.filter((w) => old.has(w)).length / mine.length : 1;
+}
+
+/** Whether what the writer typed names one of the people in the room, or everyone. */
+function namesSomeone(guidance: string, meeting: MeetingPayload): boolean {
+  if (!guidance.trim()) return false;
+  if (/\b(everyone|everybody|all of them|the whole panel|the panel)\b/i.test(guidance)) return true;
+  return (meeting.attendees || []).some((a) => {
+    const first = String(a?.name || "").trim().split(/[\s,]+/)[0];
+    return first.length > 1 && new RegExp(`\\b${first.replace(/[^A-Za-z]/g, "")}\\b`, "i").test(guidance);
+  });
 }
 
 const MANY_SCHEMA = {

@@ -443,6 +443,7 @@ export async function POST(req: Request) {
           followUp: String(q?.followUp || "").slice(0, 1000),
           category: String(q?.category || "").slice(0, 120),
           setup: String(q?.setup || "").slice(0, 3000),
+          who: String(q?.who || "").slice(0, 120),
         },
         others: Array.isArray(body?.others)
           ? body.others.map(String).slice(0, 60)

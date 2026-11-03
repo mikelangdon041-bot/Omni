@@ -2388,6 +2388,8 @@ export function QuestionsTab({
                 why: q.why,
                 followUp: q.followUp,
                 category: q.category,
+                // Who they are putting it to, so every version stays theirs.
+                who: q.askWho || (q.forWhom && !/^everyone$/i.test(q.forWhom) ? q.forWhom : ""),
               },
               // Their list numbered as on screen, so "question four" means
               // their number 4, then the bank. Numbered from the bank, as it
@@ -3017,7 +3019,15 @@ function ReworkModal({
   const [options, setOptions] = useState<QuestionVariant[]>(() =>
     (q?.options || [])
       .filter((o) => o.rework)
-      .map((o) => ({ angle: o.kind, text: o.text, followUp: o.followUp, setup: o.setup, forWhom: o.forWhom, changed: o.changed })),
+      .map((o) => ({
+        angle: o.kind,
+        text: o.text,
+        followUp: o.followUp,
+        setup: o.setup,
+        // A new setup never changes who answers: older ones were labelled by guess.
+        forWhom: o.changed === "setup" ? q?.forWhom : o.forWhom,
+        changed: o.changed,
+      })),
   );
   // Which part to change, and words marked to keep or lose. The writer liked
   // part of a question and had no way to say which part.
@@ -3026,6 +3036,18 @@ function ReworkModal({
   const [keepWords, setKeepWords] = useState<string[]>([]);
   const [dropWords, setDropWords] = useState<string[]>([]);
   const [sel, setSel] = useState("");
+  // The version being edited in place, before using or keeping it.
+  const [editIdx, setEditIdx] = useState<number | null>(null);
+  const editOption = (i: number, p: Partial<QuestionVariant>) =>
+    setOptions((all) =>
+      all.map((o, k) => {
+        if (k !== i) return o;
+        const n = { ...o, ...p };
+        const setupNew = Boolean(n.setup && n.setup !== stripAskedQuestion(q?.setup || "", q?.text || ""));
+        const textNew = n.text !== q?.text;
+        return { ...n, changed: setupNew && textNew ? "both" : setupNew ? "setup" : "question" };
+      }),
+    );
   const grabSelection = () => {
     const t = (window.getSelection()?.toString() || "").replace(/\s+/g, " ").trim();
     setSel(t.length >= 2 ? t : "");
@@ -3062,6 +3084,7 @@ function ReworkModal({
       onSave(got);
       // New ones on top; the earlier ones stay underneath rather than vanish.
       setOptions((o) => [...got, ...o]);
+      setEditIdx((k) => (k === null ? null : k + got.length));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -3249,8 +3272,29 @@ function ReworkModal({
                         </span>
                       ) : null;
                     })()}
-                    {v.setup && <span className="mt-1 block text-sm leading-relaxed text-ink/70">{v.setup}</span>}
-                    <span className={`mt-1 block text-sm font-medium ${v.changed === "setup" ? "text-ink/60" : "text-ink"}`}>{v.text}</span>
+                    {editIdx === i ? (
+                      <>
+                        {/* The setup this version would bring; its own, or the one there now to edit from. */}
+                        <Textarea
+                          aria-label="Setup for this version"
+                          value={v.setup ?? ""}
+                          placeholder={stripAskedQuestion(q.setup || "", q.text) || "No setup"}
+                          onChange={(e) => editOption(i, { setup: e.target.value })}
+                          className="mt-1.5 min-h-16"
+                        />
+                        <Textarea
+                          aria-label="Question for this version"
+                          value={v.text}
+                          onChange={(e) => editOption(i, { text: e.target.value })}
+                          className="mt-1.5 min-h-12 font-medium"
+                        />
+                      </>
+                    ) : (
+                      <>
+                        {v.setup && <span className="mt-1 block text-sm leading-relaxed text-ink/70">{v.setup}</span>}
+                        <span className={`mt-1 block text-sm font-medium ${v.changed === "setup" ? "text-ink/60" : "text-ink"}`}>{v.text}</span>
+                      </>
+                    )}
                     {v.followUp && (
                       <span className="mt-1 block text-xs italic text-muted">
                         Probe: {v.followUp}
@@ -3260,15 +3304,16 @@ function ReworkModal({
                       <Button
                         size="sm"
                         variant="secondary"
-                        onClick={() => onApply(v.text, v.followUp || q.followUp, v.setup, v.forWhom)}
+                        disabled={!v.text.trim()}
+                        onClick={() => onApply(v.text.trim(), v.followUp || q.followUp, v.setup?.trim() || undefined, v.forWhom)}
                       >
                         Use instead
                       </Button>
                       <Button
                         size="sm"
                         variant="ghost"
-                        disabled={keptHere(v)}
-                        onClick={() => onAdd(v.text, v.followUp || "", v.setup, v.forWhom)}
+                        disabled={keptHere(v) || !v.text.trim()}
+                        onClick={() => onAdd(v.text.trim(), v.followUp || "", v.setup?.trim() || undefined, v.forWhom)}
                       >
                         {keptHere(v) ? (
                           <>
@@ -3280,6 +3325,17 @@ function ReworkModal({
                           </>
                         )}
                       </Button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          // Starting from the setup there now, so it can be edited rather than retyped.
+                          if (editIdx !== i && !v.setup) editOption(i, { setup: stripAskedQuestion(q.setup || "", q.text) });
+                          setEditIdx(editIdx === i ? null : i);
+                        }}
+                        className="text-xs font-medium text-muted hover:text-ink hover:underline"
+                      >
+                        {editIdx === i ? "Done editing" : "Edit"}
+                      </button>
                     </div>
                   </li>
                 ))}
