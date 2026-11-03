@@ -33,6 +33,7 @@ export function AskMode({
   onResetTicks,
   onUseKept,
   minutesOf,
+  quickOf,
   slotMin,
   leadMin = 0,
   endMin = 0,
@@ -51,6 +52,8 @@ export function AskMode({
   onUseKept?: (q: QuestionItem, o: QuestionOption) => void;
   /** How long a question runs, the same reckoning as the list's. */
   minutesOf?: (q: QuestionItem) => number;
+  /** A question to everyone, asked for a minute each: how long it takes then. Null for any other. */
+  quickOf?: (q: QuestionItem) => number | null;
   /** The whole slot, in minutes. */
   slotMin?: number | null;
   /** Before the first question: introductions and the opening. */
@@ -110,7 +113,21 @@ export function AskMode({
     const left = slotMin - endMin - gone;
     const spare = left - toCome;
     const reserve = all.find((q) => q.backup && !q.asked && minutesOf(q) <= spare);
-    return { gone, left, spare, reserve };
+    // Running over with a question to everyone still to come: a minute each
+    // on it is the cut that keeps the running order, before skipping any.
+    let quick: { q: QuestionItem; saves: number; both: boolean } | null = null;
+    if (spare <= -1 && quickOf) {
+      const toAll = all
+        .filter((q) => !q.backup && !q.asked)
+        .map((q) => ({ q, saves: minutesOf(q) - (quickOf(q) ?? minutesOf(q)) }))
+        .filter((x) => x.saves >= 1);
+      if (toAll.length) {
+        const one = toAll.find((x) => x.saves >= -spare);
+        const all2 = toAll.reduce((n, x) => n + x.saves, 0);
+        quick = one ? { q: one.q, saves: one.saves, both: false } : { q: toAll[0].q, saves: all2, both: toAll.length > 1 };
+      }
+    }
+    return { gone, left, spare, reserve, quick };
   })();
   const goTo = (q: QuestionItem) => {
     setShow("all");
@@ -250,7 +267,11 @@ export function AskMode({
                   {clock.spare >= 1
                     ? `About ${Math.round(clock.spare)} min spare`
                     : clock.spare <= -1
-                      ? `About ${Math.round(-clock.spare)} min over: skip one that isn't a must-ask`
+                      ? clock.quick
+                        ? `About ${Math.round(-clock.spare)} min over: ask for a minute each on ${
+                            clock.quick.both ? "the questions to everyone" : `“${clock.quick.q.text.split(/\s+/).slice(0, 6).join(" ")}…”`
+                          }, which saves about ${Math.round(clock.quick.saves)} min${clock.quick.saves + clock.spare < -0.5 ? ", and skip one that isn't a must-ask" : ""}`
+                        : `About ${Math.round(-clock.spare)} min over: skip one that isn't a must-ask`
                       : "On time"}
                 </span>
                 {clock.reserve && (

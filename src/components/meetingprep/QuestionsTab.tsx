@@ -2265,6 +2265,7 @@ export function QuestionsTab({
           onResetTicks={() => setItems(items.map((q) => ({ ...q, asked: false })))}
           onUseKept={(q, o) => patch(q.id, swapKept(q, o))}
           minutesOf={(q) => minutesFor(q, panel.length, timing)}
+          quickOf={(q) => quickFor(q, panel.length)}
           slotMin={m.duration_min || null}
           leadMin={timing.introMin * panel.length + 1}
           endMin={1 + timing.qaMin}
@@ -2624,12 +2625,25 @@ const fmtMin = (n: number) => (Math.round(n * 2) / 2).toString();
  * everyone answering. "For Everyone" means any of them could take it, and
  * counting that as four answers put eight minutes on most of the list.
  */
+/** Put to the whole panel, each of them answering in turn. */
+function isToAll(q: QuestionItem, panelSize: number): boolean {
+  const asked = askList(q.askWho).length;
+  return (panelSize > 1 && asked >= panelSize) || (!asked && /\b(to all in turn|each of you|go down the line|all of you|everyone in turn)\b/i.test(q.text));
+}
+
+/**
+ * A question to the whole panel asked for "a minute each": what it takes
+ * then. Null for one that is not put to all of them.
+ */
+function quickFor(q: QuestionItem, panelSize: number): number | null {
+  if (!isToAll(q, panelSize)) return null;
+  return (words(q.setup) + words(q.text)) / 150 + panelSize;
+}
+
 function minutesFor(q: QuestionItem, panelSize: number, t: Timing): number {
   const say = (words(q.setup) + words(q.text)) / 150;
   const asked = askList(q.askWho).length;
-  const toAll =
-    (panelSize > 1 && asked >= panelSize) ||
-    (!asked && /\b(to all in turn|each of you|go down the line|all of you|everyone in turn)\b/i.test(q.text));
+  const toAll = isToAll(q, panelSize);
   // Put to several by name: each of them answers, then the usual others come in.
   const others = toAll ? Math.max(0, panelSize - 1) : asked > 1 ? asked - 1 + t.reactions : t.reactions;
   return say + t.pace + others * 1.5;
@@ -3086,7 +3100,8 @@ function ReworkModal({
   const keptHere = (v: QuestionVariant) => (q?.options || []).some((o) => o.keep && sameOption(o, v));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const pct = useProgress(busy, 20000);
+  // Shorter or longer is written, then checked against their setup: longer.
+  const pct = useProgress(busy, length === "same" ? 20000 : 40000);
 
   /** "Give me five", "six more": the number they asked for, if any. */
   function askedCount(t: string): number | undefined {
@@ -3271,7 +3286,12 @@ function ReworkModal({
               </Button>
               {options.length > 0 && !busy && <span className="text-[11px] text-muted">New ones appear just below.</span>}
             </div>
-            {busy && <ProgressBar pct={pct} label="Writing them" />}
+            {busy && (
+              <ProgressBar
+                pct={pct}
+                label={length === "same" ? "Writing them" : "Writing them, then checking each still says what your setup says. About 40 seconds"}
+              />
+            )}
             {error && <p className="text-sm text-status-error">{error}</p>}
           </section>
 
