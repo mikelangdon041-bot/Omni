@@ -2304,6 +2304,7 @@ export function QuestionsTab({
       <ReworkModal
         key={reworkId || "none"}
         q={live.find((x) => x.id === reworkId) || null}
+        onSplit={(setup, text) => reworkId && patch(reworkId, { setup, text })}
         standing={guidance}
         onClose={() => setReworkId(null)}
         onMany={(p) => {
@@ -2542,7 +2543,7 @@ export function QuestionsTab({
           setShowAdd(false);
           setShowHelp(true);
         }}
-        onAdd={(text, category, followUp, forWhom) => {
+        onAdd={(text, category, followUp, forWhom, setup) => {
           if (alreadyHere(text)) {
             setShowAdd(false);
             return;
@@ -2555,6 +2556,7 @@ export function QuestionsTab({
             why: "",
             followUp,
             forWhom,
+            ...(setup ? { setup } : {}),
             rank: 0,
             picked: true,
             backup: false,
@@ -2996,8 +2998,11 @@ function ReworkModal({
   onSave,
   fetchVariants,
   onMany,
+  onSplit,
 }: {
   q: QuestionItem | null;
+  /** Makes the lead-in typed into the question its setup. */
+  onSplit: (setup: string, text: string) => void;
   /** Their standing instruction, shown so they know it is still on. */
   standing: string;
   onClose: () => void;
@@ -3038,6 +3043,9 @@ function ReworkModal({
   const [sel, setSel] = useState("");
   // The version being edited in place, before using or keeping it.
   const [editIdx, setEditIdx] = useState<number | null>(null);
+  // How many at the top came from the last press, so the new ones can be told
+  // from the ones already seen. They all looked alike.
+  const [fresh, setFresh] = useState(0);
   const editOption = (i: number, p: Partial<QuestionVariant>) =>
     setOptions((all) =>
       all.map((o, k) => {
@@ -3080,10 +3088,16 @@ function ReworkModal({
         keep: keepWords,
         drop: dropWords,
       });
-      if (!got.length) throw new Error("Nothing usable came back — try saying it differently.");
+      if (!got.length)
+        throw new Error(
+          length !== "same"
+            ? `None came out ${length} than what you have. Try again, or say what to ${length === "shorter" ? "cut" : "add"}.`
+            : "Nothing usable came back. Try saying it differently.",
+        );
       onSave(got);
       // New ones on top; the earlier ones stay underneath rather than vanish.
       setOptions((o) => [...got, ...o]);
+      setFresh(got.length);
       setEditIdx((k) => (k === null ? null : k + got.length));
     } catch (e) {
       setError((e as Error).message);
@@ -3092,263 +3106,282 @@ function ReworkModal({
     }
   }
 
+  const setupNow = q ? stripAskedQuestion(q.setup || "", q.text) : "";
+  // Nothing to cut: asked for a shorter setup on a question with none, it
+  // wrote new setups from nothing, and every one came back longer.
+  const nothingToShorten = !setupNow && length === "shorter" && part === "setup";
+  const sameWho = (w?: string) => !w || (w || "").toLowerCase() === (q?.forWhom || "").toLowerCase();
+
   return (
-    <Modal open={Boolean(q)} onClose={onClose} title="Say this one another way" movable resizable size="lg">
+    <Modal open={Boolean(q)} onClose={onClose} title="Rework this question" movable resizable size="lg">
       {q && (
-        <>
-          {/* The setup too: sometimes it is the setup that needs the work. */}
-          <div
-            className="rounded-lg border border-border bg-canvas/60 px-3 py-2 text-sm"
+        <div className="space-y-4">
+          {/* What is there now, each part labelled, so a missing setup reads as missing. */}
+          <section
+            className="rounded-xl border border-border bg-canvas/60 p-3"
             onMouseUp={grabSelection}
             onTouchEnd={grabSelection}
             onKeyUp={grabSelection}
           >
-            {q.setup && <p className="leading-relaxed text-ink/70">{stripAskedQuestion(q.setup, q.text)}</p>}
-            <p className={`font-medium text-ink ${q.setup ? "mt-1.5" : ""}`}>{q.text}</p>
-            {/* What each version below is measured against. */}
-            <p className="mt-1 text-[11px] text-muted">
-              Now: {q.setup ? `setup ${words(stripAskedQuestion(q.setup, q.text))} words, ` : ""}question {words(q.text)} words, about{" "}
-              {secondsOf(`${stripAskedQuestion(q.setup || "", q.text)} ${q.text}`)} sec to say
-            </p>
-          </div>
-          {/* Select any words above to keep them or lose them. */}
-          {sel ? (
-            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
-              <span className="max-w-full truncate text-muted">&ldquo;{sel.length > 70 ? `${sel.slice(0, 70)}…` : sel}&rdquo;</span>
-              <button
-                type="button"
-                onClick={() => {
-                  setKeepWords((k) => (k.includes(sel) ? k : [...k, sel]));
-                  setDropWords((d) => d.filter((x) => x !== sel));
-                  setSel("");
-                }}
-                className="rounded-md bg-emerald-100 px-2 py-0.5 font-medium text-emerald-800 hover:bg-emerald-200"
-              >
-                Keep these words
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setDropWords((d) => (d.includes(sel) ? d : [...d, sel]));
-                  setKeepWords((k) => k.filter((x) => x !== sel));
-                  setSel("");
-                }}
-                className="rounded-md bg-red-100 px-2 py-0.5 font-medium text-red-800 hover:bg-red-200"
-              >
-                Lose these words
-              </button>
+            <div className="mb-2 flex items-baseline justify-between gap-2">
+              <span className="text-xs font-semibold text-ink">What you have now</span>
+              <span className="text-[11px] text-muted">about {secondsOf(`${setupNow} ${q.text}`)} sec to say</span>
             </div>
-          ) : (
-            <p className="mt-1 text-[11px] text-muted">Select any words above to keep them or lose them.</p>
-          )}
-          {(keepWords.length > 0 || dropWords.length > 0) && (
-            <div className="mt-1.5 flex flex-wrap gap-1.5 text-xs">
-              {keepWords.map((k) => (
-                <span key={`k${k}`} className="inline-flex max-w-full items-center gap-1 rounded-md bg-emerald-50 px-2 py-0.5 text-emerald-900">
-                  <span className="truncate">Keep: {k}</span>
-                  <button type="button" aria-label="Remove" onClick={() => setKeepWords((x) => x.filter((y) => y !== k))}>
-                    ×
-                  </button>
-                </span>
-              ))}
-              {dropWords.map((k) => (
-                <span key={`d${k}`} className="inline-flex max-w-full items-center gap-1 rounded-md bg-red-50 px-2 py-0.5 text-red-900">
-                  <span className="truncate">Lose: {k}</span>
-                  <button type="button" aria-label="Remove" onClick={() => setDropWords((x) => x.filter((y) => y !== k))}>
-                    ×
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-          {/* Which part to work on. Said "the setup is the issue", it used to
-              rewrite the question too. */}
-          <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs">
-            <span className="font-medium text-ink">Change</span>
-            {(
-              [
-                ["auto", "Whatever I say below"],
-                ["setup", "Just the setup"],
-                ["question", "Just the question"],
-                ["both", "Both"],
-              ] as const
-            ).map(([k, label]) => (
-              <button
-                key={k}
-                type="button"
-                onClick={() => setPart(k)}
-                className={`rounded-full border px-2.5 py-0.5 transition ${
-                  part === k
-                    ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
-                    : "border-border text-muted hover:text-ink"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          {/* How long, for whichever part is changing: the same choice as
-              the part, not a separate tool. */}
-          <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
-            <span className="font-medium text-ink">Length</span>
-            {(
-              [
-                ["same", "As it is"],
-                ["shorter", "Shorter"],
-                ["longer", "Longer"],
-              ] as const
-            ).map(([k, label]) => (
-              <button
-                key={k}
-                type="button"
-                onClick={() => setLength(k)}
-                className={`rounded-full border px-2.5 py-0.5 transition ${
-                  length === k
-                    ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
-                    : "border-border text-muted hover:text-ink"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+            <ReworkPartText label="Setup" count={setupNow ? words(setupNow) : undefined}>
+              {setupNow || <span className="italic text-muted">No setup. The question is said on its own.</span>}
+            </ReworkPartText>
+            {!setupNow && splitLeadIn(q.text) && (
+              // Typed in one box, the lead-in went in with the question and
+              // Rework could not see a setup to work on.
+              <div className="mt-1.5 rounded-md bg-[var(--accent-soft)] px-2.5 py-1.5 text-xs text-ink">
+                The start of your question reads like a setup: &ldquo;{splitLeadIn(q.text)!.setup}&rdquo;{" "}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const sp = splitLeadIn(q.text)!;
+                    onSplit(sp.setup, sp.text);
+                  }}
+                  className="font-medium text-[var(--accent)] hover:underline"
+                >
+                  Make it the setup
+                </button>
+              </div>
+            )}
+            <ReworkPartText label="Question" count={words(q.text)} strong>
+              {q.text}
+            </ReworkPartText>
+            {/* Select any words above to keep them or lose them. */}
+            {sel ? (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+                <span className="max-w-full truncate text-muted">&ldquo;{sel.length > 70 ? `${sel.slice(0, 70)}…` : sel}&rdquo;</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setKeepWords((k) => (k.includes(sel) ? k : [...k, sel]));
+                    setDropWords((d) => d.filter((x) => x !== sel));
+                    setSel("");
+                  }}
+                  className="rounded-md bg-emerald-100 px-2 py-0.5 font-medium text-emerald-800 hover:bg-emerald-200"
+                >
+                  Keep these words
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDropWords((d) => (d.includes(sel) ? d : [...d, sel]));
+                    setKeepWords((k) => k.filter((x) => x !== sel));
+                    setSel("");
+                  }}
+                  className="rounded-md bg-red-100 px-2 py-0.5 font-medium text-red-800 hover:bg-red-200"
+                >
+                  Lose these words
+                </button>
+              </div>
+            ) : (
+              <p className="mt-2 text-[11px] text-muted">Select any words to keep them or lose them.</p>
+            )}
+            {(keepWords.length > 0 || dropWords.length > 0) && (
+              <div className="mt-1.5 flex flex-wrap gap-1.5 text-xs">
+                {keepWords.map((k) => (
+                  <span key={`k${k}`} className="inline-flex max-w-full items-center gap-1 rounded-md bg-emerald-50 px-2 py-0.5 text-emerald-900">
+                    <span className="truncate">Keep: {k}</span>
+                    <button type="button" aria-label="Remove" onClick={() => setKeepWords((x) => x.filter((y) => y !== k))}>
+                      ×
+                    </button>
+                  </span>
+                ))}
+                {dropWords.map((k) => (
+                  <span key={`d${k}`} className="inline-flex max-w-full items-center gap-1 rounded-md bg-red-50 px-2 py-0.5 text-red-900">
+                    <span className="truncate">Lose: {k}</span>
+                    <button type="button" aria-label="Remove" onClick={() => setDropWords((x) => x.filter((y) => y !== k))}>
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </section>
 
-          <div className="mt-3">
+          {/* What to do: which part, how long, anything else. */}
+          <section className="space-y-2.5">
+            <div className="grid grid-cols-[4.5rem_1fr] items-center gap-x-2 gap-y-2 text-xs">
+              <span className="font-medium text-ink">Change</span>
+              <Segmented
+                value={part}
+                onChange={setPart}
+                options={[
+                  ["setup", "Setup"],
+                  ["question", "Question"],
+                  ["both", "Both"],
+                  ["auto", "As I say below"],
+                ]}
+              />
+              <span className="font-medium text-ink">Length</span>
+              <Segmented
+                value={length}
+                onChange={setLength}
+                options={[
+                  ["same", "Keep it"],
+                  ["shorter", "Shorter"],
+                  ["longer", "Longer"],
+                ]}
+              />
+            </div>
+            {nothingToShorten && (
+              <p className="rounded-md bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900">
+                This question has no setup, so there&apos;s nothing to make shorter. Pick Question to shorten the question, or Longer to write it a setup.
+              </p>
+            )}
             <Textarea
-              label="What's not right about it? (optional)"
+              label="Anything else? (optional)"
               autoFocus
               value={instruction}
               onChange={(e) => setInstruction(e.target.value)}
-              placeholder={`e.g. "too long to say out loud", "the setup is too abstract", "make it work for Roman and Mark", "combine it with question 4", "give me five"`}
-              className="min-h-16"
+              placeholder={`e.g. "keep the number", "less formal", "make it work for Roman and Mark", "give me five"`}
+              className="min-h-14"
             />
-            {standing && (
-              <p className="mt-1 text-[11px] text-muted">
-                Your standing instruction still applies: {standing}
-              </p>
-            )}
-          </div>
-
-          {busy && <ProgressBar pct={pct} label="Writing them. The ones below stay while you wait." className="mt-3" />}
-          {error && <p className="mt-2 text-sm text-status-error">{error}</p>}
+            {standing && <p className="text-[11px] text-muted">Your standing instruction still applies: {standing}</p>}
+            <div className="flex flex-wrap items-center gap-2">
+              <Button disabled={busy || nothingToShorten} onClick={() => void run()}>
+                <Wand2 size={14} />
+                {busy ? "Writing…" : options.length ? "Write more" : "Show me a few ways"}
+              </Button>
+              {options.length > 0 && !busy && <span className="text-[11px] text-muted">New ones appear just below.</span>}
+            </div>
+            {busy && <ProgressBar pct={pct} label="Writing them" />}
+            {error && <p className="text-sm text-status-error">{error}</p>}
+          </section>
 
           {options.length > 0 && (
-            <>
-              {/* Two different things you can want from a version you like:
-                  this one INSTEAD of what you had, or this one AS WELL. Only
-                  the first existed, so liking two of the three meant picking
-                  one and retyping the other. */}
-              <ul className="mt-4 space-y-2">
-                {options.map((v, i) => (
-                  <li
-                    key={i}
-                    className="rounded-xl border border-border bg-surface p-3 transition hover:border-[var(--accent)]/60"
-                  >
-                    <span className="flex flex-wrap items-center gap-1.5">
-                      <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--accent)]">{v.angle}</span>
-                      {/* What it changed, so a new setup is not mistaken for a new question. */}
-                      <span className="rounded bg-canvas px-1.5 py-0.5 text-[10px] font-medium text-muted">
-                        {v.changed === "setup"
-                          ? "New setup, your question"
-                          : v.changed === "both" || v.setup
-                            ? "New setup and question"
-                            : "New question, your setup"}
-                      </span>
-                      {v.forWhom && <ForChip who={v.forWhom} />}
-                    </span>
-                    {(() => {
-                      // How it compares with what is there now, part by part.
-                      const setupNow = stripAskedQuestion(q.setup || "", q.text);
-                      const setupNew = v.setup || setupNow;
-                      const diff = secondsOf(`${setupNow} ${q.text}`) - secondsOf(`${setupNew} ${v.text}`);
-                      const bits = [
-                        v.setup && v.setup !== setupNow ? `setup ${words(v.setup)} words, was ${words(setupNow)}` : "",
-                        v.text !== q.text ? `question ${words(v.text)} words, was ${words(q.text)}` : "",
-                      ].filter(Boolean);
-                      return bits.length ? (
-                        <span className={`mt-1 block text-[11px] font-medium ${diff > 0 ? "text-emerald-700" : diff < 0 ? "text-amber-700" : "text-muted"}`}>
-                          {bits.join(" · ")}
-                          {diff ? ` · ${Math.abs(diff)} sec ${diff > 0 ? "shorter" : "longer"}` : " · about the same to say"}
+            <ul className="space-y-2">
+              {options.map((v, i) => {
+                // How it compares with what is there now, part by part.
+                const setupNew = v.setup || setupNow;
+                const setupChanged = Boolean(v.setup) && v.setup !== setupNow;
+                const textChanged = v.text !== q.text;
+                const diff = secondsOf(`${setupNow} ${q.text}`) - secondsOf(`${setupNew} ${v.text}`);
+                return (
+                  <Fragment key={i}>
+                    {i === 0 && fresh > 0 && (
+                      <li className="pt-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">Just written</li>
+                    )}
+                    {i === fresh && (
+                      <li className={`text-[11px] font-semibold uppercase tracking-wide text-muted ${fresh ? "pt-3" : "pt-1"}`}>
+                        {fresh ? "From before" : "Written before"}
+                      </li>
+                    )}
+                    <li
+                      className={`rounded-xl border bg-surface p-3 ${i < fresh ? "border-[var(--accent)]/50 shadow-sm" : "border-border"}`}
+                    >
+                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-sm font-medium text-ink">{v.angle}</span>
+                        <span className="flex flex-wrap items-center gap-1.5">
+                          {!sameWho(v.forWhom) && <ForChip who={v.forWhom || ""} />}
+                          {(setupChanged || textChanged) && (
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                                diff > 0 ? "bg-emerald-50 text-emerald-800" : diff < 0 ? "bg-amber-50 text-amber-800" : "bg-canvas text-muted"
+                              }`}
+                            >
+                              {diff ? `${Math.abs(diff)} sec ${diff > 0 ? "shorter" : "longer"}` : "Same length"}
+                            </span>
+                          )}
                         </span>
-                      ) : null;
-                    })()}
-                    {editIdx === i ? (
-                      <>
-                        {/* The setup this version would bring; its own, or the one there now to edit from. */}
-                        <Textarea
-                          aria-label="Setup for this version"
-                          value={v.setup ?? ""}
-                          placeholder={stripAskedQuestion(q.setup || "", q.text) || "No setup"}
-                          onChange={(e) => editOption(i, { setup: e.target.value })}
-                          className="mt-1.5 min-h-16"
-                        />
-                        <Textarea
-                          aria-label="Question for this version"
-                          value={v.text}
-                          onChange={(e) => editOption(i, { text: e.target.value })}
-                          className="mt-1.5 min-h-12 font-medium"
-                        />
-                      </>
-                    ) : (
-                      <>
-                        {v.setup && <span className="mt-1 block text-sm leading-relaxed text-ink/70">{v.setup}</span>}
-                        <span className={`mt-1 block text-sm font-medium ${v.changed === "setup" ? "text-ink/60" : "text-ink"}`}>{v.text}</span>
-                      </>
-                    )}
-                    {v.followUp && (
-                      <span className="mt-1 block text-xs italic text-muted">
-                        Probe: {v.followUp}
-                      </span>
-                    )}
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        disabled={!v.text.trim()}
-                        onClick={() => onApply(v.text.trim(), v.followUp || q.followUp, v.setup?.trim() || undefined, v.forWhom)}
-                      >
-                        Use instead
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={keptHere(v) || !v.text.trim()}
-                        onClick={() => onAdd(v.text.trim(), v.followUp || "", v.setup?.trim() || undefined, v.forWhom)}
-                      >
-                        {keptHere(v) ? (
-                          <>
-                            <Check size={13} /> Kept
-                          </>
-                        ) : (
-                          <>
-                            <Plus size={13} /> Keep this too
-                          </>
-                        )}
-                      </Button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          // Starting from the setup there now, so it can be edited rather than retyped.
-                          if (editIdx !== i && !v.setup) editOption(i, { setup: stripAskedQuestion(q.setup || "", q.text) });
-                          setEditIdx(editIdx === i ? null : i);
-                        }}
-                        className="text-xs font-medium text-muted hover:text-ink hover:underline"
-                      >
-                        {editIdx === i ? "Done editing" : "Edit"}
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-              {options.some(keptHere) && (
-                <p className="mt-2 text-xs text-muted">
-                  Kept under your question, to ask if it falls flat. You can swap it in or edit it there.
-                </p>
-              )}
-            </>
+                      </div>
+                      {editIdx === i ? (
+                        <div className="space-y-1.5">
+                          <Textarea
+                            label="Setup"
+                            value={v.setup ?? ""}
+                            placeholder="No setup"
+                            onChange={(e) => editOption(i, { setup: e.target.value })}
+                            className="min-h-16"
+                          />
+                          <Textarea
+                            label="Question"
+                            value={v.text}
+                            onChange={(e) => editOption(i, { text: e.target.value })}
+                            className="min-h-12 font-medium"
+                          />
+                        </div>
+                      ) : (
+                        <>
+                          <ReworkPartText
+                            label="Setup"
+                            count={setupNew ? words(setupNew) : undefined}
+                            was={setupChanged ? words(setupNow) : undefined}
+                            fresh={setupChanged}
+                          >
+                            {setupNew || <span className="italic text-muted">No setup</span>}
+                          </ReworkPartText>
+                          <ReworkPartText
+                            label="Question"
+                            count={words(v.text)}
+                            was={textChanged ? words(q.text) : undefined}
+                            fresh={textChanged}
+                            strong
+                          >
+                            {v.text}
+                          </ReworkPartText>
+                        </>
+                      )}
+                      {v.followUp && <p className="mt-1.5 text-xs italic text-muted">Probe: {v.followUp}</p>}
+                      <div className="mt-2.5 flex flex-wrap items-center gap-1.5 border-t border-border/60 pt-2.5">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          disabled={!v.text.trim()}
+                          onClick={() => onApply(v.text.trim(), v.followUp || q.followUp, v.setup?.trim() || undefined, v.forWhom)}
+                        >
+                          Use this one
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={keptHere(v) || !v.text.trim()}
+                          onClick={() => onAdd(v.text.trim(), v.followUp || "", v.setup?.trim() || undefined, v.forWhom)}
+                        >
+                          {keptHere(v) ? (
+                            <>
+                              <Check size={13} /> Kept
+                            </>
+                          ) : (
+                            <>
+                              <Plus size={13} /> Keep as a backup
+                            </>
+                          )}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            // Starting from the setup there now, so it can be edited rather than retyped.
+                            if (editIdx !== i && !v.setup && setupNow) editOption(i, { setup: setupNow });
+                            setEditIdx(editIdx === i ? null : i);
+                          }}
+                        >
+                          {editIdx === i ? (
+                            <>
+                              <Check size={13} /> Done editing
+                            </>
+                          ) : (
+                            <>
+                              <Pencil size={13} /> Edit
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    </li>
+                  </Fragment>
+                );
+              })}
+            </ul>
+          )}
+          {options.some(keptHere) && (
+            <p className="text-xs text-muted">Backups sit under your question, to ask if it falls flat. You can swap one in or edit it there.</p>
           )}
 
-          <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-3">
             <button
               type="button"
               onClick={() => onMany({ part, length, instruction: instruction.trim() })}
@@ -3358,30 +3391,87 @@ function ReworkModal({
               Do this to every question in my list
             </button>
             <Button variant="ghost" onClick={onClose}>
-              Keep it as it is
-            </Button>
-            {options.length > 0 && (
-              <Button variant="secondary" disabled={busy} onClick={() => void run()} title="Keeps these and adds new ones">
-                <Plus size={14} /> More
-              </Button>
-            )}
-            <Button disabled={busy} onClick={() => void run()}>
-              <Wand2 size={14} />
-              {busy
-                ? "Thinking…"
-                : options.length
-                  ? "Try again with that"
-                  : "Show me a few ways"}
+              {options.length ? "Close" : "Keep it as it is"}
             </Button>
           </div>
-          {options.length > 0 && (
-            <p className="mt-2 text-right text-[11px] text-muted">
-              Click one to swap it in. Nothing changes until you do.
-            </p>
-          )}
-        </>
+        </div>
       )}
     </Modal>
+  );
+}
+
+/**
+ * A question typed with its lead-in, split into the two: the statements
+ * before it, and the question itself. Null when there is no lead-in to speak of.
+ */
+function splitLeadIn(text: string): { setup: string; text: string } | null {
+  const parts = text.trim().split(/(?<=[.!])\s+(?=[A-Z])/);
+  if (parts.length < 2) return null;
+  const last = parts[parts.length - 1];
+  const lead = parts.slice(0, -1).join(" ");
+  if (!/\?\s*$/.test(last) || /\?/.test(lead) || words(lead) < 6) return null;
+  return { setup: lead, text: last };
+}
+
+/** One part of a question, labelled, with its length and what it was. */
+function ReworkPartText({
+  label,
+  count,
+  was,
+  fresh,
+  strong,
+  children,
+}: {
+  label: string;
+  count?: number;
+  was?: number;
+  /** This part is new in this version; the other is what is there now. */
+  fresh?: boolean;
+  strong?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="mt-1.5 first:mt-0">
+      <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+        <span>{label}</span>
+        {fresh && <span className="rounded bg-[var(--accent-soft)] px-1 text-[var(--accent)]">new</span>}
+        {count !== undefined && (
+          <span className="font-normal normal-case tracking-normal">
+            {count} words{was !== undefined ? `, was ${was}` : ""}
+          </span>
+        )}
+      </div>
+      <p className={`mt-0.5 text-sm leading-relaxed ${strong ? "font-medium" : ""} ${fresh === false ? "text-ink/55" : "text-ink"}`}>{children}</p>
+    </div>
+  );
+}
+
+/** A row of choices where one is on. */
+function Segmented<T extends string>({
+  value,
+  onChange,
+  options,
+}: {
+  value: T;
+  onChange: (v: T) => void;
+  options: [T, string][];
+}) {
+  return (
+    <div className="inline-flex w-fit flex-wrap rounded-lg border border-border bg-canvas p-0.5">
+      {options.map(([k, label]) => (
+        <button
+          key={k}
+          type="button"
+          aria-pressed={value === k}
+          onClick={() => onChange(k)}
+          className={`rounded-md px-2.5 py-1 transition ${
+            value === k ? "bg-surface font-medium text-ink shadow-sm" : "text-muted hover:text-ink"
+          }`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -4245,11 +4335,12 @@ function AddOwnModal({
   open: boolean;
   onClose: () => void;
   categories: string[];
-  onAdd: (text: string, category: string, followUp: string, forWhom: string) => void;
+  onAdd: (text: string, category: string, followUp: string, forWhom: string, setup: string) => void;
   /** Carries what they have typed across to writing it with help. */
   onHelp: (text: string) => void;
 }) {
   const [text, setText] = useState("");
+  const [setup, setSetup] = useState("");
   const [category, setCategory] = useState("");
   const [followUp, setFollowUp] = useState("");
   const [forWhom, setForWhom] = useState("");
@@ -4257,8 +4348,15 @@ function AddOwnModal({
     <Modal open={open} onClose={onClose} title="Type one of my own" movable>
       <div className="space-y-3">
         <Textarea
-          label="The question, as you'd say it"
+          label="Setup, said before the question (optional)"
           autoFocus
+          value={setup}
+          onChange={(e) => setSetup(e.target.value)}
+          placeholder="The point or finding the question stands on"
+          className="min-h-16"
+        />
+        <Textarea
+          label="The question, as you'd say it"
           value={text}
           onChange={(e) => setText(e.target.value)}
           className="min-h-20"
@@ -4295,8 +4393,9 @@ function AddOwnModal({
           <Button
             disabled={!text.trim()}
             onClick={() => {
-              onAdd(text.trim(), category.trim(), followUp.trim(), forWhom.trim());
+              onAdd(text.trim(), category.trim(), followUp.trim(), forWhom.trim(), setup.trim());
               setText("");
+              setSetup("");
               setCategory("");
               setFollowUp("");
               setForWhom("");

@@ -794,10 +794,11 @@ const VARIANTS_SCHEMA = {
           followUp: { type: "string" as const },
           setup: { type: "string" as const },
           forWhom: { type: "string" as const },
+          link: { type: "string" as const },
           changed: { type: "string" as const, enum: ["setup", "question", "both"] },
           group: { type: "string" as const },
         },
-        required: ["angle", "text", "followUp", "setup", "forWhom", "changed", "group"],
+        required: ["angle", "text", "followUp", "setup", "forWhom", "changed", "group", "link"],
         additionalProperties: false,
       },
     },
@@ -883,6 +884,8 @@ export async function writeVariants({
   /** Versions already on screen, so "more" brings new ones. */
   avoid?: string[];
 }): Promise<QuestionVariant[]> {
+  // A shorter setup for a question with none: there is nothing to cut.
+  if (!rough && length === "shorter" && part === "setup" && !(question.setup || "").trim()) return [];
   const res = await anthropic().messages.create({
     // Three short rewrites of a sentence the writer already likes. The heavy
     // model was spending the better part of a minute on it while they sat
@@ -942,7 +945,7 @@ ${rough ? "WHAT TO WRITE. Every question gets a setup of its own, unless it trul
                   length === "longer" ? " beyond what the research says about this same point" : ""
                 }. The versions differ only in what they ${length === "shorter" ? "keep and what they cut" : "add"}, and angle says that ("Keeps the number", "Keeps the image"). Versions they have already seen are other ${
                   length === "shorter" ? "cuts" : "versions"
-                }, not a reason to move further from what they wrote. The cut must still lead into the question: keep the part of the setup the question picks up, the idea or words that make it the obvious next thing to ask. A setup about how people are graded leads into a question about a new KPI; cut the grading and the question arrives as a jump. Before you answer, say each setup and then the question in your head as the room will hear them, and if the question comes out of nowhere, put the link back.${guidance ? " If what the writer wants below asks for something new, it wins." : ""}`
+                }, not a reason to move further from what they wrote. The cut must still lead into the question: keep the part of the setup the question picks up, the idea or words that make it the obvious next thing to ask. A setup about how people are graded leads into a question about a new KPI; cut the grading and the question arrives as a jump. Its last sentence is the hand-over: it turns toward exactly what the question asks, so the question follows straight on with no gap. Here, a setup that ends on who MSLs end up meeting, followed by a question about a new KPI for the value they bring, is a gap; ending on what the count fails to capture closes it. Before you answer, say each setup and then the question in your head as the room will hear them, and if the question comes out of nowhere, put the link back.${guidance ? " If what the writer wants below asks for something new, it wins." : ""}`
           }`
         : ""
     }
@@ -954,6 +957,11 @@ Fields:
 - setup: the question is said after a setup (given below when there is one). When this version needs a different lead-in, or what the writer wants different is about the setup, write the new setup in full, two to four spoken sentences that lay out the substance, never pointing at a document the room has not heard of, never saying what the question says. Otherwise "", and the current setup stays.
 - forWhom: When the context names the people in the room, forWhom is the first names of those who can answer THIS version from their own direct work, strictly: a question about managing MSLs fits nobody who does not manage MSLs, a question about KOL meetings does not fit people who never meet KOLs, a question about hiring fits only people who hire. "Everyone" only when all of them truly can. "" when it fits none of them, or when no names are given.
 - changed: "setup" when only the setup is new (text is the question unchanged), "question" when only the question is new (setup ""), "both" when both are.
+- link: ${
+      !rough && length !== "same" && question.setup
+        ? `the words of the CURRENT setup that the question picks up, quoted exactly as they are there, a few words (for a question about a new KPI, the part about how people are graded or measured). Every setup you write keeps those words or their plain equivalent, and its last sentence turns toward what the question asks.`
+        : `"".`
+    }
 - group: ${rough && groups.length ? `which of these groups the question belongs in, spelled exactly as here, or "" when none fits: ${groups.join("; ")}.` : `"".`}
 
 Plain prose. No markdown, no quotation marks around the question. Never an em dash or en dash.`,
@@ -1017,6 +1025,10 @@ Plain prose. No markdown, no quotation marks around the question. Never an em da
     // came back with a scenario and a point from another question was a new
     // setup, not a shorter one. Most of its words have to be the writer's.
     if (setup && length !== "same" && !rough && !guidance && question.setup && sharedWords(setup, question.setup) < 0.5) continue;
+    // And it keeps what the question hangs on, by the model's own account of
+    // what that is, so a cut cannot drop the link and leave a jump.
+    const link = String(v?.link || "").trim();
+    if (setup && length !== "same" && !rough && link && wordCount(link) <= 12 && (question.setup || "").toLowerCase().includes(link.toLowerCase().slice(0, 12)) && sharedWords(link, setup) < 0.5) continue;
     out.push({
       angle: String(v?.angle || "").trim() || "Another way",
       text: said,
@@ -1044,7 +1056,7 @@ Plain prose. No markdown, no quotation marks around the question. Never an em da
     if (v.text !== question.text) parts.push([v.text, question.text]);
     return parts.every(([now, was]) => (length === "shorter" ? wordCount(now) < wordCount(was) : wordCount(now) > wordCount(was)));
   };
-  const result = length === "same" ? sized : sized.filter(fits).length ? sized.filter(fits) : sized;
+  const result = length === "same" ? sized : sized.filter(fits);
   // Drafts the checks turned away left "three ways" as one. Once, for the
   // rest; for a rework, only when nothing at all came through.
   if (!retried && (rough ? result.length < count : !result.length)) {
