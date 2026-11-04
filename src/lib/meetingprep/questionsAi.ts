@@ -2460,8 +2460,8 @@ ${SEAT_RULE}
 
 For each question in the running order:
 - handOff: "".
-- long: one polite line to stop an answer that runs long and move on, word for word in quotation marks, under 18 words, using the person's name: it credits what they said, then moves on, warm and never abrupt ("Mark, let me hold you there, great point, and I want Roman in on this.").
-- brief: what to say as you ask this question when time is tight, to get a short answer, word for word in quotation marks, said before or with the question ("I'd love a quick take from each of you, about a minute, starting with Ajay." or "Ajay, in a sentence or two:"). Under 15 words. For a question to the whole panel, say who starts and that it is about a minute each; never list only some of them.
+- long: "".
+- brief: "".
 - watch: the one thing most likely to go wrong with this question for these people, and what to do, under 15 words, so it can be read at a glance. A drift onto another question's topic, a panelist without the experience to answer, an answer that turns into a pitch for their company, a question that overlaps what someone already said. Never generic advice that would fit any question.
 
 Use only what the context says about each panelist; never invent a fact about them. Plain prose. Never an em dash or en dash.`,

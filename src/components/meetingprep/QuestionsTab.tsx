@@ -937,10 +937,10 @@ export function QuestionsTab({
           const had = q.tips || {};
           const mine = had.mine || [];
           const pick = (k: "long" | "brief" | "watch") => (mine.includes(k) && had[k] ? had[k] : t[k] || had[k]);
-          return { ...q, tips: { long: pick("long"), brief: pick("brief"), watch: pick("watch"), ...(mine.length ? { mine } : {}) } };
+          return { ...q, tips: { watch: pick("watch"), ...(mine.length ? { mine } : {}) } };
         }),
       );
-      toast("success", "Tips are in Ask mode, under each question");
+      toast("success", "Watch-for tips are in Ask mode, under each question");
     } catch (e) {
       toast("error", (e as Error).message);
     } finally {
@@ -1523,7 +1523,7 @@ export function QuestionsTab({
                     void writeAllTips();
                   }}
                 >
-                  Write tips for Ask mode: if it runs long, to keep it short, what to watch
+                  Write what to watch for on each question, for Ask mode
                 </MenuItem>
               )}
               {missingProbes > 0 && (
@@ -2362,7 +2362,6 @@ export function QuestionsTab({
           onPatch={(q, p) => patch(q.id, p)}
           onWriteTips={() => void writeAllTips()}
           tipping={tipping}
-          reactions={timing.reactions}
           minutesOf={(q) => minutesFor(q, panel.length, timing)}
           quickOf={(q) => quickFor(q, panel.length)}
           slotMin={m.duration_min || null}
@@ -4711,19 +4710,7 @@ function QuestionEditor({
       )}
       {/* The tips Ask mode shows under it. Theirs to change, or to write. */}
       <Input
-        label="Tip for Ask mode: a line to move on if it runs long"
-        value={q.tips?.long || ""}
-        onChange={(e) => onPatch({ tips: { ...q.tips, long: e.target.value, mine: [...new Set([...(q.tips?.mine || []), "long" as const])] } })}
-        placeholder='e.g. "Mark, let me hold you there and bring in Roman"'
-      />
-      <Input
-        label="Tip: what to say to keep it short"
-        value={q.tips?.brief || ""}
-        onChange={(e) => onPatch({ tips: { ...q.tips, brief: e.target.value, mine: [...new Set([...(q.tips?.mine || []), "brief" as const])] } })}
-        placeholder='e.g. "A quick take from each of you, about a minute, starting with Ajay"'
-      />
-      <Input
-        label="Tip: what to watch for"
+        label="Watch for, shown in Ask mode (not said aloud)"
         value={q.tips?.watch || ""}
         onChange={(e) => onPatch({ tips: { ...q.tips, watch: e.target.value, mine: [...new Set([...(q.tips?.mine || []), "watch" as const])] } })}
         placeholder="e.g. If he drifts back to AI, ask what the slide can't do"

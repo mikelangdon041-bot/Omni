@@ -35,7 +35,6 @@ export function AskMode({
   onPatch,
   onWriteTips,
   tipping = false,
-  reactions = 0,
   minutesOf,
   quickOf,
   slotMin,
@@ -57,8 +56,6 @@ export function AskMode({
   /** Writes the tips for the running order, from here. */
   onWriteTips?: () => void;
   tipping?: boolean;
-  /** How many more people the timing assumes come in on a question to one person. */
-  reactions?: number;
   /** Changes a question's words from here, for laying it out the way they say it. */
   onPatch?: (q: QuestionItem, p: Partial<QuestionItem>) => void;
   /** How long a question runs, the same reckoning as the list's. */
@@ -107,13 +104,40 @@ export function AskMode({
     const t = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(t);
   }, [startedAt]);
-  const startClock = (on: boolean) => {
-    const v = on ? Date.now() : null;
+  // When the introductions finished, so the clock stops holding time for
+  // them and the questions are timed from where they really started.
+  const introStore = `${clockStore}:intros`;
+  const [introsAt, setIntrosAt] = useState<number | null>(() => {
+    try {
+      const v = Number(localStorage.getItem(introStore));
+      return v > 0 && startedAt && v >= startedAt ? v : null;
+    } catch {
+      return null;
+    }
+  });
+  const [introOpen, setIntroOpen] = useState(() => !introsAt);
+  const startClock = (on: boolean, from?: number) => {
+    const v = on ? (from ?? clockNow()) : null;
     setStartedAt(v);
-    setNow(Date.now());
+    setNow(clockNow());
+    if (!on) setIntrosAt(null);
     try {
       if (v) localStorage.setItem(clockStore, String(v));
-      else localStorage.removeItem(clockStore);
+      else {
+        localStorage.removeItem(clockStore);
+        localStorage.removeItem(introStore);
+      }
+    } catch {}
+  };
+  const introsDone = () => {
+    const t = clockNow();
+    // Never started: count the introductions as the time planned for them.
+    if (!startedAt) startClock(true, t - leadMin * 60000);
+    setIntrosAt(t);
+    setIntroOpen(false);
+    setAt(0);
+    try {
+      localStorage.setItem(introStore, String(t));
     } catch {}
   };
 
@@ -126,7 +150,7 @@ export function AskMode({
   const clock = (() => {
     if (!minutesOf || !slotMin || !startedAt) return null;
     const gone = Math.max(0, (now - startedAt) / 60000);
-    const toCome = all.filter((q) => !q.backup && !q.asked).reduce((n, q) => n + minutesOf(q), 0) + Math.max(0, leadMin - gone);
+    const toCome = all.filter((q) => !q.backup && !q.asked).reduce((n, q) => n + minutesOf(q), 0) + (introsAt ? 0 : Math.max(0, leadMin - gone));
     const left = slotMin - endMin - gone;
     const spare = left - toCome;
     const reserve = all.find((q) => q.backup && !q.asked && minutesOf(q) <= spare);
@@ -145,21 +169,6 @@ export function AskMode({
       }
     }
     return { gone, left, spare, reserve, quick };
-  })();
-  // The plan in minutes, before a word is said: when introductions have to
-  // be done by to ask everything as written, and what buys time if not.
-  const plan = (() => {
-    if (!minutesOf || !slotMin) return null;
-    const main = all.filter((q) => !q.backup);
-    const full = main.reduce((n, q) => n + minutesOf(q), 0);
-    const toAll = main
-      .map((q) => ({ q, saves: quickOf ? minutesOf(q) - (quickOf(q) ?? minutesOf(q)) : 0 }))
-      .filter((x) => x.saves >= 1);
-    const end = slotMin - endMin;
-    const byFull = end - full;
-    const byFirst = toAll.length ? byFull + toAll[0].saves : null;
-    const byAll = toAll.length > 1 ? byFull + toAll.reduce((n, x) => n + x.saves, 0) : null;
-    return { full, byFull, byFirst, byAll, leadMin, end, firstText: toAll[0]?.q.text || "", count: main.length };
   })();
   const goTo = (q: QuestionItem) => {
     setShow("all");
@@ -305,7 +314,6 @@ export function AskMode({
                   <Timer size={13} /> Start the clock
                 </Button>
                 <span className="text-muted">Start it when the panel starts, to see if you&apos;re ahead and when a reserve question fits.</span>
-                {plan && <PlanBox plan={plan} reactions={reactions} />}
               </>
             ) : (
               <>
@@ -361,6 +369,27 @@ export function AskMode({
           <p className="mx-auto max-w-3xl px-5 py-16 text-center text-sm text-muted">
             Nothing picked yet.
           </p>
+        ) : mode === "one" && introOpen && here === 0 && minutesOf && slotMin ? (
+          // Introductions are a step of their own, before question 1, so the
+          // clock knows when the questions really started.
+          <div className="mx-auto flex min-h-full w-full max-w-xl flex-col justify-center px-5 py-8 text-center">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">Before the questions</p>
+            <h2 className="mt-2 text-2xl font-medium text-ink">Opening and introductions</h2>
+            <p className="mt-2 text-base text-ink/75">
+              Welcome the room and introduce {panel.length ? panel.join(", ").replace(/, ([^,]*)$/, " and $1") : "the panel"}. About {Math.round(leadMin)} minutes in all.
+            </p>
+            <div className="mt-6 flex flex-wrap justify-center gap-2">
+              {!startedAt && (
+                <Button variant="secondary" onClick={() => startClock(true)}>
+                  <Timer size={15} /> Start the clock
+                </Button>
+              )}
+              <Button onClick={introsDone}>Intros done: first question</Button>
+            </div>
+            <p className="mt-3 text-xs text-muted">
+              Start the clock as you open. From here, each question tells you if you need to ask for shorter answers.
+            </p>
+          </div>
         ) : mode === "one" ? (
           <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center px-5 py-8">
             <div className="flex flex-wrap items-center justify-center gap-2 text-xs">
@@ -383,6 +412,41 @@ export function AskMode({
                 </span>
               )}
             </div>
+
+            {/* The time check, on the question it is about, with the words. */}
+            {(() => {
+              if (!clock || cur.asked || cur.backup || !minutesOf) return null;
+              const who = asks(cur);
+              const name = who[0] || panel.find((n) => new RegExp(`\\b${n}\\b`, "i").test(cur.forWhom || "")) || "";
+              const quick = quickOf?.(cur);
+              if (clock.spare <= -0.5) {
+                const over = Math.max(1, Math.round(-clock.spare));
+                return (
+                  <div className="mx-auto mt-4 w-full max-w-2xl rounded-xl bg-amber-50 px-4 py-3 text-center text-amber-950">
+                    {quick != null ? (
+                      <>
+                        <p className="text-sm font-semibold">
+                          About {over} min over. Ask for a minute each, which saves about {Math.round(minutesOf(cur) - quick)} min:
+                        </p>
+                        <p className="mt-1 text-lg">&ldquo;A quick take from each of you, about a minute each, starting with {name || panel[0]}.&rdquo;</p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-sm font-semibold">About {over} min over. Keep this one short:</p>
+                        <p className="mt-1 text-lg">&ldquo;{name ? `${name}, in` : "In"} a sentence or two:&rdquo;</p>
+                      </>
+                    )}
+                  </div>
+                );
+              }
+              if (clock.spare >= 3 && cur.followUp)
+                return (
+                  <p className="mx-auto mt-4 w-full max-w-2xl rounded-xl bg-emerald-50 px-4 py-2 text-center text-sm text-emerald-900">
+                    About {Math.round(clock.spare)} min spare: use the probe on this one.
+                  </p>
+                );
+              return null;
+            })()}
 
             {/* Laid out the way they say it. Their own line breaks win: Edit
                 text, Enter where the line should break. Without any, a
@@ -508,36 +572,20 @@ export function AskMode({
                 answer comes back as a challenge. */}
             {/* For them, not for the room: who to bring in, how to move on,
                 what to watch, and their own note. */}
-            {onWriteTips && (
+            {onWriteTips && !cur.tips?.watch && (
               <button
                 type="button"
                 disabled={tipping}
                 onClick={onWriteTips}
                 className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-dashed border-border px-3 py-1.5 text-xs font-medium text-muted hover:text-ink disabled:opacity-70"
               >
-                {tipping
-                  ? "Writing tips for every question, about 20 seconds\u2026"
-                  : cur.tips?.long || cur.tips?.brief || cur.tips?.watch
-                    ? "Rewrite the tips for every question (yours stay)"
-                    : "Write tips for every question: if it runs long, to keep it short, what to watch"}
+                {tipping ? "Writing what to watch for on every question, about 20 seconds\u2026" : "Write what to watch for on every question"}
               </button>
             )}
-            {(cur.tips?.long || cur.tips?.brief || cur.tips?.watch || cur.note) && (
+            {(cur.tips?.watch || cur.note) && (
               <div className="mt-4 rounded-xl border border-dashed border-border bg-canvas/60 p-4 text-sm">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">For you, not to say</p>
                 <dl className="mt-1.5 space-y-1.5">
-                  {cur.tips?.long && (
-                    <div>
-                      <dt className="inline font-semibold text-ink">If it runs long: </dt>
-                      <dd className="inline text-ink/80">{cur.tips.long}</dd>
-                    </div>
-                  )}
-                  {cur.tips?.brief && (
-                    <div className={clock && clock.spare <= -1 ? "rounded-md bg-amber-50 px-1.5 py-1" : ""}>
-                      <dt className="inline font-semibold text-ink">To keep it short: </dt>
-                      <dd className="inline text-ink/80">{cur.tips.brief}</dd>
-                    </div>
-                  )}
                   {cur.tips?.watch && (
                     <div>
                       <dt className="inline font-semibold text-ink">Watch for: </dt>
@@ -794,46 +842,7 @@ function Spoken({ text, names = [], lines = false }: { text: string; names?: str
   );
 }
 
-/**
- * The plan in minutes, read before the panel starts: by when introductions
- * have to be done to ask everything as written, and what to ask for if they
- * run later. The same reckoning as the clock.
- */
-function PlanBox({
-  plan,
-  reactions,
-}: {
-  reactions: number;
-  plan: { full: number; byFull: number; byFirst: number | null; byAll: number | null; leadMin: number; end: number; firstText: string; count: number };
-}) {
-  const at = (m: number) => `minute ${Math.max(0, Math.floor(m))}`;
-  const first = plan.firstText.split(/\s+/).slice(0, 6).join(" ");
-  return (
-    <div className="mt-1 w-full rounded-lg border border-border bg-surface p-2.5 text-xs text-ink">
-      <p className="font-semibold">
-        Your plan: {plan.count} questions, about {Math.round(plan.full)} min as written. Introductions and opening are planned at {Math.round(plan.leadMin)} min.
-      </p>
-      <ul className="mt-1 space-y-0.5 text-ink/80">
-        {plan.byFull >= 0 ? (
-          <li>Intros done by {at(plan.byFull)}: ask everything as written.</li>
-        ) : (
-          <li>As written it runs over even with no intros, so plan on a minute each below.</li>
-        )}
-        {plan.byFirst !== null && plan.byFirst >= 0 && (
-          <li>
-            By {at(plan.byFirst)}: ask for a minute each on &ldquo;{first}&hellip;&rdquo;.
-          </li>
-        )}
-        {plan.byAll !== null && plan.byAll >= 0 && <li>By {at(plan.byAll)}: a minute each on both questions to everyone.</li>}
-        <li>Later than that: a minute each on both, and keep the individual answers short.</li>
-        <li>Ahead: use the probe first, then a reserve question.</li>
-        <li>Close: thank everyone by name, about 30 seconds.</li>
-      </ul>
-      <p className="mt-1.5 text-[11px] text-muted">
-        {reactions > 0
-          ? `This counts ${reactions} more person coming in on each question to one panelist. If you won't do that, set "then nobody else" in the timing line above your list.`
-          : "This counts only the person asked answering a question to one panelist, and everyone on the questions to everyone."}
-      </p>
-    </div>
-  );
+/** The time, for the clock's buttons; only ever called from a click. */
+function clockNow(): number {
+  return Date.now();
 }
