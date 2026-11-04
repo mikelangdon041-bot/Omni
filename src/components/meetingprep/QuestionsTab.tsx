@@ -3117,12 +3117,13 @@ function ReworkModal({
   const [sel, setSel] = useState("");
   // The version being edited in place, before using or keeping it.
   const [editIdx, setEditIdx] = useState<number | null>(null);
-  // Using a version keeps theirs as the backup, unless they say not to.
+  // Using a version puts theirs with the other ways to ask, folded away;
+  // ticked, it is kept as the backup instead.
   const [keepMine, setKeepMine] = useState(() => {
     try {
-      return localStorage.getItem("mp:rework-keep-mine") !== "0";
+      return localStorage.getItem("mp:rework-keep-mine") === "1";
     } catch {
-      return true;
+      return false;
     }
   });
   // How many at the top came from the last press (declared above, with what
@@ -3353,7 +3354,7 @@ function ReworkModal({
                   }
                 }}
               />
-              Keep mine as a backup when I use one, to ask if the new one falls flat
+              Keep mine as a backup when I use one. Unticked, it goes in with the other ways to ask, folded away.
             </label>
           )}
           {options.length > 0 && (

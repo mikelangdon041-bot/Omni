@@ -190,8 +190,9 @@ export function QuestionChoices({
                         onPick(keepOption(x, o, false));
                       }}
                       className="text-muted hover:text-ink hover:underline"
+                      title="Out of the way, folded under the question with the other versions. Not deleted."
                     >
-                      Don&apos;t keep it
+                      Move to other ways to ask
                     </button>
                   </div>
                 </>

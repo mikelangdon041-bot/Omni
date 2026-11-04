@@ -310,7 +310,7 @@ export function AskMode({
           </p>
         ) : mode === "one" ? (
           <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center px-5 py-8">
-            <div className="flex flex-wrap items-center gap-2 text-xs">
+            <div className="flex flex-wrap items-center justify-center gap-2 text-xs">
               <span className="rounded-full bg-[var(--accent-soft)] px-2.5 py-1 font-semibold text-[var(--accent)]">
                 {cur.backup ? "In reserve" : `${here + 1} of ${main.length}`}
               </span>
@@ -337,23 +337,25 @@ export function AskMode({
                 is a breath, numbers in bold to land on, then the question.
                 One block of grey was hard to keep your place in. */}
             {stripAskedQuestion(cur.setup, cur.text) && (
-              <div className={`mt-5 ${cur.asked ? "opacity-40" : ""}`}>
+              <div className={`mt-6 text-center ${cur.asked ? "opacity-40" : ""}`}>
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Say first</p>
-                <div className="mt-1.5 space-y-3 text-lg leading-snug text-ink/80 sm:text-xl">
+                <div className="mx-auto mt-2 max-w-2xl space-y-3 text-lg leading-relaxed text-ink/75 sm:text-xl">
                   {sentences(stripAskedQuestion(cur.setup, cur.text)).map((line, i) => (
-                    <p key={i}>
-                      <Spoken text={line} lines />
+                    <p key={i} className="text-balance">
+                      <Spoken text={line} />
                     </p>
                   ))}
                 </div>
               </div>
             )}
-            <div className={`${cur.setup ? "mt-5" : "mt-5"} ${cur.asked ? "opacity-40" : ""}`}>
+            {/* Centred, with the lines balanced to even lengths: breaking at
+                every comma left a lone word on a line, which read worse. */}
+            <div className={`mt-7 text-center ${cur.asked ? "opacity-40" : ""}`}>
               {stripAskedQuestion(cur.setup, cur.text) && (
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">Then ask</p>
               )}
-              <p className="mt-1.5 border-l-4 border-[var(--accent)] pl-3 text-2xl leading-snug text-ink sm:text-[1.75rem]">
-                <Spoken text={cur.text} names={panel} lines />
+              <p className="mx-auto mt-2 max-w-2xl text-balance text-2xl font-medium leading-snug text-ink sm:text-[1.75rem]">
+                <Spoken text={cur.text} names={panel} />
               </p>
             </div>
 
