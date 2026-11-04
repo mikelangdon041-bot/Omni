@@ -419,6 +419,8 @@ export interface QuestionTips {
   brief?: string;
   /** The one thing likely to go wrong here, and what to do about it. */
   watch?: string;
+  /** Which tips they typed themselves; a rewrite leaves those alone. */
+  mine?: ("long" | "brief" | "watch")[];
 }
 
 /** A better question for a setup the writer likes, waiting on Use it / Keep mine. */

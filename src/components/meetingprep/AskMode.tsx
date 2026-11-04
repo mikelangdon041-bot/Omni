@@ -508,14 +508,18 @@ export function AskMode({
                 answer comes back as a challenge. */}
             {/* For them, not for the room: who to bring in, how to move on,
                 what to watch, and their own note. */}
-            {onWriteTips && !(cur.tips?.long || cur.tips?.brief || cur.tips?.watch) && (
+            {onWriteTips && (
               <button
                 type="button"
                 disabled={tipping}
                 onClick={onWriteTips}
                 className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-dashed border-border px-3 py-1.5 text-xs font-medium text-muted hover:text-ink disabled:opacity-70"
               >
-                {tipping ? "Writing tips for every question, about 20 seconds\u2026" : "Write tips for every question: if it runs long, to keep it short, what to watch"}
+                {tipping
+                  ? "Writing tips for every question, about 20 seconds\u2026"
+                  : cur.tips?.long || cur.tips?.brief || cur.tips?.watch
+                    ? "Rewrite the tips for every question (yours stay)"
+                    : "Write tips for every question: if it runs long, to keep it short, what to watch"}
               </button>
             )}
             {(cur.tips?.long || cur.tips?.brief || cur.tips?.watch || cur.note) && (

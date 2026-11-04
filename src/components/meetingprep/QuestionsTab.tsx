@@ -933,8 +933,11 @@ export function QuestionsTab({
         fresh.map((q) => {
           const t = byId.get(q.id);
           if (!t) return q;
+          // The app's own tips are rewritten; the ones they typed stay.
           const had = q.tips || {};
-          return { ...q, tips: { long: had.long || t.long, brief: had.brief || t.brief, watch: had.watch || t.watch } };
+          const mine = had.mine || [];
+          const pick = (k: "long" | "brief" | "watch") => (mine.includes(k) && had[k] ? had[k] : t[k] || had[k]);
+          return { ...q, tips: { long: pick("long"), brief: pick("brief"), watch: pick("watch"), ...(mine.length ? { mine } : {}) } };
         }),
       );
       toast("success", "Tips are in Ask mode, under each question");
@@ -1520,7 +1523,7 @@ export function QuestionsTab({
                     void writeAllTips();
                   }}
                 >
-                  Write tips for Ask mode: who to bring in, how to move on, what to watch
+                  Write tips for Ask mode: if it runs long, to keep it short, what to watch
                 </MenuItem>
               )}
               {missingProbes > 0 && (
@@ -4710,19 +4713,19 @@ function QuestionEditor({
       <Input
         label="Tip for Ask mode: a line to move on if it runs long"
         value={q.tips?.long || ""}
-        onChange={(e) => onPatch({ tips: { ...q.tips, long: e.target.value } })}
+        onChange={(e) => onPatch({ tips: { ...q.tips, long: e.target.value, mine: [...new Set([...(q.tips?.mine || []), "long" as const])] } })}
         placeholder='e.g. "Mark, let me hold you there and bring in Roman"'
       />
       <Input
         label="Tip: what to say to keep it short"
         value={q.tips?.brief || ""}
-        onChange={(e) => onPatch({ tips: { ...q.tips, brief: e.target.value } })}
+        onChange={(e) => onPatch({ tips: { ...q.tips, brief: e.target.value, mine: [...new Set([...(q.tips?.mine || []), "brief" as const])] } })}
         placeholder='e.g. "A quick take from each of you, about a minute, starting with Ajay"'
       />
       <Input
         label="Tip: what to watch for"
         value={q.tips?.watch || ""}
-        onChange={(e) => onPatch({ tips: { ...q.tips, watch: e.target.value } })}
+        onChange={(e) => onPatch({ tips: { ...q.tips, watch: e.target.value, mine: [...new Set([...(q.tips?.mine || []), "watch" as const])] } })}
         placeholder="e.g. If he drifts back to AI, ask what the slide can't do"
       />
       <Input
