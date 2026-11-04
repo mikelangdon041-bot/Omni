@@ -934,7 +934,7 @@ export function QuestionsTab({
           const t = byId.get(q.id);
           if (!t) return q;
           const had = q.tips || {};
-          return { ...q, tips: { handOff: had.handOff || t.handOff, long: had.long || t.long, brief: had.brief || t.brief, watch: had.watch || t.watch } };
+          return { ...q, tips: { long: had.long || t.long, brief: had.brief || t.brief, watch: had.watch || t.watch } };
         }),
       );
       toast("success", "Tips are in Ask mode, under each question");
@@ -2357,6 +2357,9 @@ export function QuestionsTab({
           onResetTicks={() => setItems(items.map((q) => ({ ...q, asked: false })))}
           onUseKept={(q, o) => patch(q.id, swapKept(q, o))}
           onPatch={(q, p) => patch(q.id, p)}
+          onWriteTips={() => void writeAllTips()}
+          tipping={tipping}
+          reactions={timing.reactions}
           minutesOf={(q) => minutesFor(q, panel.length, timing)}
           quickOf={(q) => quickFor(q, panel.length)}
           slotMin={m.duration_min || null}
@@ -4705,13 +4708,7 @@ function QuestionEditor({
       )}
       {/* The tips Ask mode shows under it. Theirs to change, or to write. */}
       <Input
-        label="Tip: who to bring in, and how (Ask mode only)"
-        value={q.tips?.handOff || ""}
-        onChange={(e) => onPatch({ tips: { ...q.tips, handOff: e.target.value } })}
-        placeholder='e.g. "Eleonora, would that work at the account level?"'
-      />
-      <Input
-        label="Tip: a line to move on if it runs long"
+        label="Tip for Ask mode: a line to move on if it runs long"
         value={q.tips?.long || ""}
         onChange={(e) => onPatch({ tips: { ...q.tips, long: e.target.value } })}
         placeholder='e.g. "Mark, let me hold you there and bring in Roman"'
