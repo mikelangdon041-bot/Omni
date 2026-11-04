@@ -2350,13 +2350,15 @@ export function QuestionsTab({
           setManyPreset({ ...p, n: Date.now() });
           setManyOpen(true);
         }}
-        onApply={(text, followUp, setup, forWho) => {
+        onApply={(text, followUp, setup, forWho, keepMine) => {
           const q = live.find((x) => x.id === reworkId);
           // Through the same swap as anywhere else, so the words it replaces
-          // stay under the question instead of being gone.
-          if (q) patch(q.id, pickOption(q, { kind: "Reworked", text, followUp, setup, forWhom: forWho || undefined }));
+          // stay under the question instead of being gone; kept as the
+          // backup when they asked, the same as swapping a kept one in.
+          const o = { kind: "Reworked", text, followUp, setup, forWhom: forWho || undefined };
+          if (q) patch(q.id, keepMine ? swapKept(q, o) : pickOption(q, o));
           setReworkId(null);
-          toast("success", "Swapped in");
+          toast("success", keepMine ? "Swapped in. Yours is kept underneath, if this falls flat" : "Swapped in");
         }}
         onAdd={(text, followUp, setup, forWho) => {
           // Kept under this question, the same as "Keep both". It used to make
@@ -3066,7 +3068,7 @@ function ReworkModal({
   /** Their standing instruction, shown so they know it is still on. */
   standing: string;
   onClose: () => void;
-  onApply: (text: string, followUp: string, setup?: string, forWhom?: string) => void;
+  onApply: (text: string, followUp: string, setup?: string, forWhom?: string, keepMine?: boolean) => void;
   /** Keep a version under the question as well as, rather than instead of, what is there. */
   onAdd: (text: string, followUp: string, setup?: string, forWhom?: string) => void;
   /** Keeps what came back on the question, so it is there next time. */
@@ -3115,6 +3117,14 @@ function ReworkModal({
   const [sel, setSel] = useState("");
   // The version being edited in place, before using or keeping it.
   const [editIdx, setEditIdx] = useState<number | null>(null);
+  // Using a version keeps theirs as the backup, unless they say not to.
+  const [keepMine, setKeepMine] = useState(() => {
+    try {
+      return localStorage.getItem("mp:rework-keep-mine") !== "0";
+    } catch {
+      return true;
+    }
+  });
   // How many at the top came from the last press (declared above, with what
   // is saved), so the new ones can be told from the ones already seen.
   const editOption = (i: number, p: Partial<QuestionVariant>) =>
@@ -3330,6 +3340,23 @@ function ReworkModal({
           </section>
 
           {options.length > 0 && (
+            <label className="flex items-center gap-2 text-xs text-ink">
+              <input
+                type="checkbox"
+                checked={keepMine}
+                onChange={(e) => {
+                  setKeepMine(e.target.checked);
+                  try {
+                    localStorage.setItem("mp:rework-keep-mine", e.target.checked ? "1" : "0");
+                  } catch {
+                    // Only a preference; it still works for this window.
+                  }
+                }}
+              />
+              Keep mine as a backup when I use one, to ask if the new one falls flat
+            </label>
+          )}
+          {options.length > 0 && (
             <ul className="space-y-2">
               {options.map((v, i) => {
                 // How it compares with what is there now, part by part.
@@ -3423,7 +3450,7 @@ function ReworkModal({
                           size="sm"
                           variant="secondary"
                           disabled={!v.text.trim()}
-                          onClick={() => onApply(v.text.trim(), v.followUp || q.followUp, v.setup?.trim() || undefined, v.forWhom)}
+                          onClick={() => onApply(v.text.trim(), v.followUp || q.followUp, v.setup?.trim() || undefined, v.forWhom, keepMine)}
                         >
                           Use this one
                         </Button>
