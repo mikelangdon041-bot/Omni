@@ -207,6 +207,8 @@ export function QuestionsTab({
   const [fillingId, setFillingId] = useState<string | null>(null);
   // Writing every missing probe at once, and how many are home.
   const [fillingAll, setFillingAll] = useState(false);
+  // Writing moderator tips for Ask mode, over the whole running order.
+  const [tipping, setTipping] = useState(false);
   const [filledCount, setFilledCount] = useState(0);
   // The standing instructions, shut until asked for.
   const [showStanding, setShowStanding] = useState(false);
@@ -681,7 +683,9 @@ export function QuestionsTab({
                 ? "Checking it over"
                 : fillingAll || fillingId
                   ? "Writing probes"
-                  : versioningIds.length
+                  : tipping
+                    ? "Writing tips for Ask mode"
+                    : versioningIds.length
                     ? "Writing other ways to ask it"
                     : helping
                       ? "Writing your question"
@@ -892,6 +896,55 @@ export function QuestionsTab({
    * each as it lands would have every save racing the others off a stale list
    * and the last one home would win.
    */
+  /**
+   * Tips for the room on every question in the running order: who to bring
+   * in, a line to move on, what to watch. Their own tips are kept: a tip they
+   * typed is not written over.
+   */
+  async function writeAllTips() {
+    if (blocked()) return;
+    const plan = picked;
+    if (!plan.length) return;
+    setTipping(true);
+    try {
+      const res = await fetch("/api/meeting/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          action: "tips",
+          meeting: payloadOf(m),
+          plan: plan.map((q) => ({
+            setup: stripAskedQuestion(q.setup || "", q.text),
+            text: q.text,
+            probe: q.followUp,
+            who: q.askWho || q.forWhom,
+            toAll: isToAll(q, panel.length),
+            reserve: Boolean(q.backup),
+          })),
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Could not write the tips");
+      const got = (json.tips || []) as { handOff: string; long: string; brief: string; watch: string }[];
+      const byId = new Map(plan.map((q, i) => [q.id, got[i]]));
+      const fresh = latest.current.questions?.items || items;
+      setItems(
+        fresh.map((q) => {
+          const t = byId.get(q.id);
+          if (!t) return q;
+          const had = q.tips || {};
+          return { ...q, tips: { handOff: had.handOff || t.handOff, long: had.long || t.long, brief: had.brief || t.brief, watch: had.watch || t.watch } };
+        }),
+      );
+      toast("success", "Tips are in Ask mode, under each question");
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setTipping(false);
+    }
+  }
+
   async function fillMissingProbes() {
     if (blocked()) return;
     const targets = live.filter((q) => !q.followUp);
@@ -1456,6 +1509,18 @@ export function QuestionsTab({
                   }}
                 >
                   {`Write setups for ${setupTargets.qs.length === 1 ? "1 question" : `${setupTargets.qs.length} questions`} in ${setupTargets.where}`}
+                </MenuItem>
+              )}
+              {picked.length > 0 && (
+                <MenuItem
+                  icon={<Sparkles size={13} />}
+                  disabled={working}
+                  onClick={() => {
+                    close();
+                    void writeAllTips();
+                  }}
+                >
+                  Write tips for Ask mode: who to bring in, how to move on, what to watch
                 </MenuItem>
               )}
               {missingProbes > 0 && (
@@ -4637,6 +4702,31 @@ function QuestionEditor({
           />
         ) : null,
       )}
+      {/* The tips Ask mode shows under it. Theirs to change, or to write. */}
+      <Input
+        label="Tip: who to bring in, and how (Ask mode only)"
+        value={q.tips?.handOff || ""}
+        onChange={(e) => onPatch({ tips: { ...q.tips, handOff: e.target.value } })}
+        placeholder='e.g. "Eleonora, would that work at the account level?"'
+      />
+      <Input
+        label="Tip: a line to move on if it runs long"
+        value={q.tips?.long || ""}
+        onChange={(e) => onPatch({ tips: { ...q.tips, long: e.target.value } })}
+        placeholder='e.g. "Mark, let me hold you there and bring in Roman"'
+      />
+      <Input
+        label="Tip: what to say to keep it short"
+        value={q.tips?.brief || ""}
+        onChange={(e) => onPatch({ tips: { ...q.tips, brief: e.target.value } })}
+        placeholder='e.g. "A quick take from each of you, about a minute, starting with Ajay"'
+      />
+      <Input
+        label="Tip: what to watch for"
+        value={q.tips?.watch || ""}
+        onChange={(e) => onPatch({ tips: { ...q.tips, watch: e.target.value } })}
+        placeholder="e.g. If he drifts back to AI, ask what the slide can't do"
+      />
       <Input
         label="Who to put it to"
         value={q.forWhom}

@@ -2411,3 +2411,78 @@ export async function sharpenQuestions({
     );
   return out;
 }
+
+const TIPS_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    tips: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        properties: {
+          index: { type: "number" as const },
+          handOff: { type: "string" as const },
+          long: { type: "string" as const },
+          brief: { type: "string" as const },
+          watch: { type: "string" as const },
+        },
+        required: ["index", "handOff", "long", "brief", "watch"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["tips"],
+  additionalProperties: false,
+};
+
+/**
+ * Moderator tips for each question in the running order, for Ask mode: who
+ * to bring in, how to move on, what to watch. Written over the whole order
+ * at once, because a hand-off is only good if it knows who has already
+ * spoken and who is still to come.
+ */
+export async function writeTips({
+  meeting,
+  plan,
+}: {
+  meeting: MeetingPayload;
+  plan: { setup: string; text: string; probe: string; who: string; toAll: boolean; reserve: boolean }[];
+}): Promise<{ handOff: string; long: string; brief: string; watch: string }[]> {
+  const out = plan.map(() => ({ handOff: "", long: "", brief: "", watch: "" }));
+  if (!plan.length) return out;
+  const res = await anthropic().messages.create({
+    model: WRITER_MODEL,
+    max_tokens: 8000,
+    output_config: { format: { type: "json_schema", schema: TIPS_SCHEMA } },
+    system: `You are coaching a moderator through a live panel, question by question. They will glance at your tips on a screen while someone is talking, so every tip is short, plain and usable at once. None of it is read to the room except the lines in quotation marks.
+
+${SEAT_RULE}
+
+For each question in the running order:
+- handOff: for a question to the whole panel, the order to go round and why in a few words ("Start with Ajay, he lives this daily; end with Mark"). For a question to one person, who to bring in after them if there is time, and the words to do it, in quotation marks, using the name ("Eleonora, would that work at the account level?"). Pick the person whose role gives the sharpest contrast, and spread hand-offs so the same person is not brought in every time.
+- long: one polite line to stop an answer that runs long and move on, word for word in quotation marks, using the person's name: it thanks or credits what they said, then hands on, warm and never abrupt ("Mark, let me hold you there. That's a great point, and I want to make sure Roman gets in on this.").
+- brief: what to say as you ask this question when time is tight, to get a short answer, word for word in quotation marks, said before or with the question ("I'd love a quick take from each of you, about a minute, starting with Ajay." or "Ajay, in a sentence or two:"). For a question to the whole panel, name the order and the length.
+- watch: the one thing most likely to go wrong with this question for these people, and what to do, under 25 words. A drift onto another question's topic, a panelist without the experience to answer, an answer that turns into a pitch for their company, a question that overlaps what someone already said. Never generic advice that would fit any question.
+
+Use only what the context says about each panelist; never invent a fact about them. Plain prose. Never an em dash or en dash.`,
+    messages: [
+      {
+        role: "user",
+        content: `${meetingContext(meeting, "")}\n\nTHE RUNNING ORDER:\n${plan
+          .map(
+            (q, i) =>
+              `${i + 1}. ${q.reserve ? "[reserve, only if there is time] " : ""}${q.toAll ? "[to the whole panel]" : q.who ? `[to ${q.who}]` : ""}\nSetup: ${q.setup || "(none)"}\nQuestion: ${q.text}\nProbe: ${q.probe || "(none)"}`,
+          )
+          .join("\n\n")}`,
+      },
+    ],
+  });
+  if (res.stop_reason === "refusal") return out;
+  const parsed = JSON.parse(firstText(res) || "{}");
+  const clean = (t: unknown) => String(t || "").replace(/[\u2013\u2014]/g, ",").trim();
+  for (const t of Array.isArray(parsed.tips) ? parsed.tips : []) {
+    const i = Number(t?.index) - 1;
+    if (i >= 0 && i < out.length) out[i] = { handOff: clean(t?.handOff), long: clean(t?.long), brief: clean(t?.brief), watch: clean(t?.watch) };
+  }
+  return out;
+}

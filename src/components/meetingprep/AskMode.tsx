@@ -396,6 +396,46 @@ export function AskMode({
             {/* Quiet, and small, because it is the one thing on this screen
                 that is not to be read out: it is what they stand on if the
                 answer comes back as a challenge. */}
+            {/* For them, not for the room: who to bring in, how to move on,
+                what to watch, and their own note. */}
+            {(cur.tips?.handOff || cur.tips?.long || cur.tips?.brief || cur.tips?.watch || cur.note) && (
+              <div className="mt-4 rounded-xl border border-dashed border-border bg-canvas/60 p-4 text-sm">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">For you, not to say</p>
+                <dl className="mt-1.5 space-y-1.5">
+                  {cur.tips?.handOff && (
+                    <div>
+                      <dt className="inline font-semibold text-ink">Bring someone in: </dt>
+                      <dd className="inline text-ink/80">{cur.tips.handOff}</dd>
+                    </div>
+                  )}
+                  {cur.tips?.long && (
+                    <div>
+                      <dt className="inline font-semibold text-ink">If it runs long: </dt>
+                      <dd className="inline text-ink/80">{cur.tips.long}</dd>
+                    </div>
+                  )}
+                  {cur.tips?.brief && (
+                    <div className={clock && clock.spare <= -1 ? "rounded-md bg-amber-50 px-1.5 py-1" : ""}>
+                      <dt className="inline font-semibold text-ink">To keep it short: </dt>
+                      <dd className="inline text-ink/80">{cur.tips.brief}</dd>
+                    </div>
+                  )}
+                  {cur.tips?.watch && (
+                    <div>
+                      <dt className="inline font-semibold text-ink">Watch for: </dt>
+                      <dd className="inline text-ink/80">{cur.tips.watch}</dd>
+                    </div>
+                  )}
+                  {cur.note && (
+                    <div>
+                      <dt className="inline font-semibold text-ink">Your note: </dt>
+                      <dd className="inline text-ink/80">{cur.note}</dd>
+                    </div>
+                  )}
+                </dl>
+              </div>
+            )}
+
             {cur.sourceNote && (
               <p className="mt-3 text-sm text-muted">Source: {cur.sourceNote}</p>
             )}

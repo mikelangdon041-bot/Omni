@@ -37,6 +37,7 @@ import {
   writeQuestions,
   writeSetups,
   writeVariants,
+  writeTips,
 } from "@/lib/meetingprep/questionsAi";
 import { reviewPrep, reviewProbes } from "@/lib/meetingprep/reviewAi";
 import {
@@ -570,6 +571,22 @@ export async function POST(req: Request) {
     }
 
     // Rework for several questions at once, shown to the writer before anything changes.
+    // Moderator tips for Ask mode, over the whole running order at once.
+    if (action === "tips") {
+      const plan = Array.isArray(body?.plan)
+        ? (body.plan as Record<string, unknown>[]).slice(0, 40).map((q) => ({
+            setup: String(q?.setup || "").slice(0, 1500),
+            text: String(q?.text || "").slice(0, 600),
+            probe: String(q?.probe || "").slice(0, 600),
+            who: String(q?.who || "").slice(0, 120),
+            toAll: Boolean(q?.toAll),
+            reserve: Boolean(q?.reserve),
+          }))
+        : [];
+      const tips = await writeTips({ meeting: body?.meeting || {}, plan });
+      return NextResponse.json({ tips });
+    }
+
     if (action === "rework_many") {
       const meeting: MeetingPayload = body?.meeting || {};
       const items = (Array.isArray(body?.items) ? body.items : []).slice(0, 12).map(

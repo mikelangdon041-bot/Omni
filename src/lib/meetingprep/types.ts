@@ -393,6 +393,12 @@ export interface QuestionItem {
    * panelist, or that it has to come after the budget question.
    */
   note?: string;
+  /**
+   * Moderator tips for the room, shown in Ask mode and never said aloud: who
+   * to bring in and how, a line to move on if it runs long, and the one thing
+   * to watch for. The probe is the tip for when it runs short.
+   */
+  tips?: QuestionTips;
   /** Position within the picked list; the writer arranges this. */
   order: number;
   /** A sharper question for the same setup, offered, not applied. */
@@ -402,6 +408,17 @@ export interface QuestionItem {
   /** The writer picked one of the options, so the rest fold away. */
   optionChosen?: boolean;
   source: "ai" | "user";
+}
+
+export interface QuestionTips {
+  /** Who to bring in next and the words to do it; for a question to everyone, the order to go round. */
+  handOff?: string;
+  /** A polite line to move on when it runs long, word for word. */
+  long?: string;
+  /** What to say as you ask it, to get a short answer when time is tight, word for word. */
+  brief?: string;
+  /** The one thing likely to go wrong here, and what to do about it. */
+  watch?: string;
 }
 
 /** A better question for a setup the writer likes, waiting on Use it / Keep mine. */
