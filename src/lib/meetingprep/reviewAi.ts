@@ -37,9 +37,11 @@ export interface WrittenNote {
    */
   keepRef: number;
   /** What to do to those questions, when it is something safe to do. */
-  action?: "rewrite" | "bin" | "probe";
+  action?: "rewrite" | "bin" | "probe" | "edit";
   /** For a note about a probe: the new probe, word for word. Only the probe changes. */
   probe?: string;
+  /** For a small correction: the whole question with only that fixed, word for word. */
+  text?: string;
   /**
    * The exact lines in the brief the note is about, word for word. "Cut the
    * editing note left inside a question" told the writer a line existed and
@@ -73,8 +75,9 @@ const REVIEW_SCHEMA = {
           severity: { type: "string" as const, enum: ["high", "medium", "low"] },
           questionRefs: { type: "array" as const, items: { type: "number" as const } },
           keepRef: { type: "number" as const },
-          action: { type: "string" as const, enum: ["rewrite", "bin", "probe", ""] },
+          action: { type: "string" as const, enum: ["rewrite", "bin", "probe", "edit", ""] },
           probe: { type: "string" as const },
+          text: { type: "string" as const },
           quotes: { type: "array" as const, items: { type: "string" as const } },
         },
         required: [
@@ -88,6 +91,7 @@ const REVIEW_SCHEMA = {
           "keepRef",
           "action",
           "probe",
+          "text",
           "quotes",
         ],
         additionalProperties: false,
@@ -160,6 +164,7 @@ What a good note is about:
 - What they will actually do in the room. Where the pack will fail them under pressure: no plan for the quiet person, nothing to say if the first question lands badly, no way back if they run short of time.
 
 What a note is NEVER about:
+- Time: how many questions fit, minutes per question, what to cut if short. The app times the running order itself and the writer has a plan for it.
 - The bank. Questions under THE BANK are suggestions they did not pick and will not ask. Never a note about cutting, tidying, merging or de-duplicating them. They may only appear as a better replacement for a question in the running order, named in keepRef.
 - Praise. If a section is good, say nothing about it. There is no "strengths" note.
 - Generic meeting advice ("listen actively", "build rapport", "be prepared"). If the note would be true of every meeting ever held, it is not a note.
@@ -181,6 +186,7 @@ Fields:
   - "bin" when the questions themselves should go: duplicates, a question that asks what another already asks, one that no longer fits the subject. List ONLY the ones to remove in questionRefs, never the one that is being kept. Say in the detail which one you are keeping and why. Use it only when your fix is to be rid of the question outright — if the fix says to move it, re-file it, or keep it for somewhere else in the running order, the action is "", because the button would otherwise promise something your own note does not say.
   - "rewrite" when the questions should stay but be asked better, and your fix says how.
   - "probe" when only the probe should change; see the probes above.
+  - "edit" for a small correction to one question's words: a misspelled name, a missing word, a typo. text is that whole question word for word with only the correction made. Never "rewrite" for these: that writes a new question.
   - "" for everything else, including anything about the ORDER they are asked in. Order is the writer's to arrange, and a note that reshuffles their list out from under them is worse than one that tells them where to drag it.
 - quotes: the exact words in the brief this note is about, so the writer can see what you mean without hunting for it. Copy each one character for character from THE BRIEF AS IT STANDS: the whole sentence or bullet, under 40 words, at most 3. REQUIRED whenever the note is about something specific that is written there: a line, a claim, a duplicated point, the opening of a box, a question inside a brief box. A quote that is not word for word in the brief is thrown away, so never paraphrase. Questions from the numbered bank go in questionRefs, not here. [] only for a note about something missing.
 
@@ -212,7 +218,7 @@ The sections that exist, by key: ${sectionKeys.length ? sectionKeys.join(", ") :
     const namesPlan =
       Array.isArray(n?.questionRefs) &&
       (n.questionRefs as unknown[]).map(Number).some((x) => x >= 1 && (!planCount || x <= planCount)) &&
-      ["probe", "rewrite", "bin"].includes(String(n?.action || ""));
+      ["probe", "rewrite", "bin", "edit"].includes(String(n?.action || ""));
     const target = namesPlan ? "questions" : raw === "questions" || raw === "setup" || allowed.has(raw) ? raw : "";
     const severity = ["high", "medium", "low"].includes(String(n?.severity))
       ? (String(n.severity) as WrittenNote["severity"])
@@ -250,7 +256,9 @@ The sections that exist, by key: ${sectionKeys.length ? sectionKeys.join(", ") :
         ? (rawAction as "rewrite" | "bin")
         : target === "questions" && refs.length === 1 && rawAction === "probe" && probe
           ? ("probe" as const)
-          : undefined;
+          : target === "questions" && refs.length === 1 && rawAction === "edit" && String(n?.text || "").trim()
+            ? ("edit" as const)
+            : undefined;
     const pack = flat(`${briefText}\n${questionsText}`);
     const quotes = (Array.isArray(n?.quotes) ? (n.quotes as unknown[]) : [])
       .map((q) => String(q || "").trim().replace(/^["\u201c]|["\u201d]$/g, ""))
@@ -267,6 +275,7 @@ The sections that exist, by key: ${sectionKeys.length ? sectionKeys.join(", ") :
       questionRefs: refs,
       keepRef,
       ...(action === "probe" ? { probe } : {}),
+      ...(action === "edit" ? { text: String(n?.text || "").trim() } : {}),
       action,
     });
   }

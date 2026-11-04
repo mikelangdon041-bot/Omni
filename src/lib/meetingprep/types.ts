@@ -486,9 +486,11 @@ export interface ReviewNote {
   /** The one being kept, when the note is a choice between questions. */
   keepId?: string;
   /** What can simply be done to those questions, where that is safe. */
-  action?: "rewrite" | "bin" | "probe";
+  action?: "rewrite" | "bin" | "probe" | "edit";
   /** For a note about a probe: the new probe, word for word. */
   probe?: string;
+  /** For a small correction: the whole question with only that fixed. */
+  text?: string;
   /**
    * The exact lines in the brief this note is about, checked to be word for
    * word in the pack. Absent on notes written before they were asked for.

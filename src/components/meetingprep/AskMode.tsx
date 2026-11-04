@@ -339,10 +339,10 @@ export function AskMode({
             {stripAskedQuestion(cur.setup, cur.text) && (
               <div className={`mt-5 ${cur.asked ? "opacity-40" : ""}`}>
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Say first</p>
-                <div className="mt-1.5 space-y-1.5 text-lg leading-relaxed text-ink/80 sm:text-xl">
+                <div className="mt-1.5 space-y-3 text-lg leading-snug text-ink/80 sm:text-xl">
                   {sentences(stripAskedQuestion(cur.setup, cur.text)).map((line, i) => (
                     <p key={i}>
-                      <Spoken text={line} />
+                      <Spoken text={line} lines />
                     </p>
                   ))}
                 </div>
@@ -352,8 +352,8 @@ export function AskMode({
               {stripAskedQuestion(cur.setup, cur.text) && (
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">Then ask</p>
               )}
-              <p className="mt-1 text-balance text-2xl font-semibold leading-tight tracking-tight text-ink sm:text-[2rem]">
-                <Spoken text={cur.text} names={panel} />
+              <p className="mt-1.5 border-l-4 border-[var(--accent)] pl-3 text-2xl leading-snug text-ink sm:text-[1.75rem]">
+                <Spoken text={cur.text} names={panel} lines />
               </p>
             </div>
 
@@ -566,17 +566,55 @@ function sentences(t: string): string[] {
 }
 
 /**
- * Words to be said, with what to land on marked: numbers and percentages in
- * bold, and a panelist's name at the start in colour, the cue to turn to them.
+ * Words to be said, laid out to be said: a phrase a line, broken where you
+ * would pause (after a comma, a colon or a semicolon), numbers in bold and
+ * never split from their unit, and a panelist's name at the start in colour,
+ * the cue to turn to them. One block of text was hard to keep your place in,
+ * and "27" ended one line with "percent" starting the next.
  */
-function Spoken({ text, names = [] }: { text: string; names?: string[] }) {
+function Spoken({ text, names = [], lines = false }: { text: string; names?: string[]; lines?: boolean }) {
   const lead = names.find((n) => n && new RegExp(`^${n.replace(/[^A-Za-z]/g, "")}\\b`, "i").test(text));
-  const rest = lead ? text.slice(lead.length) : text;
-  const parts = rest.split(/(\b\d[\d,.]*(?:\s?(?:percent|%|x|times|billion|million))?)/i);
+  const marked = (chunk: string, key: string, offset: number) => {
+    const nameEnd = lead && offset === 0 ? lead.length : 0;
+    const body = chunk.slice(nameEnd);
+    const parts = body.split(/(\b\d[\d,.]*(?:\s?(?:percent|%|x|times|billion|million))?)/i);
+    return (
+      <span key={key}>
+        {nameEnd > 0 && <span className="text-[var(--accent)]">{chunk.slice(0, nameEnd)}</span>}
+        {parts.map((p, i) =>
+          i % 2 ? (
+            <strong key={i} className="whitespace-nowrap font-semibold text-ink">
+              {p}
+            </strong>
+          ) : (
+            <span key={i}>{p}</span>
+          ),
+        )}
+      </span>
+    );
+  };
+  if (!lines) return marked(text, "0", 0);
+  // Phrases, with any of under three words joined to the one before, so a
+  // line is never a lone "So," or "then".
+  const raw = text.split(/(?<=[,;:])\s+/);
+  const phrases: string[] = [];
+  for (const r of raw) {
+    if (phrases.length && r.split(/\s+/).length < 3) phrases[phrases.length - 1] += ` ${r}`;
+    else if (phrases.length && phrases[phrases.length - 1].split(/\s+/).length < 3) phrases[phrases.length - 1] += ` ${r}`;
+    else phrases.push(r);
+  }
+  let offset = 0;
   return (
     <>
-      {lead && <span className="text-[var(--accent)]">{text.slice(0, lead.length)}</span>}
-      {parts.map((p, i) => (i % 2 ? <strong key={i} className="font-semibold text-ink">{p}</strong> : <span key={i}>{p}</span>))}
+      {phrases.map((p, i) => {
+        const el = (
+          <span key={i} className="block">
+            {marked(p, String(i), offset)}
+          </span>
+        );
+        offset += p.length + 1;
+        return el;
+      })}
     </>
   );
 }

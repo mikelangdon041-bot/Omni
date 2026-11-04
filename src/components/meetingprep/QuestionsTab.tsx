@@ -836,6 +836,14 @@ export function QuestionsTab({
     }
     // A probe note changes the probe and nothing else: sent through the
     // rewrite, it would have replaced a question they had finished.
+    // A small correction, a name or a missing word: the words change and
+    // nothing else does.
+    if (n.action === "edit" && n.text) {
+      setItems(items.map((q) => (ids.includes(q.id) ? { ...q, text: n.text! } : q)));
+      review.patchNote(n.id, { done: true });
+      toast("success", "Changed");
+      return;
+    }
     if (n.action === "probe" && n.probe) {
       setItems(items.map((q) => (ids.includes(q.id) ? { ...q, followUp: n.probe! } : q)));
       review.patchNote(n.id, { done: true });

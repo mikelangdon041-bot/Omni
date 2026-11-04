@@ -245,6 +245,14 @@ export function ReviewPanel({
                         )}
                         {text}
                         <Where id={id} where={questionWhere} onShow={onShowQuestion} />
+                        {n.action === "edit" && n.text && (
+                          <span className="mt-1 block text-ink">
+                            <span className="mr-1 rounded bg-emerald-100 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-800">
+                              Change to
+                            </span>
+                            {n.text}
+                          </span>
+                        )}
                         {/* The probe it has now, then the new one: shown only the
                             new one, there was nothing to compare it with. */}
                         {n.action === "probe" && n.probe && (
@@ -299,7 +307,9 @@ export function ReviewPanel({
                           : `Rewrite those ${n.questionIds!.length}`
                         : n.action === "probe"
                           ? "Use this probe"
-                          : "Do it for me"}
+                          : n.action === "edit"
+                            ? "Make this change"
+                            : "Do it for me"}
                   </Button>
                 )}
                 <Button size="sm" variant="ghost" onClick={() => onToggleDone(n)}>
