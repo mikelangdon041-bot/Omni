@@ -2356,6 +2356,7 @@ export function QuestionsTab({
           onToggleAsked={(q) => patch(q.id, { asked: !q.asked })}
           onResetTicks={() => setItems(items.map((q) => ({ ...q, asked: false })))}
           onUseKept={(q, o) => patch(q.id, swapKept(q, o))}
+          onPatch={(q, p) => patch(q.id, p)}
           minutesOf={(q) => minutesFor(q, panel.length, timing)}
           quickOf={(q) => quickFor(q, panel.length)}
           slotMin={m.duration_min || null}

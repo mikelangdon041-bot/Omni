@@ -245,12 +245,26 @@ export function ReviewPanel({
                         )}
                         {text}
                         <Where id={id} where={questionWhere} onShow={onShowQuestion} />
+                        {/* The change itself, marked: shown the whole new
+                            question, a one-word fix was a spot-the-difference. */}
                         {n.action === "edit" && n.text && (
                           <span className="mt-1 block text-ink">
                             <span className="mr-1 rounded bg-emerald-100 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-800">
-                              Change to
+                              Change
                             </span>
-                            {n.text}
+                            {wordDiff(text, n.text).map((d, k) =>
+                              d.kind === "same" ? (
+                                <span key={k}>{d.t} </span>
+                              ) : d.kind === "del" ? (
+                                <del key={k} className="mr-1 rounded bg-red-50 px-0.5 text-red-700">
+                                  {d.t}
+                                </del>
+                              ) : (
+                                <ins key={k} className="mr-1 rounded bg-emerald-50 px-0.5 font-semibold text-emerald-800 no-underline">
+                                  {d.t}
+                                </ins>
+                              ),
+                            )}
                           </span>
                         )}
                         {/* The probe it has now, then the new one: shown only the
@@ -471,4 +485,33 @@ function QuestionList({
       ))}
     </ul>
   );
+}
+
+/**
+ * Word by word, what a correction changes: kept words, words taken out and
+ * words put in, in order. Small and exact, for a sentence or two.
+ */
+function wordDiff(a: string, b: string): { t: string; kind: "same" | "del" | "add" }[] {
+  const x = a.split(/\s+/).filter(Boolean);
+  const y = b.split(/\s+/).filter(Boolean);
+  const L = Array.from({ length: x.length + 1 }, () => new Array<number>(y.length + 1).fill(0));
+  for (let i = x.length - 1; i >= 0; i--)
+    for (let j = y.length - 1; j >= 0; j--) L[i][j] = x[i] === y[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out: { t: string; kind: "same" | "del" | "add" }[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < x.length || j < y.length) {
+    if (i < x.length && j < y.length && x[i] === y[j]) {
+      out.push({ t: x[i], kind: "same" });
+      i++;
+      j++;
+    } else if (j < y.length && (i >= x.length || L[i][j + 1] >= L[i + 1][j])) {
+      out.push({ t: y[j], kind: "add" });
+      j++;
+    } else {
+      out.push({ t: x[i], kind: "del" });
+      i++;
+    }
+  }
+  return out;
 }

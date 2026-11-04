@@ -32,6 +32,7 @@ export function AskMode({
   onToggleAsked,
   onResetTicks,
   onUseKept,
+  onPatch,
   minutesOf,
   quickOf,
   slotMin,
@@ -50,6 +51,8 @@ export function AskMode({
   onResetTicks: () => void;
   /** Swaps a kept second question in for the main one. */
   onUseKept?: (q: QuestionItem, o: QuestionOption) => void;
+  /** Changes a question's words from here, for laying it out the way they say it. */
+  onPatch?: (q: QuestionItem, p: Partial<QuestionItem>) => void;
   /** How long a question runs, the same reckoning as the list's. */
   minutesOf?: (q: QuestionItem) => number;
   /** A question to everyone, asked for a minute each: how long it takes then. Null for any other. */
@@ -143,6 +146,23 @@ export function AskMode({
 
   const [mode, setMode] = useState<"one" | "all">("one");
   const [at, setAt] = useState(0);
+  const [editingText, setEditingText] = useState(false);
+  // Left or centred, theirs to choose, kept between visits.
+  const [align, setAlign] = useState<"left" | "center">(() => {
+    try {
+      return localStorage.getItem("mp:ask-align") === "left" ? "left" : "center";
+    } catch {
+      return "center";
+    }
+  });
+  const setAlignTo = (a: "left" | "center") => {
+    setAlign(a);
+    try {
+      localStorage.setItem("mp:ask-align", a);
+    } catch {
+      // Only a preference.
+    }
+  };
   const here = Math.max(0, Math.min(at, flow.length - 1));
   const cur = flow[here];
 
@@ -155,6 +175,9 @@ export function AskMode({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Typing in a box is typing: Enter is a new line, not Asked it.
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT")) return;
       if (e.key === "Escape") {
         onClose();
         return;
@@ -331,33 +354,90 @@ export function AskMode({
               )}
             </div>
 
-            {/* Said first, so it reads first, a size down: the question is
-                the line that has to survive a glance. */}
-            {/* Laid out to be said: the setup a sentence a line, so each break
-                is a breath, numbers in bold to land on, then the question.
-                One block of grey was hard to keep your place in. */}
-            {stripAskedQuestion(cur.setup, cur.text) && (
-              <div className={`mt-6 text-center ${cur.asked ? "opacity-40" : ""}`}>
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Say first</p>
-                <div className="mx-auto mt-2 max-w-2xl space-y-3 text-lg leading-relaxed text-ink/75 sm:text-xl">
-                  {sentences(stripAskedQuestion(cur.setup, cur.text)).map((line, i) => (
-                    <p key={i} className="text-balance">
-                      <Spoken text={line} />
-                    </p>
-                  ))}
+            {/* Laid out the way they say it. Their own line breaks win: Edit
+                text, Enter where the line should break. Without any, a
+                sentence a line. Setup and question the same size, since both
+                are said; the question only darker and heavier. */}
+            <div className={`mt-5 flex flex-wrap items-center gap-2 text-xs ${align === "center" ? "justify-center" : ""}`}>
+              <div className="inline-flex rounded-lg border border-border bg-canvas p-0.5">
+                {(["left", "center"] as const).map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    aria-pressed={align === k}
+                    onClick={() => setAlignTo(k)}
+                    className={`rounded-md px-2 py-0.5 ${align === k ? "bg-surface font-medium text-ink shadow-sm" : "text-muted hover:text-ink"}`}
+                  >
+                    {k === "left" ? "Left" : "Centre"}
+                  </button>
+                ))}
+              </div>
+              {onPatch && (
+                <button
+                  type="button"
+                  onClick={() => setEditingText((v) => !v)}
+                  className="rounded-lg border border-border px-2 py-0.5 text-muted hover:text-ink"
+                >
+                  {editingText ? "Done" : "Edit text"}
+                </button>
+              )}
+            </div>
+            {editingText && onPatch ? (
+              <div className="mt-3 space-y-2">
+                <p className="text-xs text-muted">Press Enter wherever you want a new line. A blank line starts a new paragraph.</p>
+                <label className="block text-[11px] font-semibold uppercase tracking-wide text-muted">
+                  Say first
+                  <textarea
+                    value={cur.setup || ""}
+                    onChange={(e) => onPatch(cur, { setup: e.target.value })}
+                    className="mt-1 block min-h-32 w-full rounded-lg border border-border bg-surface p-2.5 text-base font-normal normal-case tracking-normal text-ink"
+                  />
+                </label>
+                <label className="block text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">
+                  Then ask
+                  <textarea
+                    value={cur.text}
+                    onChange={(e) => onPatch(cur, { text: e.target.value })}
+                    className="mt-1 block min-h-24 w-full rounded-lg border border-border bg-surface p-2.5 text-base font-normal normal-case tracking-normal text-ink"
+                  />
+                </label>
+              </div>
+            ) : (
+              <div className={`${align === "center" ? "text-center" : ""} ${cur.asked ? "opacity-40" : ""}`}>
+                {stripAskedQuestion(cur.setup, cur.text) && (
+                  <div className="mt-4">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Say first</p>
+                    <div className={`mt-1.5 max-w-2xl space-y-3 text-xl leading-relaxed text-ink/75 sm:text-2xl ${align === "center" ? "mx-auto" : ""}`}>
+                      {paragraphs(stripAskedQuestion(cur.setup, cur.text)).map((para, i) => (
+                        <p key={i} className={align === "center" ? "text-balance" : ""}>
+                          {para.map((line, j) => (
+                            <span key={j} className="block">
+                              <Spoken text={line} />
+                            </span>
+                          ))}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <div className="mt-6">
+                  {stripAskedQuestion(cur.setup, cur.text) && (
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">Then ask</p>
+                  )}
+                  <div className={`mt-1.5 max-w-2xl space-y-3 text-xl font-medium leading-relaxed text-ink sm:text-2xl ${align === "center" ? "mx-auto" : ""}`}>
+                    {paragraphs(cur.text, false).map((para, i) => (
+                      <p key={i} className={align === "center" ? "text-balance" : ""}>
+                        {para.map((line, j) => (
+                          <span key={j} className="block">
+                            <Spoken text={line} names={i === 0 && j === 0 ? panel : []} />
+                          </span>
+                        ))}
+                      </p>
+                    ))}
+                  </div>
                 </div>
               </div>
             )}
-            {/* Centred, with the lines balanced to even lengths: breaking at
-                every comma left a lone word on a line, which read worse. */}
-            <div className={`mt-7 text-center ${cur.asked ? "opacity-40" : ""}`}>
-              {stripAskedQuestion(cur.setup, cur.text) && (
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">Then ask</p>
-              )}
-              <p className="mx-auto mt-2 max-w-2xl text-balance text-2xl font-medium leading-snug text-ink sm:text-[1.75rem]">
-                <Spoken text={cur.text} names={panel} />
-              </p>
-            </div>
 
             {(cur.options || []).some((o) => o.keep) && (
               <div className="mt-6 rounded-xl border border-border bg-surface p-4">
@@ -596,6 +676,21 @@ function AskRow({
       </button>
     </li>
   );
+}
+
+/**
+ * Paragraphs of lines, the way they will say it. Their own breaks first: a
+ * line break is a new line and a blank line a new paragraph. With none, a
+ * setup goes a sentence a paragraph and a question stays whole.
+ */
+function paragraphs(t: string, bySentence = true): string[][] {
+  const text = t.trim();
+  if (/\n/.test(text))
+    return text
+      .split(/\n\s*\n/)
+      .map((p) => p.split("\n").map((l) => l.trim()).filter(Boolean))
+      .filter((p) => p.length);
+  return bySentence ? sentences(text).map((x) => [x]) : [[text]];
 }
 
 /** A setup split where you would breathe: one sentence a line. */
