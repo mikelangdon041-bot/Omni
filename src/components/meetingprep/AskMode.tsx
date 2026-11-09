@@ -31,6 +31,8 @@ export function AskMode({
   panel = [],
   onUseKept,
   onPatch,
+  opening = "",
+  onOpening,
   onWriteTips,
   tipping = false,
   minutesOf,
@@ -57,6 +59,9 @@ export function AskMode({
   tipping?: boolean;
   /** Changes a question's words from here, for laying it out the way they say it. */
   onPatch?: (q: QuestionItem, p: Partial<QuestionItem>) => void;
+  /** What they say to open, before the introductions, and saving it. */
+  opening?: string;
+  onOpening?: (t: string) => void;
   /** How long a question runs, the same reckoning as the list's. */
   minutesOf?: (q: QuestionItem) => number;
   /** A question to everyone, asked for a minute each: how long it takes then. Null for any other. */
@@ -230,6 +235,7 @@ export function AskMode({
   const [showMore, setShowMore] = useState(false);
   const [at, setAt] = useState(0);
   const [editingText, setEditingText] = useState(false);
+  const [editingOpening, setEditingOpening] = useState(false);
   // The box last typed in, for the B and I buttons.
   const lastBox = useRef<HTMLTextAreaElement | null>(null);
   // Left or centred, theirs to choose, kept between visits.
@@ -452,11 +458,70 @@ export function AskMode({
         ) : onIntro ? (
           // Introductions are a step of their own, before question 1, so the
           // clock knows when the questions really started.
-          <div className="mx-auto flex min-h-full w-full max-w-xl flex-col justify-center px-5 py-8 text-center">
+          <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center px-5 py-8 text-center">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">Before the questions</p>
             <h2 className="mt-2 text-2xl font-medium text-ink">Opening and introductions</h2>
-            <p className="mt-2 text-base text-ink/75">
-              Welcome the room and introduce {panel.length ? panel.join(", ").replace(/, ([^,]*)$/, " and $1") : "the panel"}. About {Math.round(leadMin)} minutes in all.
+            {/* Their own words to open with, laid out and edited the way the
+                questions are. */}
+            {(opening.trim() || editingOpening) && (
+              <div className={`mt-6 ${align === "center" ? "" : "text-left"}`}>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Say first</p>
+                <div className={`mt-1.5 max-w-2xl text-xl leading-relaxed text-ink sm:text-2xl ${align === "center" ? "mx-auto" : ""}`}>
+                  {editingOpening && onOpening ? (
+                    <textarea
+                      aria-label="Your opening"
+                      autoFocus
+                      value={opening}
+                      placeholder="What you'll say to open, before the panel introduce themselves"
+                      onChange={(e) => onOpening(e.target.value)}
+                      onKeyDown={markKeys((el, m) => toggleMark(el, m, onOpening))}
+                      onFocus={(e) => (lastBox.current = e.currentTarget)}
+                      style={{ fieldSizing: "content" } as CSSProperties}
+                      className={`block min-h-[4lh] w-full max-w-2xl resize-none rounded-sm bg-transparent p-0 text-ink outline-2 outline-offset-4 outline-dashed outline-[var(--accent)]/50 focus:outline-[var(--accent)] ${
+                        align === "center" ? "mx-auto text-center" : ""
+                      }`}
+                    />
+                  ) : (
+                    paragraphs(opening, false).map((para, i) => (
+                      <p key={i}>
+                        {i > 0 && (
+                          <span className="block" aria-hidden>
+                            &nbsp;
+                          </span>
+                        )}
+                        {para.map((line, j) => (
+                          <span key={j} className="block">
+                            <Spoken text={line} />
+                          </span>
+                        ))}
+                      </p>
+                    ))
+                  )}
+                </div>
+                {editingOpening && onOpening && (
+                  <>
+                    <MarkButtons onMark={(m) => toggleMark(lastBox.current, m, onOpening)} />
+                    <p className="mt-2 text-center text-xs text-muted">
+                      Enter for a new line, a blank line for a gap.{" "}
+                      <button type="button" onClick={() => setEditingOpening(false)} className="font-medium text-[var(--accent)] hover:underline">
+                        Done
+                      </button>
+                    </p>
+                  </>
+                )}
+              </div>
+            )}
+            <p className="mt-6 text-base text-ink/75">
+              {opening.trim() ? "Then introduce" : "Welcome the room and introduce"}{" "}
+              {panel.length ? panel.join(", ").replace(/, ([^,]*)$/, " and $1") : "the panel"}. About {Math.round(leadMin)} minutes in all.
+              {onOpening && !editingOpening && (
+                <>
+                  {" "}
+                  <button type="button" onClick={() => setEditingOpening(true)} className="font-medium text-[var(--accent)] hover:underline">
+                    {opening.trim() ? "Edit the opening" : "Write your opening"}
+                  </button>
+                </>
+              )}
             </p>
             <div className="mt-6 flex flex-wrap justify-center gap-2">
               {!startedAt && (
@@ -537,29 +602,12 @@ export function AskMode({
               // Bold or italic on the selected words: the marks go round
               // them, or come off if they are already there.
               const mark = (el: HTMLTextAreaElement | null, m: string) => {
-                if (!el || !onPatch) return;
-                const { selectionStart: a, selectionEnd: b, value } = el;
-                if (a === b) return;
-                const on = value.slice(a - m.length, a) === m && value.slice(b, b + m.length) === m;
-                const next = on
-                  ? value.slice(0, a - m.length) + value.slice(a, b) + value.slice(b + m.length)
-                  : value.slice(0, a) + m + value.slice(a, b) + m + value.slice(b);
-                onPatch(cur, el.getAttribute("aria-label") === "Say first" ? { setup: next } : { text: next });
-                const from = on ? a - m.length : a + m.length;
-                const to = on ? b - m.length : b + m.length;
-                requestAnimationFrame(() => {
-                  el.focus();
-                  el.setSelectionRange(from, to);
-                });
+                if (!onPatch) return;
+                toggleMark(el, m, (next) =>
+                  onPatch(cur, el?.getAttribute("aria-label") === "Say first" ? { setup: next } : { text: next }),
+                );
               };
-              const keys = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-                if (!(e.ctrlKey || e.metaKey)) return;
-                const k = e.key.toLowerCase();
-                if (k === "b" || k === "i") {
-                  e.preventDefault();
-                  mark(e.currentTarget, k === "b" ? "**" : "*");
-                }
-              };
+              const keys = markKeys(mark);
               return (
                 <div className={align === "center" ? "text-center" : ""}>
                   {(setupShown || editing) && (
@@ -629,30 +677,7 @@ export function AskMode({
                       )}
                     </div>
                   </div>
-                  {editing && (
-                    <div className="mt-3 flex flex-wrap items-center justify-center gap-1.5">
-                      {(
-                        [
-                          ["**", "B", "font-bold", "Bold (Ctrl+B)"],
-                          ["*", "I", "italic", "Italic (Ctrl+I)"],
-                        ] as const
-                      ).map(([m, label, cls, title]) => (
-                        <button
-                          key={m}
-                          type="button"
-                          title={title}
-                          aria-label={title}
-                          // Keep the words selected: a click would take the focus first.
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => mark(lastBox.current, m)}
-                          className={`h-7 w-7 rounded-md border border-border bg-surface text-sm text-ink hover:bg-canvas ${cls}`}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                      <span className="text-xs text-muted">Select words, then B or I.</span>
-                    </div>
-                  )}
+                  {editing && <MarkButtons onMark={(m) => mark(lastBox.current, m)} />}
                   {editing && (
                     <p className="mt-2 text-xs text-muted">
                       Type straight into it. Enter for a new line, a blank line for a gap. Bold, italics and numbers show when you&apos;re done.{" "}
@@ -873,6 +898,66 @@ function AskRow({
  * line break is a new line and a blank line a new paragraph. With none, a
  * setup goes a sentence a paragraph and a question stays whole.
  */
+// Bold or italic on the selected words: the marks go round them, or come off
+// if they are already there.
+function toggleMark(el: HTMLTextAreaElement | null, m: string, apply: (next: string) => void) {
+  if (!el) return;
+  const { selectionStart: a, selectionEnd: b, value } = el;
+  if (a === b) return;
+  const on = value.slice(a - m.length, a) === m && value.slice(b, b + m.length) === m;
+  apply(
+    on
+      ? value.slice(0, a - m.length) + value.slice(a, b) + value.slice(b + m.length)
+      : value.slice(0, a) + m + value.slice(a, b) + m + value.slice(b),
+  );
+  const from = on ? a - m.length : a + m.length;
+  const to = on ? b - m.length : b + m.length;
+  requestAnimationFrame(() => {
+    el.focus();
+    el.setSelectionRange(from, to);
+  });
+}
+
+// Ctrl+B and Ctrl+I in a box.
+function markKeys(mark: (el: HTMLTextAreaElement, m: string) => void) {
+  return (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    const k = e.key.toLowerCase();
+    if (k === "b" || k === "i") {
+      e.preventDefault();
+      mark(e.currentTarget, k === "b" ? "**" : "*");
+    }
+  };
+}
+
+// The B and I buttons under a box being edited.
+function MarkButtons({ onMark }: { onMark: (m: string) => void }) {
+  return (
+    <div className="mt-3 flex flex-wrap items-center justify-center gap-1.5">
+      {(
+        [
+          ["**", "B", "font-bold", "Bold (Ctrl+B)"],
+          ["*", "I", "italic", "Italic (Ctrl+I)"],
+        ] as const
+      ).map(([m, label, cls, title]) => (
+        <button
+          key={m}
+          type="button"
+          title={title}
+          aria-label={title}
+          // Keep the words selected: a click would take the focus first.
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => onMark(m)}
+          className={`h-7 w-7 rounded-md border border-border bg-surface text-sm text-ink hover:bg-canvas ${cls}`}
+        >
+          {label}
+        </button>
+      ))}
+      <span className="text-xs text-muted">Select words, then B or I.</span>
+    </div>
+  );
+}
+
 function paragraphs(t: string, bySentence = true): string[][] {
   const text = t.trim();
   if (/\n/.test(text))

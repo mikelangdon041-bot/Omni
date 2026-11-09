@@ -487,6 +487,9 @@ export interface QuestionBank {
   reactions?: number;
   qaMin?: number;
   introMin?: number;
+  // What the moderator says to open, before the introductions. Shown on
+  // Ask mode's first screen.
+  opening?: string;
 }
 
 // One piece of advice from a read-through of the whole prep pack. The point

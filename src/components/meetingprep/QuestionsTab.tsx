@@ -2359,6 +2359,8 @@ export function QuestionsTab({
           onResetTicks={() => setItems(items.map((q) => ({ ...q, asked: false })))}
           onUseKept={(q, o) => patch(q.id, swapKept(q, o))}
           onPatch={(q, p) => patch(q.id, p)}
+          opening={m.questions?.opening || ""}
+          onOpening={(t) => save({ questions: { ...m.questions, opening: t } })}
           onWriteTips={() => void writeAllTips()}
           tipping={tipping}
           minutesOf={(q) => minutesFor(q, panel.length, timing)}
