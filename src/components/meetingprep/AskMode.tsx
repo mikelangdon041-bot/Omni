@@ -524,7 +524,9 @@ export function AskMode({
                 paragraph. Paragraphs are one blank line apart in both. */}
             {(() => {
               const setupShown = stripAskedQuestion(cur.setup, cur.text);
-              const setupEdit = /\n/.test(setupShown) ? setupShown : sentences(setupShown).join("\n\n");
+              // Their exact text once it has a break of its own, so an Enter at the end
+              // of a line is not tidied away before the next word is typed.
+              const setupEdit = /\n/.test(cur.setup || "") ? cur.setup || "" : sentences(setupShown).join("\n\n");
               const box = `block w-full max-w-2xl resize-none bg-transparent p-0 outline-2 outline-offset-4 outline-dashed outline-[var(--accent)]/50 rounded-sm focus:outline-[var(--accent)] ${
                 align === "center" ? "mx-auto text-center" : ""
               }`;

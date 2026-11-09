@@ -984,5 +984,11 @@ export function stripAskedQuestion(setup: string | undefined, text: string): str
     if (!cut) break;
     s = cut;
   }
-  return s.replace(/\s{2,}/g, " ").trim();
+  // Spaces squeezed, line breaks kept: they are where the writer wants a
+  // new line in Ask mode, and squeezing them took every Enter back out.
+  return s
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/[ \t]*\n[ \t]*/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
