@@ -6,7 +6,7 @@
 // arm's length, and a way to get to the next one.
 
 import { useEffect, useState, type CSSProperties } from "react";
-import { ArrowLeft, ArrowRight, Check, ListChecks, Pause, Play, RotateCcw, Star, Timer, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, ListChecks, Pause, Play, RotateCcw, Star, Timer, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { stripAskedQuestion, type QuestionItem, type QuestionOption } from "@/lib/meetingprep/types";
 
@@ -29,8 +29,6 @@ export function AskMode({
   title,
   picked: all,
   panel = [],
-  onToggleAsked,
-  onResetTicks,
   onUseKept,
   onPatch,
   onWriteTips,
@@ -49,8 +47,9 @@ export function AskMode({
   picked: QuestionItem[];
   /** First names, for showing one person's questions. */
   panel?: string[];
-  onToggleAsked: (q: QuestionItem) => void;
-  onResetTicks: () => void;
+  /** No longer used: moving on is enough, nothing is ticked off. */
+  onToggleAsked?: (q: QuestionItem) => void;
+  onResetTicks?: () => void;
   /** Swaps a kept second question in for the main one. */
   onUseKept?: (q: QuestionItem, o: QuestionOption) => void;
   /** Writes the tips for the running order, from here. */
@@ -184,21 +183,27 @@ export function AskMode({
   const backups = picked.filter((q) => q.backup);
   const flow = [...main, ...backups];
 
-  // Against the whole running order, whatever is filtered: the time left
-  // after every main question you have not ticked yet is what is spare.
-  const clock = (() => {
+  // Against the whole running order, whatever is filtered, from where you
+  // are: the question on screen and every main one after it are still to
+  // come. Nothing is ticked off; moving on is enough.
+  const clockAt = (curId: string | undefined) => {
     if (!minutesOf || !slotMin || !startedAt) return null;
     const gone = Math.max(0, ((pausedAt ?? now) - startedAt) / 60000);
-    const toCome = all.filter((q) => !q.backup && !q.asked).reduce((n, q) => n + minutesOf(q), 0) + (introsAt ? 0 : Math.max(0, leadMin - gone));
+    const allMain = all.filter((q) => !q.backup);
+    const allBackups = all.filter((q) => q.backup);
+    const inMain = allMain.findIndex((q) => q.id === curId);
+    const inBackups = allBackups.findIndex((q) => q.id === curId);
+    const ahead = inMain >= 0 ? allMain.slice(inMain) : inBackups >= 0 ? [] : allMain;
+    const toCome = ahead.reduce((n, q) => n + minutesOf(q), 0) + (introsAt ? 0 : Math.max(0, leadMin - gone));
     const left = slotMin - endMin - gone;
     const spare = left - toCome;
-    const reserve = all.find((q) => q.backup && !q.asked && minutesOf(q) <= spare);
+    // A reserve not yet reached: once you have been past one, it is done.
+    const reserve = allBackups.slice(inBackups >= 0 ? inBackups + 1 : 0).find((q) => minutesOf(q) <= spare);
     // Running over with a question to everyone still to come: a minute each
     // on it is the cut that keeps the running order, before skipping any.
     let quick: { q: QuestionItem; saves: number; both: boolean } | null = null;
     if (spare <= -1 && quickOf) {
-      const toAll = all
-        .filter((q) => !q.backup && !q.asked)
+      const toAll = ahead
         .map((q) => ({ q, saves: minutesOf(q) - (quickOf(q) ?? minutesOf(q)) }))
         .filter((x) => x.saves >= 1);
       if (toAll.length) {
@@ -208,7 +213,7 @@ export function AskMode({
       }
     }
     return { gone, left, spare, reserve, quick };
-  })();
+  };
   const goTo = (q: QuestionItem) => {
     setShow("all");
     setMode("one");
@@ -219,7 +224,6 @@ export function AskMode({
     const t = Math.max(0, Math.round(min * 60));
     return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
   };
-  const done = picked.filter((q) => q.asked).length;
 
   const [mode, setMode] = useState<"one" | "all">("one");
   // The controls nobody needs mid-panel, folded under More.
@@ -244,6 +248,9 @@ export function AskMode({
   };
   const here = Math.max(0, Math.min(at, flow.length - 1));
   const cur = flow[here];
+  const hasIntro = Boolean(minutesOf && slotMin);
+  const onIntro = mode === "one" && introOpen && here === 0 && hasIntro;
+  const clock = clockAt(onIntro ? undefined : cur?.id);
 
   useEffect(() => {
     document.body.style.overflow = "hidden";
@@ -267,15 +274,13 @@ export function AskMode({
         setAt((n) => Math.min(flow.length - 1, n + 1));
       } else if (e.key === "ArrowLeft") {
         e.preventDefault();
-        setAt((n) => Math.max(0, n - 1));
-      } else if (e.key === "Enter" && cur) {
-        e.preventDefault();
-        onToggleAsked(cur);
+        if (here === 0 && hasIntro) setIntroOpen(true);
+        else setAt((n) => Math.max(0, n - 1));
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [mode, flow.length, cur, onToggleAsked, onClose]);
+  }, [mode, flow.length, here, hasIntro, onClose]);
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-canvas">
@@ -361,7 +366,7 @@ export function AskMode({
         {showMore && (
           <div className="mx-auto w-full max-w-3xl space-y-2 border-t border-border px-4 py-2.5 text-xs">
             <p className="text-muted">
-              <span className="font-semibold text-ink">{topic || title}</span> · {done} of {picked.length} asked
+              <span className="font-semibold text-ink">{topic || title}</span> · {main.length} questions
               {backups.length ? ` · ${backups.length} in reserve` : ""}
             </p>
             <div className="flex flex-wrap items-center gap-1.5">
@@ -404,11 +409,6 @@ export function AskMode({
                   {editingText ? "Done editing" : "Edit this question's text"}
                 </button>
               )}
-              {done > 0 && (
-                <button type="button" onClick={onResetTicks} className="rounded-lg border border-border px-2 py-0.5 text-muted hover:text-ink">
-                  Clear ticks
-                </button>
-              )}
             </div>
             {filters.length > 1 && (
               <div className="flex flex-wrap items-center gap-1.5">
@@ -437,7 +437,7 @@ export function AskMode({
         <div className="h-1 bg-border">
           <div
             className="h-full bg-[var(--accent)] transition-all duration-300"
-            style={{ width: `${picked.length ? (done / picked.length) * 100 : 0}%` }}
+            style={{ width: `${flow.length && !onIntro ? ((here + 1) / flow.length) * 100 : 0}%` }}
           />
         </div>
       </header>
@@ -447,7 +447,7 @@ export function AskMode({
           <p className="mx-auto max-w-3xl px-5 py-16 text-center text-sm text-muted">
             Nothing picked yet.
           </p>
-        ) : mode === "one" && introOpen && here === 0 && minutesOf && slotMin ? (
+        ) : onIntro ? (
           // Introductions are a step of their own, before question 1, so the
           // clock knows when the questions really started.
           <div className="mx-auto flex min-h-full w-full max-w-xl flex-col justify-center px-5 py-8 text-center">
@@ -473,7 +473,6 @@ export function AskMode({
             <p className={`text-xs text-muted ${align === "center" ? "text-center" : ""}`}>
               {cur.backup ? "In reserve" : `${here + 1} of ${main.length}`}
               {cur.askWho ? ` · ${asks(cur).join(", ")}` : cur.forWhom ? ` · ${cur.forWhom}` : ""}
-              {cur.asked ? " · Asked" : ""}
               {onPatch && !editingText && (
                 <>
                   {" · "}
@@ -486,7 +485,7 @@ export function AskMode({
 
             {/* The time check, on the question it is about, with the words. */}
             {(() => {
-              if (!clock || cur.asked || cur.backup || !minutesOf) return null;
+              if (!clock || cur.backup || !minutesOf) return null;
               const who = asks(cur);
               const name = who[0] || panel.find((n) => new RegExp(`\\b${n}\\b`, "i").test(cur.forWhom || "")) || "";
               const quick = quickOf?.(cur);
@@ -532,7 +531,7 @@ export function AskMode({
               const grow = { fieldSizing: "content" } as CSSProperties;
               const editing = editingText && onPatch;
               return (
-                <div className={`${align === "center" ? "text-center" : ""} ${cur.asked ? "opacity-40" : ""}`}>
+                <div className={align === "center" ? "text-center" : ""}>
                   {(setupShown || editing) && (
                     <div className="mt-4">
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Say first</p>
@@ -683,25 +682,17 @@ export function AskMode({
             )}
 
             <div className="mt-7 flex items-center gap-2">
+              {/* Back from question 1 is the introductions. It used to be
+                  greyed out there, with nowhere to go. */}
               <Button
                 variant="secondary"
-                disabled={here === 0}
-                onClick={() => setAt(here - 1)}
+                disabled={here === 0 && !hasIntro}
+                onClick={() => (here === 0 ? setIntroOpen(true) : setAt(here - 1))}
               >
                 <ArrowLeft size={16} /> Back
               </Button>
-              <Button
-                variant={cur.asked ? "secondary" : "primary"}
-                onClick={() => onToggleAsked(cur)}
-              >
-                <Check size={16} /> {cur.asked ? "Undo" : "Asked it"}
-              </Button>
               <span className="flex-1" />
-              <Button
-                variant="secondary"
-                disabled={here === flow.length - 1}
-                onClick={() => setAt(here + 1)}
-              >
+              <Button disabled={here === flow.length - 1} onClick={() => setAt(here + 1)}>
                 Next <ArrowRight size={16} />
               </Button>
             </div>
@@ -715,18 +706,14 @@ export function AskMode({
                   aria-label={`Go to question ${i + 1}`}
                   onClick={() => setAt(i)}
                   className={`h-1.5 w-7 rounded-full transition ${
-                    i === here
-                      ? "bg-[var(--accent)]"
-                      : q.asked
-                        ? "bg-emerald-400"
-                        : "bg-border hover:bg-muted/50"
+                    i === here ? "bg-[var(--accent)]" : i < here ? "bg-[var(--accent)]/40" : "bg-border hover:bg-muted/50"
                   }`}
                 />
               ))}
             </div>
 
             <p className="mt-4 hidden text-[11px] text-muted sm:block">
-              Arrow keys or space to move, Enter to tick it off, Esc to close.
+              Arrow keys or space to move, Esc to close.
             </p>
             <div className="mt-5 sm:hidden">
               <Button size="sm" variant="secondary" onClick={() => setMode("all")}>
@@ -746,7 +733,6 @@ export function AskMode({
                     setAt(flow.indexOf(q));
                     setMode("one");
                   }}
-                  onToggle={() => onToggleAsked(q)}
                 />
               ))}
             </ol>
@@ -764,7 +750,6 @@ export function AskMode({
                         setAt(flow.indexOf(q));
                         setMode("one");
                       }}
-                      onToggle={() => onToggleAsked(q)}
                     />
                   ))}
                 </ol>
@@ -777,46 +762,31 @@ export function AskMode({
   );
 }
 
-// One question in the list view. The tick is its own target so that tapping
-// the question opens it big rather than silently marking it asked.
+// One question in the list view; tapping it opens it big.
 function AskRow({
   q,
   n,
   onOpen,
-  onToggle,
 }: {
   q: QuestionItem;
   n?: number;
   onOpen: () => void;
-  onToggle: () => void;
 }) {
   return (
-    <li
-      className={`flex items-start gap-3 rounded-xl border p-3 transition ${
-        q.asked ? "border-border bg-canvas/60" : "border-border bg-surface"
-      }`}
-    >
+    <li className="flex items-start gap-3 rounded-xl border border-border bg-surface p-3 transition">
       <button
         type="button"
-        onClick={onToggle}
-        aria-label={q.asked ? "Not asked yet" : "Mark as asked"}
-        className={`mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg text-xs font-semibold transition ${
-          q.asked
-            ? "bg-emerald-100 text-emerald-700"
-            : "bg-[var(--accent-soft)] text-[var(--accent)] hover:brightness-95"
-        }`}
+        onClick={onOpen}
+        aria-label="Open this question"
+        className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[var(--accent-soft)] text-xs font-semibold text-[var(--accent)] transition hover:brightness-95"
       >
-        {q.asked ? <Check size={15} /> : (n ?? <Star size={13} className="fill-current" />)}
+        {n ?? <Star size={13} className="fill-current" />}
       </button>
       <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
-        {stripAskedQuestion(q.setup, q.text) && !q.asked && (
+        {stripAskedQuestion(q.setup, q.text) && (
           <span className="mb-0.5 block text-sm leading-snug text-muted">{stripAskedQuestion(q.setup, q.text)}</span>
         )}
-        <span
-          className={`block text-base leading-snug sm:text-lg ${
-            q.asked ? "text-muted line-through" : "font-medium text-ink"
-          }`}
-        >
+        <span className="block text-base leading-snug text-ink sm:text-lg">
           {q.text}
         </span>
         {(q.askWho || q.forWhom) && (
