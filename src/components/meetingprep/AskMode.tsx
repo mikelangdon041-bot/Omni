@@ -518,7 +518,7 @@ export function AskMode({
                   {stripAskedQuestion(cur.setup, cur.text) && (
                     <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">Then ask</p>
                   )}
-                  <div className={`mt-1.5 max-w-2xl space-y-3 text-xl font-medium leading-relaxed text-ink sm:text-2xl ${align === "center" ? "mx-auto" : ""}`}>
+                  <div className={`mt-1.5 max-w-2xl space-y-3 text-xl leading-relaxed text-ink sm:text-2xl ${align === "center" ? "mx-auto" : ""}`}>
                     {paragraphs(cur.text, false).map((para, i) => (
                       <p key={i} className={align === "center" ? "text-balance" : ""}>
                         {para.map((line, j) => (
