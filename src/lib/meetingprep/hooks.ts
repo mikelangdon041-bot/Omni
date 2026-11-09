@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { dropCached, getCached, setCached } from "@/lib/cache";
 import type { FolderKind, MpFolder, MpMeeting, MpSettings } from "./types";
+import { mergeEdits } from "./mergeEdits";
 import {
   forgetSpelling,
   loadSpellings,
@@ -149,6 +150,9 @@ export function useMpMeeting(id: string, userId: string | null) {
   // Once it's gone, neither the unmount flush nor the cache write may bring
   // it back. Declared up here because both of those are below.
   const deletedRef = useRef(false);
+  // The copy of the row this tab's edits are made against, to tell when
+  // something else has saved since.
+  const baseRef = useRef<MpMeeting | null>(null);
 
   useEffect(() => {
     // Instant paint from cache (warmed by the meetings list, or by a
@@ -170,6 +174,7 @@ export function useMpMeeting(id: string, userId: string | null) {
       .then(({ data }) => {
         if (!active) return;
         const row = (data as MpMeeting) || null;
+        baseRef.current = row;
         setMeeting(row);
         setLoading(false);
         if (row && cacheKey) setCached(cacheKey, { _t: Date.now(), row });
@@ -203,7 +208,30 @@ export function useMpMeeting(id: string, userId: string | null) {
     if (deletedRef.current) return;
     if (Object.keys(p).length) {
       setSaveState("saving");
-      await supabase.from("mp_meetings").update(p).eq("id", id);
+      const base = baseRef.current;
+      let wrote = false;
+      // Only over the copy it was made against. If something else saved in
+      // between, nothing is written and the two are merged below.
+      if (base?.updated_at) {
+        const { data } = await supabase.from("mp_meetings").update(p).eq("id", id).eq("updated_at", base.updated_at).select("*");
+        if (data && data.length) {
+          baseRef.current = data[0] as MpMeeting;
+          wrote = true;
+        }
+      }
+      if (!wrote) {
+        const { data: now } = await supabase.from("mp_meetings").select("*").eq("id", id).maybeSingle();
+        const server = (now as MpMeeting) || null;
+        const send = server && base ? mergeEdits(p, base, server) : p;
+        const { data } = await supabase.from("mp_meetings").update(send).eq("id", id).select("*");
+        const row = (data?.[0] as MpMeeting) || null;
+        if (row) {
+          baseRef.current = row;
+          // What is on screen becomes the merged copy, with anything typed
+          // since this save started still on top.
+          if (server && base) setMeeting((prev) => (prev ? { ...prev, ...row, ...pendingRef.current } : prev));
+        }
+      }
       setSaveState("saved");
     }
   }, [id]);
@@ -229,6 +257,7 @@ export function useMpMeeting(id: string, userId: string | null) {
     sinceReadRef.current = null;
     const fetched = (data as MpMeeting) || null;
     if (!fetched) return;
+    baseRef.current = fetched;
     // What they changed while it was on its way wins over the older copy.
     const row = { ...fetched, ...edited };
     setMeeting(row);

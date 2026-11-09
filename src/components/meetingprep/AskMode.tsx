@@ -5,8 +5,8 @@
 // no generating, no lists of twenty. One question at a size you can read from
 // arm's length, and a way to get to the next one.
 
-import { useEffect, useState } from "react";
-import { ArrowLeft, ArrowRight, Check, ListChecks, Star, Timer, X } from "lucide-react";
+import { useEffect, useState, type CSSProperties } from "react";
+import { ArrowLeft, ArrowRight, Check, ListChecks, Pause, Play, RotateCcw, Star, Timer, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { stripAskedQuestion, type QuestionItem, type QuestionOption } from "@/lib/meetingprep/types";
 
@@ -99,11 +99,22 @@ export function AskMode({
     }
   });
   const [now, setNow] = useState(() => Date.now());
+  // Paused, like a presenter's timer: when it was paused, kept through
+  // closing Ask mode or the pane.
+  const pauseStore = `${clockStore}:paused`;
+  const [pausedAt, setPausedAt] = useState<number | null>(() => {
+    try {
+      const v = Number(localStorage.getItem(pauseStore));
+      return v > 0 && startedAt ? v : null;
+    } catch {
+      return null;
+    }
+  });
   useEffect(() => {
-    if (!startedAt) return;
+    if (!startedAt || pausedAt) return;
     const t = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(t);
-  }, [startedAt]);
+  }, [startedAt, pausedAt]);
   // When the introductions finished, so the clock stops holding time for
   // them and the questions are timed from where they really started.
   const introStore = `${clockStore}:intros`;
@@ -120,13 +131,41 @@ export function AskMode({
     const v = on ? (from ?? clockNow()) : null;
     setStartedAt(v);
     setNow(clockNow());
+    setPausedAt(null);
     if (!on) setIntrosAt(null);
     try {
+      localStorage.removeItem(pauseStore);
       if (v) localStorage.setItem(clockStore, String(v));
       else {
         localStorage.removeItem(clockStore);
         localStorage.removeItem(introStore);
       }
+    } catch {}
+  };
+  const pauseClock = () => {
+    const t = clockNow();
+    setPausedAt(t);
+    setNow(t);
+    try {
+      localStorage.setItem(pauseStore, String(t));
+    } catch {}
+  };
+  // Resuming moves the start on by however long it sat paused, so the time
+  // carries on from where it stopped.
+  const resumeClock = () => {
+    if (!startedAt || !pausedAt) return;
+    const t = clockNow();
+    const shift = t - pausedAt;
+    const s2 = startedAt + shift;
+    const i2 = introsAt ? introsAt + shift : null;
+    setStartedAt(s2);
+    if (i2) setIntrosAt(i2);
+    setPausedAt(null);
+    setNow(t);
+    try {
+      localStorage.setItem(clockStore, String(s2));
+      if (i2) localStorage.setItem(introStore, String(i2));
+      localStorage.removeItem(pauseStore);
     } catch {}
   };
   const introsDone = () => {
@@ -149,7 +188,7 @@ export function AskMode({
   // after every main question you have not ticked yet is what is spare.
   const clock = (() => {
     if (!minutesOf || !slotMin || !startedAt) return null;
-    const gone = Math.max(0, (now - startedAt) / 60000);
+    const gone = Math.max(0, ((pausedAt ?? now) - startedAt) / 60000);
     const toCome = all.filter((q) => !q.backup && !q.asked).reduce((n, q) => n + minutesOf(q), 0) + (introsAt ? 0 : Math.max(0, leadMin - gone));
     const left = slotMin - endMin - gone;
     const spare = left - toCome;
@@ -247,11 +286,39 @@ export function AskMode({
           {minutesOf && slotMin ? (
             !clock ? (
               <Button size="sm" variant="secondary" onClick={() => startClock(true)}>
-                <Timer size={13} /> Start the clock
+                <Play size={13} /> Start the clock
               </Button>
             ) : (
               <>
-                <span className="font-mono text-base font-semibold tabular-nums text-ink">{mmss(clock.gone)}</span>
+                <span className={`font-mono text-base font-semibold tabular-nums ${pausedAt ? "text-muted" : "text-ink"}`}>{mmss(clock.gone)}</span>
+                {pausedAt ? (
+                  <button
+                    type="button"
+                    onClick={resumeClock}
+                    aria-label="Resume the clock"
+                    className="inline-flex items-center gap-1 rounded-lg bg-[var(--accent)] px-2 py-1 font-medium text-[var(--accent-fg)]"
+                  >
+                    <Play size={12} /> Resume
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={pauseClock}
+                    aria-label="Pause the clock"
+                    className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 font-medium text-ink hover:bg-canvas"
+                  >
+                    <Pause size={12} /> Pause
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => startClock(false)}
+                  aria-label="Reset the clock to zero"
+                  title="Back to 0:00, stopped"
+                  className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-muted hover:text-ink"
+                >
+                  <RotateCcw size={12} /> Reset
+                </button>
                 <span
                   className={`rounded-full px-2 py-0.5 font-semibold ${
                     clock.spare >= 1 ? "bg-emerald-50 text-emerald-800" : clock.spare <= -1 ? "bg-amber-100 text-amber-900" : "bg-canvas text-ink/80"
@@ -342,11 +409,6 @@ export function AskMode({
                   Clear ticks
                 </button>
               )}
-              {clock && (
-                <button type="button" onClick={() => startClock(false)} className="rounded-lg border border-border px-2 py-0.5 text-muted hover:text-ink">
-                  Reset clock
-                </button>
-              )}
             </div>
             {filters.length > 1 && (
               <div className="flex flex-wrap items-center gap-1.5">
@@ -412,6 +474,14 @@ export function AskMode({
               {cur.backup ? "In reserve" : `${here + 1} of ${main.length}`}
               {cur.askWho ? ` · ${asks(cur).join(", ")}` : cur.forWhom ? ` · ${cur.forWhom}` : ""}
               {cur.asked ? " · Asked" : ""}
+              {onPatch && !editingText && (
+                <>
+                  {" · "}
+                  <button type="button" onClick={() => setEditingText(true)} className="font-medium text-[var(--accent)] hover:underline">
+                    Edit the text
+                  </button>
+                </>
+              )}
             </p>
 
             {/* The time check, on the question it is about, with the words. */}
@@ -449,79 +519,94 @@ export function AskMode({
               return null;
             })()}
 
-            {/* Laid out the way they say it. Their own line breaks win: Edit
-                text, Enter where the line should break. Without any, a
-                sentence a line. Setup and question the same size, since both
-                are said; the question only darker and heavier. */}
-            {/* Editing keeps Ask mode's own layout in view underneath, live,
-                so a break is judged on how it reads, not in a plain box. */}
-            {editingText && onPatch && (
-              <div className="mt-3 space-y-2 rounded-xl border border-[var(--accent)]/40 bg-surface p-3">
-                <div className="flex items-center gap-2">
-                  <p className="text-xs text-muted">Press Enter wherever you want a new line; a blank line starts a new paragraph. It shows below as you type.</p>
-                  <button
-                    type="button"
-                    onClick={() => setEditingText(false)}
-                    className="ml-auto shrink-0 rounded-lg border border-border px-2 py-0.5 text-xs font-medium text-ink hover:bg-canvas"
-                  >
-                    Done
-                  </button>
-                </div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wide text-muted">
-                  Say first
-                  <textarea
-                    value={cur.setup || ""}
-                    onChange={(e) => onPatch(cur, { setup: e.target.value })}
-                    className="mt-1 block min-h-32 w-full rounded-lg border border-border bg-surface p-2.5 text-base font-normal normal-case tracking-normal text-ink"
-                  />
-                </label>
-                <label className="block text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">
-                  Then ask
-                  <textarea
-                    value={cur.text}
-                    onChange={(e) => onPatch(cur, { text: e.target.value })}
-                    className="mt-1 block min-h-24 w-full rounded-lg border border-border bg-surface p-2.5 text-base font-normal normal-case tracking-normal text-ink"
-                  />
-                </label>
-                <p className="pt-1 text-center text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">How it looks in Ask mode</p>
-              </div>
-            )}
-            {(
-              <div className={`${align === "center" ? "text-center" : ""} ${cur.asked ? "opacity-40" : ""}`}>
-                {stripAskedQuestion(cur.setup, cur.text) && (
-                  <div className="mt-4">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Say first</p>
-                    <div className={`mt-1.5 max-w-2xl space-y-3 text-xl leading-relaxed text-ink/75 sm:text-2xl ${align === "center" ? "mx-auto" : ""}`}>
-                      {paragraphs(stripAskedQuestion(cur.setup, cur.text)).map((para, i) => (
-                        <p key={i} className={align === "center" ? "text-balance" : ""}>
-                          {para.map((line, j) => (
-                            <span key={j} className="block">
-                              <Spoken text={line} />
-                            </span>
-                          ))}
-                        </p>
-                      ))}
+            {/* Laid out the way they say it, and edited in the same place at
+                the same size, so what they type is what they will see. Their
+                own breaks win; without any, the setup goes a sentence a
+                paragraph. Paragraphs are one blank line apart in both. */}
+            {(() => {
+              const setupShown = stripAskedQuestion(cur.setup, cur.text);
+              const setupEdit = /\n/.test(setupShown) ? setupShown : sentences(setupShown).join("\n\n");
+              const box = `block w-full max-w-2xl resize-none bg-transparent p-0 outline-2 outline-offset-4 outline-dashed outline-[var(--accent)]/50 rounded-sm focus:outline-[var(--accent)] ${
+                align === "center" ? "mx-auto text-center" : ""
+              }`;
+              const grow = { fieldSizing: "content" } as CSSProperties;
+              const editing = editingText && onPatch;
+              return (
+                <div className={`${align === "center" ? "text-center" : ""} ${cur.asked ? "opacity-40" : ""}`}>
+                  {(setupShown || editing) && (
+                    <div className="mt-4">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Say first</p>
+                      <div className={`mt-1.5 max-w-2xl text-xl leading-relaxed text-ink/75 sm:text-2xl ${align === "center" ? "mx-auto" : ""}`}>
+                        {editing ? (
+                          <textarea
+                            aria-label="Say first"
+                            value={setupEdit}
+                            placeholder="Setup, said first (optional)"
+                            onChange={(e) => onPatch!(cur, { setup: e.target.value })}
+                            style={grow}
+                            className={`${box} min-h-[3lh] text-ink/75`}
+                          />
+                        ) : (
+                          paragraphs(setupShown).map((para, i) => (
+                            <p key={i}>
+                              {i > 0 && (
+                                <span className="block" aria-hidden>
+                                  &nbsp;
+                                </span>
+                              )}
+                              {para.map((line, j) => (
+                                <span key={j} className="block">
+                                  <Spoken text={line} />
+                                </span>
+                              ))}
+                            </p>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  <div className="mt-6">
+                    {(setupShown || editing) && (
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">Then ask</p>
+                    )}
+                    <div className={`mt-1.5 max-w-2xl text-xl leading-relaxed text-ink sm:text-2xl ${align === "center" ? "mx-auto" : ""}`}>
+                      {editing ? (
+                        <textarea
+                          aria-label="Then ask"
+                          value={cur.text}
+                          onChange={(e) => onPatch!(cur, { text: e.target.value })}
+                          style={grow}
+                          className={`${box} min-h-[2lh] text-ink`}
+                        />
+                      ) : (
+                        paragraphs(cur.text, false).map((para, i) => (
+                          <p key={i}>
+                            {i > 0 && (
+                              <span className="block" aria-hidden>
+                                &nbsp;
+                              </span>
+                            )}
+                            {para.map((line, j) => (
+                              <span key={j} className="block">
+                                <Spoken text={line} names={i === 0 && j === 0 ? panel : []} />
+                              </span>
+                            ))}
+                          </p>
+                        ))
+                      )}
                     </div>
                   </div>
-                )}
-                <div className="mt-6">
-                  {stripAskedQuestion(cur.setup, cur.text) && (
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">Then ask</p>
+                  {editing && (
+                    <p className="mt-3 text-xs text-muted">
+                      Type straight into it. Enter for a new line, a blank line for a gap. Numbers go bold when you&apos;re done.{" "}
+                      <button type="button" onClick={() => setEditingText(false)} className="font-medium text-[var(--accent)] hover:underline">
+                        Done
+                      </button>
+                    </p>
                   )}
-                  <div className={`mt-1.5 max-w-2xl space-y-3 text-xl leading-relaxed text-ink sm:text-2xl ${align === "center" ? "mx-auto" : ""}`}>
-                    {paragraphs(cur.text, false).map((para, i) => (
-                      <p key={i} className={align === "center" ? "text-balance" : ""}>
-                        {para.map((line, j) => (
-                          <span key={j} className="block">
-                            <Spoken text={line} names={i === 0 && j === 0 ? panel : []} />
-                          </span>
-                        ))}
-                      </p>
-                    ))}
-                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             {cur.followUp && (
               <div className="mt-6 rounded-xl border border-border bg-surface p-4">
