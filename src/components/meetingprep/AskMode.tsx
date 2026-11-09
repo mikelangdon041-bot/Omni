@@ -183,6 +183,8 @@ export function AskMode({
   const done = picked.filter((q) => q.asked).length;
 
   const [mode, setMode] = useState<"one" | "all">("one");
+  // The controls nobody needs mid-panel, folded under More.
+  const [showMore, setShowMore] = useState(false);
   const [at, setAt] = useState(0);
   const [editingText, setEditingText] = useState(false);
   // Left or centred, theirs to choose, kept between visits.
@@ -238,124 +240,138 @@ export function AskMode({
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-canvas">
+      {/* One line: the clock and where you stand. Everything else is
+          under More: it was five rows of controls above the question. */}
       <header className="shrink-0 border-b border-border bg-surface">
-        <div className="mx-auto flex w-full max-w-3xl items-center gap-3 px-4 py-3">
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold leading-tight text-ink">
-              {topic || title}
-            </p>
-            <p className="mt-0.5 text-xs text-muted">
-              {done} of {picked.length} asked
-              {backups.length ? ` · ${backups.length} in reserve` : ""}
-            </p>
-          </div>
-          <div className="hidden shrink-0 rounded-lg border border-border bg-canvas p-0.5 sm:flex">
-            {(
-              [
-                ["one", "One at a time"],
-                ["all", "All of them"],
-              ] as const
-            ).map(([k, lbl]) => (
-              <button
-                key={k}
-                type="button"
-                onClick={() => setMode(k)}
-                className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                  mode === k ? "bg-surface text-ink shadow-sm" : "text-muted hover:text-ink"
-                }`}
-              >
-                {lbl}
-              </button>
-            ))}
-          </div>
-          {done > 0 && (
-            <Button size="sm" variant="ghost" className="shrink-0" onClick={onResetTicks}>
-              Clear ticks
-            </Button>
+        <div className="mx-auto flex w-full max-w-3xl items-center gap-2.5 px-4 py-2 text-xs">
+          {minutesOf && slotMin ? (
+            !clock ? (
+              <Button size="sm" variant="secondary" onClick={() => startClock(true)}>
+                <Timer size={13} /> Start the clock
+              </Button>
+            ) : (
+              <>
+                <span className="font-mono text-base font-semibold tabular-nums text-ink">{mmss(clock.gone)}</span>
+                <span
+                  className={`rounded-full px-2 py-0.5 font-semibold ${
+                    clock.spare >= 1 ? "bg-emerald-50 text-emerald-800" : clock.spare <= -1 ? "bg-amber-100 text-amber-900" : "bg-canvas text-ink/80"
+                  }`}
+                  title="Time left after every question in your running order you haven't ticked yet. Tick each one as you finish it."
+                >
+                  {clock.spare >= 1
+                    ? `${Math.round(clock.spare)} min spare`
+                    : clock.spare <= -1
+                      ? `${Math.round(-clock.spare)} min over`
+                      : "On time"}
+                </span>
+                {clock.reserve && (
+                  <button type="button" onClick={() => goTo(clock.reserve!)} className="font-medium text-[var(--accent)] hover:underline">
+                    A reserve fits: go to it
+                  </button>
+                )}
+              </>
+            )
+          ) : (
+            <span className="truncate font-semibold text-ink">{topic || title}</span>
           )}
+          <button
+            type="button"
+            onClick={() => setShowMore((v) => !v)}
+            aria-expanded={showMore}
+            className="ml-auto shrink-0 rounded-lg border border-border px-2 py-1 font-medium text-muted hover:text-ink"
+          >
+            {showMore ? "Less" : "More"}
+          </button>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close ask mode"
             className="shrink-0 rounded-lg p-1.5 text-muted transition hover:bg-canvas hover:text-ink"
           >
-            <X size={20} />
+            <X size={18} />
           </button>
         </div>
-        {filters.length > 1 && (
-          <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-1.5 px-4 pb-2.5 text-xs">
-            <span className="mr-0.5 font-semibold text-muted">Show</span>
-            {filters.map((f) => (
-              <button
-                key={f.key}
-                type="button"
-                onClick={() => {
-                  setShow(f.key);
-                  setAt(0);
-                }}
-                className={`rounded-full border px-2 py-0.5 font-medium transition ${
-                  show === f.key
-                    ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-fg)]"
-                    : "border-border bg-surface text-ink/80 hover:border-[var(--accent)]"
-                }`}
-              >
-                {f.label} <span className="tabular-nums opacity-70">{f.n}</span>
-              </button>
-            ))}
-          </div>
-        )}
-        {/* Ahead or behind, and whether a reserve question fits. One number,
-            spare time, after everything still to come in the running order. */}
-        {minutesOf && slotMin ? (
-          <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-x-3 gap-y-1 px-4 pb-2.5 text-xs">
-            {!clock ? (
-              <>
-                <Button size="sm" variant="secondary" onClick={() => startClock(true)}>
-                  <Timer size={13} /> Start the clock
-                </Button>
-                <span className="text-muted">Start it when the panel starts, to see if you&apos;re ahead and when a reserve question fits.</span>
-              </>
-            ) : (
-              <>
-                <span className="font-mono text-sm font-semibold tabular-nums text-ink">{mmss(clock.gone)}</span>
-                <span className="text-muted">{clock.left > 0 ? `${Math.round(clock.left)} min left` : "Time's up"}</span>
-                <span
-                  className={`rounded-full px-2 py-0.5 font-semibold ${
-                    clock.spare >= 1 ? "bg-emerald-50 text-emerald-800" : clock.spare <= -1 ? "bg-amber-100 text-amber-900" : "bg-canvas text-ink/80"
-                  }`}
-                  title="Time left, after every question in your running order you haven't ticked yet. Tick each one as you finish it."
-                >
-                  {clock.spare >= 1
-                    ? `About ${Math.round(clock.spare)} min spare`
-                    : clock.spare <= -1
-                      ? clock.quick
-                        ? `About ${Math.round(-clock.spare)} min over: ask for a minute each on ${
-                            clock.quick.both ? "the questions to everyone" : `“${clock.quick.q.text.split(/\s+/).slice(0, 6).join(" ")}…”`
-                          }, which saves about ${Math.round(clock.quick.saves)} min${clock.quick.saves + clock.spare < -0.5 ? ", and skip one that isn't a must-ask" : ""}`
-                        : `About ${Math.round(-clock.spare)} min over: skip one that isn't a must-ask`
-                      : "On time"}
-                </span>
-                {clock.reserve && (
-                  <button type="button" onClick={() => goTo(clock.reserve!)} className="font-medium text-[var(--accent)] hover:underline">
-                    Room for a reserve question: go to it
+        {showMore && (
+          <div className="mx-auto w-full max-w-3xl space-y-2 border-t border-border px-4 py-2.5 text-xs">
+            <p className="text-muted">
+              <span className="font-semibold text-ink">{topic || title}</span> · {done} of {picked.length} asked
+              {backups.length ? ` · ${backups.length} in reserve` : ""}
+            </p>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <div className="inline-flex rounded-lg border border-border bg-canvas p-0.5">
+                {(
+                  [
+                    ["one", "One at a time"],
+                    ["all", "All of them"],
+                  ] as const
+                ).map(([k, lbl]) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => setMode(k)}
+                    className={`rounded-md px-2 py-0.5 font-medium ${mode === k ? "bg-surface text-ink shadow-sm" : "text-muted hover:text-ink"}`}
+                  >
+                    {lbl}
                   </button>
-                )}
-                {/* Time in hand before a whole new question: the probe, or a
-                    second voice on this one. */}
-                {clock.spare >= 1.5 && (
-                  <span className="text-muted">
-                    {clock.spare >= 3 ? "Ahead: use the probe, then a reserve question if there's still time." : "A little ahead: room for the probe."}
-                  </span>
-                )}
-                <button type="button" onClick={() => startClock(false)} className="ml-auto text-muted hover:text-ink hover:underline">
+                ))}
+              </div>
+              <div className="inline-flex rounded-lg border border-border bg-canvas p-0.5">
+                {(["left", "center"] as const).map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    aria-pressed={align === k}
+                    onClick={() => setAlignTo(k)}
+                    className={`rounded-md px-2 py-0.5 ${align === k ? "bg-surface font-medium text-ink shadow-sm" : "text-muted hover:text-ink"}`}
+                  >
+                    {k === "left" ? "Left" : "Centre"}
+                  </button>
+                ))}
+              </div>
+              {onPatch && mode === "one" && (
+                <button
+                  type="button"
+                  onClick={() => setEditingText((v) => !v)}
+                  className="rounded-lg border border-border px-2 py-0.5 text-muted hover:text-ink"
+                >
+                  {editingText ? "Done editing" : "Edit this question's text"}
+                </button>
+              )}
+              {done > 0 && (
+                <button type="button" onClick={onResetTicks} className="rounded-lg border border-border px-2 py-0.5 text-muted hover:text-ink">
+                  Clear ticks
+                </button>
+              )}
+              {clock && (
+                <button type="button" onClick={() => startClock(false)} className="rounded-lg border border-border px-2 py-0.5 text-muted hover:text-ink">
                   Reset clock
                 </button>
-              </>
+              )}
+            </div>
+            {filters.length > 1 && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="mr-0.5 font-semibold text-muted">Show</span>
+                {filters.map((f) => (
+                  <button
+                    key={f.key}
+                    type="button"
+                    onClick={() => {
+                      setShow(f.key);
+                      setAt(0);
+                    }}
+                    className={`rounded-full border px-2 py-0.5 font-medium transition ${
+                      show === f.key
+                        ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-fg)]"
+                        : "border-border bg-surface text-ink/80 hover:border-[var(--accent)]"
+                    }`}
+                  >
+                    {f.label} <span className="tabular-nums opacity-70">{f.n}</span>
+                  </button>
+                ))}
+              </div>
             )}
           </div>
-        ) : null}
-        {/* How far through you are, which is the one number that matters
-            when you are watching the clock. */}
+        )}
         <div className="h-1 bg-border">
           <div
             className="h-full bg-[var(--accent)] transition-all duration-300"
@@ -392,26 +408,11 @@ export function AskMode({
           </div>
         ) : mode === "one" ? (
           <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center px-5 py-8">
-            <div className="flex flex-wrap items-center justify-center gap-2 text-xs">
-              <span className="rounded-full bg-[var(--accent-soft)] px-2.5 py-1 font-semibold text-[var(--accent)]">
-                {cur.backup ? "In reserve" : `${here + 1} of ${main.length}`}
-              </span>
-              {(cur.askWho || cur.forWhom) && (
-                <span className="rounded-full border border-border px-2.5 py-1 text-muted">
-                  {cur.askWho ? `Ask ${asks(cur).join(", ")}` : `For ${cur.forWhom}`}
-                </span>
-              )}
-              {cur.mustAsk && (
-                <span className="flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 font-semibold text-amber-800">
-                  <Star size={12} className="fill-current" /> Must ask
-                </span>
-              )}
-              {cur.asked && (
-                <span className="flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 font-semibold text-emerald-700">
-                  <Check size={12} /> Asked
-                </span>
-              )}
-            </div>
+            <p className={`text-xs text-muted ${align === "center" ? "text-center" : ""}`}>
+              {cur.backup ? "In reserve" : `${here + 1} of ${main.length}`}
+              {cur.askWho ? ` · ${asks(cur).join(", ")}` : cur.forWhom ? ` · ${cur.forWhom}` : ""}
+              {cur.asked ? " · Asked" : ""}
+            </p>
 
             {/* The time check, on the question it is about, with the words. */}
             {(() => {
@@ -419,7 +420,7 @@ export function AskMode({
               const who = asks(cur);
               const name = who[0] || panel.find((n) => new RegExp(`\\b${n}\\b`, "i").test(cur.forWhom || "")) || "";
               const quick = quickOf?.(cur);
-              if (clock.spare <= -0.5) {
+              if (clock.spare <= -1) {
                 const over = Math.max(1, Math.round(-clock.spare));
                 return (
                   <div className="mx-auto mt-4 w-full max-w-2xl rounded-xl bg-amber-50 px-4 py-3 text-center text-amber-950">
@@ -452,30 +453,6 @@ export function AskMode({
                 text, Enter where the line should break. Without any, a
                 sentence a line. Setup and question the same size, since both
                 are said; the question only darker and heavier. */}
-            <div className={`mt-5 flex flex-wrap items-center gap-2 text-xs ${align === "center" ? "justify-center" : ""}`}>
-              <div className="inline-flex rounded-lg border border-border bg-canvas p-0.5">
-                {(["left", "center"] as const).map((k) => (
-                  <button
-                    key={k}
-                    type="button"
-                    aria-pressed={align === k}
-                    onClick={() => setAlignTo(k)}
-                    className={`rounded-md px-2 py-0.5 ${align === k ? "bg-surface font-medium text-ink shadow-sm" : "text-muted hover:text-ink"}`}
-                  >
-                    {k === "left" ? "Left" : "Centre"}
-                  </button>
-                ))}
-              </div>
-              {onPatch && (
-                <button
-                  type="button"
-                  onClick={() => setEditingText((v) => !v)}
-                  className="rounded-lg border border-border px-2 py-0.5 text-muted hover:text-ink"
-                >
-                  {editingText ? "Done" : "Edit text"}
-                </button>
-              )}
-            </div>
             {editingText && onPatch ? (
               <div className="mt-3 space-y-2">
                 <p className="text-xs text-muted">Press Enter wherever you want a new line. A blank line starts a new paragraph.</p>
@@ -533,29 +510,6 @@ export function AskMode({
               </div>
             )}
 
-            {(cur.options || []).some((o) => o.keep) && (
-              <div className="mt-6 rounded-xl border border-border bg-surface p-4">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Or ask</p>
-                {(cur.options || [])
-                  .filter((o) => o.keep && o.text.trim())
-                  .map((o, i) => (
-                    <div key={i} className="mt-1.5">
-                      {o.setup && <p className="text-sm leading-relaxed text-muted">{o.setup}</p>}
-                      <p className="text-base leading-snug text-ink/75 sm:text-lg">{o.text}</p>
-                      {onUseKept && (
-                        <button
-                          type="button"
-                          onClick={() => onUseKept(cur, o)}
-                          className="mt-0.5 text-xs font-medium text-[var(--accent)] hover:underline"
-                        >
-                          Use this one instead
-                        </button>
-                      )}
-                    </div>
-                  ))}
-              </div>
-            )}
-
             {cur.followUp && (
               <div className="mt-6 rounded-xl border border-border bg-surface p-4">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
@@ -600,6 +554,30 @@ export function AskMode({
                   )}
                 </dl>
               </div>
+            )}
+
+            {/* A backup if this one falls flat: there, but folded. */}
+            {(cur.options || []).some((o) => o.keep && o.text.trim()) && (
+              <details className="mt-4 text-sm">
+                <summary className="cursor-pointer text-xs font-medium text-muted hover:text-ink">Or ask, if this one falls flat</summary>
+                {(cur.options || [])
+                  .filter((o) => o.keep && o.text.trim())
+                  .map((o, i) => (
+                    <div key={i} className="mt-2 rounded-lg border border-border bg-surface p-3">
+                      {o.setup && <p className="text-sm leading-relaxed text-muted">{o.setup}</p>}
+                      <p className="text-base leading-snug text-ink/80">{o.text}</p>
+                      {onUseKept && (
+                        <button
+                          type="button"
+                          onClick={() => onUseKept(cur, o)}
+                          className="mt-1 text-xs font-medium text-[var(--accent)] hover:underline"
+                        >
+                          Use this one instead
+                        </button>
+                      )}
+                    </div>
+                  ))}
+              </details>
             )}
 
             {cur.sourceNote && (
