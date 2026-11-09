@@ -5,7 +5,7 @@
 // no generating, no lists of twenty. One question at a size you can read from
 // arm's length, and a way to get to the next one.
 
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ArrowLeft, ArrowRight, ListChecks, Pause, Play, RotateCcw, Star, Timer, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { stripAskedQuestion, type QuestionItem, type QuestionOption } from "@/lib/meetingprep/types";
@@ -230,6 +230,8 @@ export function AskMode({
   const [showMore, setShowMore] = useState(false);
   const [at, setAt] = useState(0);
   const [editingText, setEditingText] = useState(false);
+  // The box last typed in, for the B and I buttons.
+  const lastBox = useRef<HTMLTextAreaElement | null>(null);
   // Left or centred, theirs to choose, kept between visits.
   const [align, setAlign] = useState<"left" | "center">(() => {
     try {
@@ -532,6 +534,32 @@ export function AskMode({
               }`;
               const grow = { fieldSizing: "content" } as CSSProperties;
               const editing = editingText && onPatch;
+              // Bold or italic on the selected words: the marks go round
+              // them, or come off if they are already there.
+              const mark = (el: HTMLTextAreaElement | null, m: string) => {
+                if (!el || !onPatch) return;
+                const { selectionStart: a, selectionEnd: b, value } = el;
+                if (a === b) return;
+                const on = value.slice(a - m.length, a) === m && value.slice(b, b + m.length) === m;
+                const next = on
+                  ? value.slice(0, a - m.length) + value.slice(a, b) + value.slice(b + m.length)
+                  : value.slice(0, a) + m + value.slice(a, b) + m + value.slice(b);
+                onPatch(cur, el.getAttribute("aria-label") === "Say first" ? { setup: next } : { text: next });
+                const from = on ? a - m.length : a + m.length;
+                const to = on ? b - m.length : b + m.length;
+                requestAnimationFrame(() => {
+                  el.focus();
+                  el.setSelectionRange(from, to);
+                });
+              };
+              const keys = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+                if (!(e.ctrlKey || e.metaKey)) return;
+                const k = e.key.toLowerCase();
+                if (k === "b" || k === "i") {
+                  e.preventDefault();
+                  mark(e.currentTarget, k === "b" ? "**" : "*");
+                }
+              };
               return (
                 <div className={align === "center" ? "text-center" : ""}>
                   {(setupShown || editing) && (
@@ -544,6 +572,8 @@ export function AskMode({
                             value={setupEdit}
                             placeholder="Setup, said first (optional)"
                             onChange={(e) => onPatch!(cur, { setup: e.target.value })}
+                            onKeyDown={keys}
+                            onFocus={(e) => (lastBox.current = e.currentTarget)}
                             style={grow}
                             className={`${box} min-h-[3lh] text-ink/75`}
                           />
@@ -576,6 +606,8 @@ export function AskMode({
                           aria-label="Then ask"
                           value={cur.text}
                           onChange={(e) => onPatch!(cur, { text: e.target.value })}
+                          onKeyDown={keys}
+                          onFocus={(e) => (lastBox.current = e.currentTarget)}
                           style={grow}
                           className={`${box} min-h-[2lh] text-ink`}
                         />
@@ -598,8 +630,32 @@ export function AskMode({
                     </div>
                   </div>
                   {editing && (
-                    <p className="mt-3 text-xs text-muted">
-                      Type straight into it. Enter for a new line, a blank line for a gap. Numbers go bold when you&apos;re done.{" "}
+                    <div className="mt-3 flex flex-wrap items-center justify-center gap-1.5">
+                      {(
+                        [
+                          ["**", "B", "font-bold", "Bold (Ctrl+B)"],
+                          ["*", "I", "italic", "Italic (Ctrl+I)"],
+                        ] as const
+                      ).map(([m, label, cls, title]) => (
+                        <button
+                          key={m}
+                          type="button"
+                          title={title}
+                          aria-label={title}
+                          // Keep the words selected: a click would take the focus first.
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => mark(lastBox.current, m)}
+                          className={`h-7 w-7 rounded-md border border-border bg-surface text-sm text-ink hover:bg-canvas ${cls}`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                      <span className="text-xs text-muted">Select words, then B or I.</span>
+                    </div>
+                  )}
+                  {editing && (
+                    <p className="mt-2 text-xs text-muted">
+                      Type straight into it. Enter for a new line, a blank line for a gap. Bold, italics and numbers show when you&apos;re done.{" "}
                       <button type="button" onClick={() => setEditingText(false)} className="font-medium text-[var(--accent)] hover:underline">
                         Done
                       </button>
@@ -845,22 +901,36 @@ function sentences(t: string): string[] {
  */
 function Spoken({ text, names = [], lines = false }: { text: string; names?: string[]; lines?: boolean }) {
   const lead = names.find((n) => n && new RegExp(`^${n.replace(/[^A-Za-z]/g, "")}\\b`, "i").test(text));
+  // Numbers bold, kept with their unit.
+  const numbers = (t: string, k: string) =>
+    t.split(/(\b\d[\d,.]*(?:\s?(?:percent|%|x|times|billion|million))?)/i).map((p, i) =>
+      i % 2 ? (
+        <strong key={`${k}n${i}`} className="whitespace-nowrap font-semibold text-ink">
+          {p}
+        </strong>
+      ) : (
+        <span key={`${k}n${i}`}>{p}</span>
+      ),
+    );
+  // Their own marks: **bold** and *italic*.
+  const styled = (t: string, k: string) =>
+    t.split(/(\*\*.+?\*\*|\*.+?\*)/).map((p, i) =>
+      /^\*\*.+\*\*$/.test(p) ? (
+        <strong key={`${k}s${i}`} className="font-semibold text-ink">
+          {p.slice(2, -2)}
+        </strong>
+      ) : /^\*.+\*$/.test(p) ? (
+        <em key={`${k}s${i}`}>{p.slice(1, -1)}</em>
+      ) : (
+        <span key={`${k}s${i}`}>{numbers(p, `${k}s${i}`)}</span>
+      ),
+    );
   const marked = (chunk: string, key: string, offset: number) => {
     const nameEnd = lead && offset === 0 ? lead.length : 0;
-    const body = chunk.slice(nameEnd);
-    const parts = body.split(/(\b\d[\d,.]*(?:\s?(?:percent|%|x|times|billion|million))?)/i);
     return (
       <span key={key}>
         {nameEnd > 0 && <span className="text-[var(--accent)]">{chunk.slice(0, nameEnd)}</span>}
-        {parts.map((p, i) =>
-          i % 2 ? (
-            <strong key={i} className="whitespace-nowrap font-semibold text-ink">
-              {p}
-            </strong>
-          ) : (
-            <span key={i}>{p}</span>
-          ),
-        )}
+        {styled(chunk.slice(nameEnd), key)}
       </span>
     );
   };

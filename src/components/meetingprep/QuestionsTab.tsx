@@ -77,8 +77,7 @@ import {
   type MpMeeting,
   type QuestionItem,
   type ReviewNote,
-  type SourceDraft,
-} from "@/lib/meetingprep/types";
+  type SourceDraft, unmark } from "@/lib/meetingprep/types";
 
 const newId = () => `q${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
 
@@ -1932,7 +1931,7 @@ export function QuestionsTab({
                                 title={compact ? (open ? "Fold it" : "Open it: setup, probe, who to ask, other ways") : undefined}
                                 className={`text-[15px] font-medium leading-snug text-ink ${compact ? "cursor-pointer" : ""}`}
                               >
-                                {q.text}
+                                {unmark(q.text)}
                               </p>
                               <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
                                 {open ? (
@@ -2203,7 +2202,7 @@ export function QuestionsTab({
                       ) : (
                         compact && !openRows.has(q.id) ? (
                           <button type="button" onClick={() => toggleRow(q.id)} className="block w-full text-left" title="Open it: setup, probe, other ways">
-                            <p className="text-sm text-ink">{q.text}</p>
+                            <p className="text-sm text-ink">{unmark(q.text)}</p>
                             <span className="mt-1 flex flex-wrap items-center gap-1.5 empty:hidden">
                               {q.forWhom && <ForChip who={q.forWhom} />}
                               {(q.options || []).some((o) => o.keep) && (
@@ -2331,7 +2330,7 @@ export function QuestionsTab({
           <ul className="mt-2 space-y-1.5">
             {binned.map((q) => (
               <li key={q.id} className="flex items-start gap-2 text-sm">
-                <span className="min-w-0 flex-1 text-muted">{q.text}</span>
+                <span className="min-w-0 flex-1 text-muted">{unmark(q.text)}</span>
                 <IconBtn label="Put it back" onClick={() => patch(q.id, { deleted: false })}>
                   <Undo2 size={13} />
                 </IconBtn>
@@ -2966,14 +2965,14 @@ function SpokenQuestion({
   return (
     <>
       {stripAskedQuestion(q.setup, q.text) && (
-        <p className="mb-1 text-sm leading-relaxed text-ink/70">{stripAskedQuestion(q.setup, q.text)}</p>
+        <p className="mb-1 text-sm leading-relaxed text-ink/70">{unmark(stripAskedQuestion(q.setup, q.text))}</p>
       )}
       <p
         onClick={onToggle}
         title={onToggle ? "Click to close" : undefined}
         className={`text-sm text-ink ${q.setup ? "font-medium" : ""} ${onToggle ? "cursor-pointer" : ""}`}
       >
-        {q.text}
+        {unmark(q.text)}
       </p>
       {/* Other ways to ask it under the same setup; picking one swaps it in. */}
       {onPatch && (
@@ -3302,7 +3301,7 @@ function ReworkModal({
               </div>
             )}
             <ReworkPartText label="Question" count={words(q.text)} strong>
-              {q.text}
+              {unmark(q.text)}
             </ReworkPartText>
             {/* Select any words above to keep them or lose them. */}
             {sel ? (

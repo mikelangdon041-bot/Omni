@@ -970,6 +970,16 @@ export function sameQuestion<T extends { text: string; deleted?: boolean }>(item
   return n ? items.find((q) => !q.deleted && normQuestion(q.text) === n) : undefined;
 }
 
+/**
+ * The words without the bold and italic marks typed for Ask mode
+ * (**bold**, *italic*), for everywhere else a question is shown.
+ */
+export function unmark(t: string | undefined): string {
+  return String(t || "")
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/\*(.+?)\*/g, "$1");
+}
+
 export function stripAskedQuestion(setup: string | undefined, text: string): string {
   let s = String(setup || "").trim();
   const q = String(text || "").trim();
