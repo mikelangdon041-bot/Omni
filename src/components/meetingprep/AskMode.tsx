@@ -453,9 +453,20 @@ export function AskMode({
                 text, Enter where the line should break. Without any, a
                 sentence a line. Setup and question the same size, since both
                 are said; the question only darker and heavier. */}
-            {editingText && onPatch ? (
-              <div className="mt-3 space-y-2">
-                <p className="text-xs text-muted">Press Enter wherever you want a new line. A blank line starts a new paragraph.</p>
+            {/* Editing keeps Ask mode's own layout in view underneath, live,
+                so a break is judged on how it reads, not in a plain box. */}
+            {editingText && onPatch && (
+              <div className="mt-3 space-y-2 rounded-xl border border-[var(--accent)]/40 bg-surface p-3">
+                <div className="flex items-center gap-2">
+                  <p className="text-xs text-muted">Press Enter wherever you want a new line; a blank line starts a new paragraph. It shows below as you type.</p>
+                  <button
+                    type="button"
+                    onClick={() => setEditingText(false)}
+                    className="ml-auto shrink-0 rounded-lg border border-border px-2 py-0.5 text-xs font-medium text-ink hover:bg-canvas"
+                  >
+                    Done
+                  </button>
+                </div>
                 <label className="block text-[11px] font-semibold uppercase tracking-wide text-muted">
                   Say first
                   <textarea
@@ -472,8 +483,10 @@ export function AskMode({
                     className="mt-1 block min-h-24 w-full rounded-lg border border-border bg-surface p-2.5 text-base font-normal normal-case tracking-normal text-ink"
                   />
                 </label>
+                <p className="pt-1 text-center text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">How it looks in Ask mode</p>
               </div>
-            ) : (
+            )}
+            {(
               <div className={`${align === "center" ? "text-center" : ""} ${cur.asked ? "opacity-40" : ""}`}>
                 {stripAskedQuestion(cur.setup, cur.text) && (
                   <div className="mt-4">
