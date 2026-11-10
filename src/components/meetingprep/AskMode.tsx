@@ -5,7 +5,7 @@
 // no generating, no lists of twenty. One question at a size you can read from
 // arm's length, and a way to get to the next one.
 
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type TouchEvent as ReactTouchEvent } from "react";
 import { ArrowLeft, ArrowRight, ListChecks, Pause, Play, RotateCcw, Star, Timer, X, List, ListOrdered } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { stripAskedQuestion, type QuestionItem, type QuestionOption } from "@/lib/meetingprep/types";
@@ -83,7 +83,7 @@ export function AskMode({
   const filters = [
     { key: "all", label: "All", n: all.length },
     { key: "must", label: "Must ask", n: all.filter((q) => q.mustAsk).length },
-    { key: "reserve", label: "In reserve", n: all.filter((q) => q.backup).length },
+    { key: "reserve", label: "Spare", n: all.filter((q) => q.backup).length },
     ...panel.map((n) => ({ key: n, label: n, n: all.filter((q) => asks(q).includes(n)).length })),
   ].filter((f) => f.key === "all" || f.n > 0);
   // The clock, kept through closing Ask mode or the pane.
@@ -356,13 +356,59 @@ export function AskMode({
     };
   }, []);
 
+  // An entry in the history of its own, so the phone's back swipe (or the
+  // back button) closes Ask mode and leaves meeting prep where it was: it
+  // went back out of meeting prep. The X goes back through it too.
+  const closeRef = useRef(onClose);
+  useEffect(() => {
+    closeRef.current = onClose;
+  });
+  useEffect(() => {
+    if (!window.history.state?.askMode) window.history.pushState({ askMode: true }, "");
+    const onPop = () => closeRef.current();
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+  const close = () => {
+    if (window.history.state?.askMode) window.history.back();
+    else onClose();
+  };
+
+  // Swiped on a phone: left for the next question, right for the one before.
+  const swipe = useRef<{ x: number; y: number } | null>(null);
+  const forward = () => {
+    if (onIntro) introsDone();
+    else setAt((n) => Math.min(flow.length - 1, n + 1));
+  };
+  const backward = () => {
+    if (onIntro) return;
+    if (here === 0 && hasIntro) setIntroOpen(true);
+    else setAt((n) => Math.max(0, n - 1));
+  };
+  const onSwipeStart = (e: ReactTouchEvent) => {
+    const t = e.touches[0];
+    swipe.current = mode === "one" && !editingText && !editingOpening && e.touches.length === 1 ? { x: t.clientX, y: t.clientY } : null;
+  };
+  const onSwipeEnd = (e: ReactTouchEvent) => {
+    const s0 = swipe.current;
+    swipe.current = null;
+    if (!s0) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - s0.x;
+    const dy = t.clientY - s0.y;
+    // A real sideways swipe, not a scroll that drifted.
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    if (dx < 0) forward();
+    else backward();
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // Typing in a box is typing: Enter is a new line, not Asked it.
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT")) return;
       if (e.key === "Escape") {
-        onClose();
+        closeRef.current();
         return;
       }
       if (mode !== "one") return;
@@ -418,6 +464,9 @@ export function AskMode({
           under More: it was five rows of controls above the question. */}
       <header className="shrink-0 border-b border-border bg-surface">
         <div className="mx-auto flex w-full max-w-3xl items-center gap-2.5 px-4 py-2 text-xs">
+          {/* Wraps on a phone: in one row it pushed the X off the screen,
+              with no way out of Ask mode. */}
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2.5 gap-y-1">
           {minutesOf && slotMin ? (
             !clock ? (
               <Button size="sm" variant="secondary" onClick={() => startClock(true)}>
@@ -451,7 +500,7 @@ export function AskMode({
                     aria-label="Pause the clock"
                     className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 font-medium text-ink hover:bg-canvas"
                   >
-                    <Pause size={12} /> Pause
+                    <Pause size={12} /> <span className="hidden sm:inline">Pause</span>
                   </button>
                 )}
                 <button
@@ -461,7 +510,7 @@ export function AskMode({
                   title="Back to 0:00, stopped"
                   className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-muted hover:text-ink"
                 >
-                  <RotateCcw size={12} /> Reset
+                  <RotateCcw size={12} /> <span className="hidden sm:inline">Reset</span>
                 </button>
                 <span
                   className={`whitespace-nowrap rounded-full px-2 py-0.5 font-semibold tabular-nums ${
@@ -487,7 +536,7 @@ export function AskMode({
                 </span>
                 {clock.reserve && (
                   <button type="button" onClick={() => goTo(clock.reserve!)} className="font-medium text-[var(--accent)] hover:underline">
-                    A reserve fits: go to it
+                    A spare fits: go to it
                   </button>
                 )}
               </>
@@ -495,6 +544,7 @@ export function AskMode({
           ) : (
             <span className="truncate font-semibold text-ink">{topic || title}</span>
           )}
+          </div>
           <button
             type="button"
             onClick={() => setShowMore((v) => !v)}
@@ -505,7 +555,7 @@ export function AskMode({
           </button>
           <button
             type="button"
-            onClick={onClose}
+            onClick={close}
             aria-label="Close ask mode"
             className="shrink-0 rounded-lg p-1.5 text-muted transition hover:bg-canvas hover:text-ink"
           >
@@ -516,7 +566,7 @@ export function AskMode({
           <div className="mx-auto w-full max-w-3xl space-y-2 border-t border-border px-4 py-2.5 text-xs">
             <p className="text-muted">
               <span className="font-semibold text-ink">{topic || title}</span> · {main.length} questions
-              {backups.length ? ` · ${backups.length} in reserve` : ""}
+              {backups.length ? ` · ${backups.length} spare` : ""}
             </p>
             <div className="flex flex-wrap items-center gap-1.5">
               <div className="inline-flex rounded-lg border border-border bg-canvas p-0.5">
@@ -600,18 +650,36 @@ export function AskMode({
                 },
               },
               ...plan.map((p, i) => ({ key: p.q.id, label: `Q${i + 1}`, start: p.start, end: p.end, onClick: () => goTo(p.q) })),
-              ...(slack >= 0.5 ? [{ key: "spare", label: "Spare", start: mainEnd, end: mainEnd + slack, quiet: true }] : []),
+              // The spare time holds the spare questions, side by side. One
+              // name for both: "Spare" and "R1" looked like two things.
+              ...(slack >= 0.5
+                ? allBackups.length
+                  ? allBackups.map((q, i) => ({
+                      key: q.id,
+                      label: allBackups.length === 1 ? "Spare" : `S${i + 1}`,
+                      title: `Spare: ${plainText(q.text)}`,
+                      start: mainEnd + (slack * i) / allBackups.length,
+                      end: mainEnd + (slack * (i + 1)) / allBackups.length,
+                      quiet: true,
+                      onClick: () => goTo(q),
+                    }))
+                  : [{ key: "spare", label: "Spare", start: mainEnd, end: mainEnd + slack, quiet: true }]
+                : []),
               { key: "close", label: endMin > 1.5 ? "Q&A, close" : "Close", start: slotMin - endMin, end: slotMin, quiet: true },
             ]}
             current={onIntro ? "intro" : cur?.id || ""}
             slotMin={slotMin}
             gone={clock?.gone ?? null}
-            reserves={allBackups.map((q, i) => ({
-              key: q.id,
-              label: `R${i + 1}`,
-              title: `In reserve: ${plainText(q.text)}`,
-              onClick: () => goTo(q),
-            }))}
+            reserves={
+              slack >= 0.5
+                ? []
+                : allBackups.map((q, i) => ({
+                    key: q.id,
+                    label: allBackups.length === 1 ? "Spare" : `S${i + 1}`,
+                    title: `Spare: ${plainText(q.text)}`,
+                    onClick: () => goTo(q),
+                  }))
+            }
           />
         ) : (
           <div className="h-1 bg-border">
@@ -637,7 +705,11 @@ export function AskMode({
         </div>
       )}
 
-      <main className="min-h-0 flex-1 overflow-y-auto">
+      <main
+        className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-x-none"
+        onTouchStart={onSwipeStart}
+        onTouchEnd={onSwipeEnd}
+      >
         {!cur ? (
           <p className="mx-auto max-w-3xl px-5 py-16 text-center text-sm text-muted">
             Nothing picked yet.
@@ -725,7 +797,11 @@ export function AskMode({
         ) : mode === "one" ? (
           <div className="mx-auto flex w-full flex-col px-5 pb-8 pt-4" style={pageStyle}>
             <p className={`text-xs text-muted ${align === "center" ? "text-center" : ""}`}>
-              {cur.backup ? "In reserve" : `${here + 1} of ${main.length}`}
+              {cur.backup
+                ? backups.length > 1
+                  ? `Spare ${backups.indexOf(cur) + 1} of ${backups.length}`
+                  : "Spare"
+                : `${here + 1} of ${main.length}`}
               {cur.askWho ? ` · ${asks(cur).join(", ")}` : cur.forWhom ? ` · ${cur.forWhom}` : ""}
               {onPatch && !editingText && (
                 <>
@@ -739,7 +815,7 @@ export function AskMode({
             {minutesOf && slotMin && (
               <p className={`mt-1 text-xs tabular-nums text-muted ${align === "center" ? "text-center" : ""}`}>
                 {cur.backup
-                  ? "Not in the plan: only if you're ahead"
+                  ? "Only if you're ahead"
                   : `Plan: ${mmss(slotFor(cur.id).start)} to ${mmss(slotFor(cur.id).end)}`}
               </p>
             )}
@@ -1002,6 +1078,7 @@ export function AskMode({
             <p className="mt-4 hidden text-[11px] text-muted sm:block">
               Arrow keys or space to move, Esc to close.
             </p>
+            <p className="mt-4 text-[11px] text-muted sm:hidden">Swipe left or right to move.</p>
             <div className="mt-5 sm:hidden">
               <Button size="sm" variant="secondary" onClick={() => setMode("all")}>
                 <ListChecks size={14} /> See all of them
@@ -1026,7 +1103,7 @@ export function AskMode({
             {backups.length > 0 && (
               <>
                 <p className="mb-2 mt-5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
-                  <Star size={12} className="fill-current text-amber-500" /> In reserve
+                  <Star size={12} className="fill-current text-amber-500" /> Spare
                 </p>
                 <ol className="space-y-2">
                   {backups.map((q) => (
@@ -1172,7 +1249,7 @@ function PlanStrip({
   gone,
   reserves = [],
 }: {
-  parts: { key: string; label: string; start: number; end: number; quiet?: boolean; onClick?: () => void }[];
+  parts: { key: string; label: string; title?: string; start: number; end: number; quiet?: boolean; onClick?: () => void }[];
   current: string;
   slotMin: number;
   gone: number | null;
@@ -1191,13 +1268,13 @@ function PlanStrip({
               type="button"
               disabled={!p.onClick}
               onClick={p.onClick}
-              title={`${p.label}: ${fmt(p.start)} to ${fmt(p.end)}`}
+              title={p.title || `${p.label}: ${fmt(p.start)} to ${fmt(p.end)}`}
               style={{ left: pct(p.start), width: `calc(${pct(p.end - p.start)} - 2px)` }}
               className={`absolute top-0 flex h-full items-center justify-center overflow-hidden rounded text-[10px] font-semibold ${
                 on
                   ? "bg-[var(--accent)] text-[var(--accent-fg)]"
                   : p.quiet
-                    ? "border border-dashed border-border text-muted"
+                    ? `border border-dashed text-muted ${p.onClick ? "border-amber-400 hover:bg-amber-50" : "border-border"}`
                     : done
                       ? "bg-[var(--accent)]/25 text-ink/70"
                       : "bg-border/70 text-ink/70 hover:bg-border"
@@ -1215,11 +1292,10 @@ function PlanStrip({
           />
         )}
       </div>
-      {/* The reserves, after the close: not in the plan, there if you're
-          ahead. They only showed by going past the last question. */}
+      {/* The spare questions, when the plan has no spare time to put them
+          in. They only showed by going past the last question. */}
       {reserves.length > 0 && (
-        <div className="flex shrink-0 items-center gap-1" aria-label="In reserve">
-          <Star size={11} className="fill-current text-amber-500" aria-hidden />
+        <div className="flex shrink-0 items-center gap-1" aria-label="Spare questions">
           {reserves.map((r) => (
             <button
               key={r.key}
