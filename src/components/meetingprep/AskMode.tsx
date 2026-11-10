@@ -227,7 +227,10 @@ export function AskMode({
     const inBackups = allBackups.findIndex((q) => q.id === curId);
     const ahead = inMain >= 0 ? allMain.slice(inMain) : inBackups >= 0 ? [] : allMain;
     // A reserve not yet reached: once you have been past one, it is done.
-    const reserve = allBackups.slice(inBackups >= 0 ? inBackups + 1 : 0).find((q) => minutesOf(q) <= spare);
+    // Only offered near the end, before the last question: earlier, time in
+    // hand is better spent on probes. It showed during the introductions.
+    const late = inBackups >= 0 || (inMain >= 0 && inMain >= allMain.length - 2);
+    const reserve = late ? allBackups.slice(inBackups >= 0 ? inBackups + 1 : 0).find((q) => minutesOf(q) <= spare) : undefined;
     // Running over with a question to everyone still to come: a minute each
     // on it is the cut that keeps the running order, before skipping any.
     let quick: { q: QuestionItem; saves: number; both: boolean } | null = null;
@@ -243,7 +246,11 @@ export function AskMode({
     }
     // The whole slot, counting down, for the close.
     const remain = slotMin - gone;
-    return { gone, slot, delta, spare, reserve, quick, remain };
+    // The part on screen: its last minute, and past its end. Shown round the
+    // edge of the screen, to be caught without looking for it.
+    const partLeft = gone >= slot.start ? slot.end - gone : null;
+    const edge: "near" | "past" | null = partLeft == null ? null : partLeft < 0 ? "past" : partLeft <= 1 ? "near" : null;
+    return { gone, slot, delta, spare, reserve, quick, remain, partLeft, edge };
   };
   const goTo = (q: QuestionItem) => {
     setShow("all");
@@ -319,6 +326,16 @@ export function AskMode({
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-canvas">
+      {/* Round the edge of the screen: amber in the last minute of the part
+          you're on, red once past its end. Seen without looking at the clock. */}
+      {clock && !pausedAt && clock.edge && (
+        <div
+          aria-hidden
+          className={`pointer-events-none absolute inset-0 z-[60] border-[6px] transition-colors duration-700 ${
+            clock.edge === "past" ? "border-red-500" : "border-amber-400"
+          }`}
+        />
+      )}
       {/* One line: the clock and where you stand. Everything else is
           under More: it was five rows of controls above the question. */}
       <header className="shrink-0 border-b border-border bg-surface">
@@ -372,19 +389,21 @@ export function AskMode({
                   className={`whitespace-nowrap rounded-full px-2 py-0.5 font-semibold tabular-nums ${
                     clock.delta >= 0.5
                       ? "bg-emerald-50 text-emerald-800"
-                      : clock.delta <= -0.5
-                        ? clock.spare < 0
-                          ? "bg-red-100 text-red-900"
-                          : "bg-amber-100 text-amber-900"
-                        : "bg-canvas text-ink/80"
+                      : clock.delta < 0
+                        ? "bg-red-100 text-red-900"
+                        : clock.edge === "near"
+                          ? "bg-amber-100 text-amber-900"
+                          : "bg-canvas text-ink/80"
                   }`}
                   title={`The plan has this part from ${mmss(clock.slot.start)} to ${mmss(clock.slot.end)}.`}
                 >
                   {clock.delta >= 0.5
                     ? `${mmss(clock.delta)} ahead`
-                    : clock.delta <= -0.5
+                    : clock.delta < 0
                       ? `${mmss(-clock.delta)} behind`
-                      : "On time"}
+                      : clock.edge === "near" && clock.partLeft != null
+                        ? `${mmss(clock.partLeft)} left on this`
+                        : "On time"}
                 </span>
                 {clock.reserve && (
                   <button type="button" onClick={() => goTo(clock.reserve!)} className="font-medium text-[var(--accent)] hover:underline">
