@@ -5,7 +5,7 @@
 // no generating, no lists of twenty. One question at a size you can read from
 // arm's length, and a way to get to the next one.
 
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, ListChecks, Pause, Play, RotateCcw, Star, Timer, X, List, ListOrdered } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { stripAskedQuestion, type QuestionItem, type QuestionOption } from "@/lib/meetingprep/types";
@@ -311,7 +311,14 @@ export function AskMode({
       // Only a preference.
     }
   };
-  const stepFont = (d: number) => {
+  // With words selected, bigger or smaller goes on those words only, the way
+  // a word processor does it; it grew the whole box and not what they had
+  // highlighted. With nothing selected, it is the size of all of it.
+  const stepFont = (d: number, el?: HTMLTextAreaElement | null, apply?: (next: string) => void) => {
+    if (el && apply && el.selectionStart !== el.selectionEnd) {
+      sizeWords(el, d, apply);
+      return;
+    }
     const i = FONT_STEPS.indexOf(fontPx);
     const n = FONT_STEPS[Math.max(0, Math.min(FONT_STEPS.length - 1, (i < 0 ? 5 : i) + d))];
     setFontPx(n);
@@ -596,9 +603,15 @@ export function AskMode({
               ...(slack >= 0.5 ? [{ key: "spare", label: "Spare", start: mainEnd, end: mainEnd + slack, quiet: true }] : []),
               { key: "close", label: endMin > 1.5 ? "Q&A, close" : "Close", start: slotMin - endMin, end: slotMin, quiet: true },
             ]}
-            current={onIntro ? "intro" : cur && !cur.backup ? cur.id : ""}
+            current={onIntro ? "intro" : cur?.id || ""}
             slotMin={slotMin}
             gone={clock?.gone ?? null}
+            reserves={allBackups.map((q, i) => ({
+              key: q.id,
+              label: `R${i + 1}`,
+              title: `In reserve: ${plainText(q.text)}`,
+              onClick: () => goTo(q),
+            }))}
           />
         ) : (
           <div className="h-1 bg-border">
@@ -632,19 +645,19 @@ export function AskMode({
         ) : onIntro ? (
           // Introductions are a step of their own, before question 1, so the
           // clock knows when the questions really started.
-          <div className="mx-auto flex min-h-full w-full flex-col justify-center px-5 py-8 text-center" style={pageStyle}>
+          <div className="mx-auto flex w-full flex-col px-5 pb-8 pt-4 text-center" style={pageStyle}>
             <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">Before the questions</p>
-            <h2 className="mt-2 text-2xl font-medium text-ink">Opening and introductions</h2>
+            <h2 className="mt-1 text-2xl font-medium text-ink">Opening and introductions</h2>
             {/* Their own words to open with, laid out and edited the way the
                 questions are. */}
             {(opening.trim() || editingOpening) && (
-              <div className={`mt-6 ${align === "center" ? "" : "text-left"}`}>
+              <div className={`mt-4 ${align === "center" ? "" : "text-left"}`}>
                 {editingOpening && onOpening && (
                   <EditToolbar
                     onMark={(m) => toggleMark(lastBox.current, m, onOpening)}
                     onList={(k) => toggleList(lastBox.current, k, onOpening)}
                     px={fontPx}
-                    onStep={stepFont}
+                    onStep={(d) => stepFont(d, lastBox.current, onOpening)}
                     wide={boxW != null}
                     onResetWidth={resetWidth}
                     onDone={() => setEditingOpening(false)}
@@ -710,7 +723,7 @@ export function AskMode({
             </p>
           </div>
         ) : mode === "one" ? (
-          <div className="mx-auto flex min-h-full w-full flex-col justify-center px-5 py-8" style={pageStyle}>
+          <div className="mx-auto flex w-full flex-col px-5 pb-8 pt-4" style={pageStyle}>
             <p className={`text-xs text-muted ${align === "center" ? "text-center" : ""}`}>
               {cur.backup ? "In reserve" : `${here + 1} of ${main.length}`}
               {cur.askWho ? ` · ${asks(cur).join(", ")}` : cur.forWhom ? ` · ${cur.forWhom}` : ""}
@@ -802,7 +815,12 @@ export function AskMode({
                       onMark={(m) => mark(lastBox.current, m)}
                       onList={list}
                       px={fontPx}
-                      onStep={stepFont}
+                      onStep={(d) => {
+                        const el = lastBox.current;
+                        stepFont(d, el, (next) =>
+                          onPatch!(cur, el?.getAttribute("aria-label") === "Say first" ? { setup: next } : { text: next }),
+                        );
+                      }}
                       wide={boxW != null}
                       onResetWidth={resetWidth}
                       onDone={() => setEditingText(false)}
@@ -1053,10 +1071,10 @@ function AskRow({
       </button>
       <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
         {stripAskedQuestion(q.setup, q.text) && (
-          <span className="mb-0.5 block text-sm leading-snug text-muted">{stripAskedQuestion(q.setup, q.text)}</span>
+          <span className="mb-0.5 block text-sm leading-snug text-muted">{plainText(stripAskedQuestion(q.setup, q.text))}</span>
         )}
         <span className="block text-base leading-snug text-ink sm:text-lg">
-          {q.text}
+          {plainText(q.text)}
         </span>
         {(q.askWho || q.forWhom) && (
           <span className="mt-0.5 block text-sm text-muted">
@@ -1104,6 +1122,46 @@ function toggleMark(el: HTMLTextAreaElement | null, m: string, apply: (next: str
   });
 }
 
+// Bigger or smaller on the selected words: <big> or <small> round them, a
+// step at a time, and a step back takes the opposite one off first. A
+// selection over several lines is marked line by line, so a mark never
+// spans a line break.
+function sizeWords(el: HTMLTextAreaElement, d: number, apply: (next: string) => void) {
+  const { selectionStart: a, selectionEnd: b, value } = el;
+  if (a === b) return;
+  const undo = d > 0 ? ["<small>", "</small>"] : ["<big>", "</big>"];
+  const add = d > 0 ? ["<big>", "</big>"] : ["<small>", "</small>"];
+  if (value.slice(a - undo[0].length, a) === undo[0] && value.slice(b, b + undo[1].length) === undo[1]) {
+    apply(value.slice(0, a - undo[0].length) + value.slice(a, b) + value.slice(b + undo[1].length));
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(a - undo[0].length, b - undo[0].length);
+    });
+    return;
+  }
+  const inner = value
+    .slice(a, b)
+    .split("\n")
+    .map((l) => {
+      if (!l.trim()) return l;
+      const lead = l.match(/^\s*(?:(?:[-\u2022]|\d+[.)])\s+)?/)?.[0] ?? "";
+      return lead + add[0] + l.slice(lead.length) + add[1];
+    })
+    .join("\n");
+  apply(value.slice(0, a) + inner + value.slice(b));
+  const one = !value.slice(a, b).includes("\n");
+  requestAnimationFrame(() => {
+    el.focus();
+    if (one) el.setSelectionRange(a + add[0].length, a + inner.length - add[1].length);
+    else el.setSelectionRange(a, a + inner.length);
+  });
+}
+
+/** Their marks taken out, for the list, which shows the words plain. */
+function plainText(t: string) {
+  return t.replace(/<\/?(?:big|small)>/g, "").replace(/\*\*(.+?)\*\*/g, "$1").replace(/\*(.+?)\*/g, "$1");
+}
+
 // The plan across the top: a block for each part, as wide as its time, and a
 // line for now. The line past the end of the block you're on is behind; short
 // of its start is ahead.
@@ -1112,16 +1170,18 @@ function PlanStrip({
   current,
   slotMin,
   gone,
+  reserves = [],
 }: {
   parts: { key: string; label: string; start: number; end: number; quiet?: boolean; onClick?: () => void }[];
   current: string;
   slotMin: number;
   gone: number | null;
+  reserves?: { key: string; label: string; title: string; onClick: () => void }[];
 }) {
   const pct = (m: number) => `${Math.max(0, Math.min(100, (m / slotMin) * 100))}%`;
   return (
-    <div className="mx-auto w-full max-w-3xl px-4 pb-2">
-      <div className="relative h-6">
+    <div className="mx-auto flex w-full max-w-3xl items-center gap-2 px-4 pb-2">
+      <div className="relative h-6 min-w-0 flex-1">
         {parts.map((p) => {
           const on = p.key === current;
           const done = gone != null && gone >= p.end;
@@ -1155,6 +1215,28 @@ function PlanStrip({
           />
         )}
       </div>
+      {/* The reserves, after the close: not in the plan, there if you're
+          ahead. They only showed by going past the last question. */}
+      {reserves.length > 0 && (
+        <div className="flex shrink-0 items-center gap-1" aria-label="In reserve">
+          <Star size={11} className="fill-current text-amber-500" aria-hidden />
+          {reserves.map((r) => (
+            <button
+              key={r.key}
+              type="button"
+              title={r.title}
+              onClick={r.onClick}
+              className={`h-6 rounded px-1.5 text-[10px] font-semibold ${
+                r.key === current
+                  ? "bg-[var(--accent)] text-[var(--accent-fg)]"
+                  : "border border-dashed border-amber-400 text-ink/70 hover:bg-amber-50"
+              }`}
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1211,11 +1293,11 @@ function FontStepper({ px, onStep }: { px: number; onStep: (d: number) => void }
   const btn = "h-7 rounded-md px-2 text-ink hover:bg-canvas disabled:opacity-30";
   return (
     <span className="inline-flex items-center rounded-lg border border-border bg-surface" aria-label="Text size">
-      <button type="button" title="Smaller text" aria-label="Smaller text" disabled={px <= FONT_STEPS[0]} onMouseDown={(e) => e.preventDefault()} onClick={() => onStep(-1)} className={`${btn} text-xs`}>
+      <button type="button" title="Smaller: the selected words, or all of it" aria-label="Smaller text" disabled={px <= FONT_STEPS[0]} onMouseDown={(e) => e.preventDefault()} onClick={() => onStep(-1)} className={`${btn} text-xs`}>
         A&minus;
       </button>
       <span className="min-w-[2.2em] text-center text-xs tabular-nums text-muted">{px}</span>
-      <button type="button" title="Bigger text" aria-label="Bigger text" disabled={px >= FONT_STEPS[FONT_STEPS.length - 1]} onMouseDown={(e) => e.preventDefault()} onClick={() => onStep(1)} className={`${btn} text-sm font-semibold`}>
+      <button type="button" title="Bigger: the selected words, or all of it" aria-label="Bigger text" disabled={px >= FONT_STEPS[FONT_STEPS.length - 1]} onMouseDown={(e) => e.preventDefault()} onClick={() => onStep(1)} className={`${btn} text-sm font-semibold`}>
         A+
       </button>
     </span>
@@ -1401,19 +1483,39 @@ function Spoken({ text, names = [], lines = false }: { text: string; names?: str
         <span key={`${k}n${i}`}>{p}</span>
       ),
     );
-  // Their own marks: **bold** and *italic*.
-  const styled = (t: string, k: string) =>
-    t.split(/(\*\*.+?\*\*|\*.+?\*)/).map((p, i) =>
-      /^\*\*.+\*\*$/.test(p) ? (
-        <strong key={`${k}s${i}`} className="font-semibold text-ink">
-          {p.slice(2, -2)}
-        </strong>
-      ) : /^\*.+\*$/.test(p) ? (
-        <em key={`${k}s${i}`}>{p.slice(1, -1)}</em>
-      ) : (
-        <span key={`${k}s${i}`}>{numbers(p, `${k}s${i}`)}</span>
-      ),
-    );
+  // Their own marks: **bold**, *italic*, and <big> or <small> on words, in
+  // one pass so they can sit inside one another in any order. An odd one
+  // out is left as typed.
+  const styled = (t: string, k: string) => {
+    const parts = t.split(/(\*\*|\*|<\/?(?:big|small)>)/);
+    const count = (m: string) => parts.filter((p) => p === m).length;
+    const live = { "**": count("**") % 2 === 0, "*": count("*") % 2 === 0 };
+    let bold = false;
+    let ital = false;
+    const sizes: number[] = [];
+    const out: ReactNode[] = [];
+    parts.forEach((p, i) => {
+      if (p === "**" && live["**"]) bold = !bold;
+      else if (p === "*" && live["*"]) ital = !ital;
+      else if (p === "<big>") sizes.push(1.25);
+      else if (p === "<small>") sizes.push(0.8);
+      else if (p === "</big>" || p === "</small>") sizes.pop();
+      else if (p) {
+        const em = sizes.reduce((n, x) => n * x, 1);
+        const body = numbers(p, `${k}s${i}`);
+        out.push(
+          <span
+            key={`${k}s${i}`}
+            className={`${bold ? "font-semibold text-ink" : ""} ${ital ? "italic" : ""}`}
+            style={em !== 1 ? { fontSize: `${em}em` } : undefined}
+          >
+            {body}
+          </span>,
+        );
+      }
+    });
+    return out;
+  };
   const marked = (chunk: string, key: string, offset: number) => {
     const nameEnd = lead && offset === 0 ? lead.length : 0;
     return (
