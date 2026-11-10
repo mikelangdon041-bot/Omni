@@ -131,9 +131,6 @@ export function AskMode({
     }
   });
   const [introOpen, setIntroOpen] = useState(() => !introsAt);
-  // When the question on screen came up, so its own time can be shown and
-  // the time it has already had is not counted again as still to come.
-  const [qAt, setQAt] = useState<{ id: string; at: number }>({ id: "", at: 0 });
   const startClock = (on: boolean, from?: number) => {
     const v = on ? (from ?? clockNow()) : null;
     setStartedAt(v);
@@ -167,7 +164,6 @@ export function AskMode({
     const i2 = introsAt ? introsAt + shift : null;
     setStartedAt(s2);
     if (i2) setIntrosAt(i2);
-    setQAt((q) => ({ ...q, at: q.at + shift }));
     setPausedAt(null);
     setNow(t);
     try {
@@ -192,29 +188,44 @@ export function AskMode({
   const backups = picked.filter((q) => q.backup);
   const flow = [...main, ...backups];
 
-  // Against the whole running order, whatever is filtered, from where you
-  // are: the question on screen and every main one after it are still to
-  // come. Nothing is ticked off; moving on is enough.
+  // The plan: when each question in the running order should start and
+  // end, introductions first. It counted forward from what was left before,
+  // and sat on "4 min ahead" while the minutes went by; a moderator wants
+  // "I should be 12 minutes in by now" and how far off that they are.
+  const allMain = all.filter((q) => !q.backup);
+  const allBackups = all.filter((q) => q.backup);
+  const plan = (() => {
+    if (!minutesOf) return [];
+    let t = leadMin;
+    return allMain.map((q) => {
+      const start = t;
+      t += minutesOf(q);
+      return { q, start, end: t };
+    });
+  })();
+  const mainEnd = plan.length ? plan[plan.length - 1].end : leadMin;
+  // Planned time left over before the close: room for a probe or a reserve.
+  const slack = slotMin ? Math.max(0, slotMin - endMin - mainEnd) : 0;
+  // Where the plan has you, for the question on screen (none: the intros).
+  const slotFor = (curId: string | undefined) => {
+    const p = plan.find((x) => x.q.id === curId);
+    if (p) return { start: p.start, end: p.end };
+    const r = allBackups.find((q) => q.id === curId);
+    if (r && minutesOf) return { start: mainEnd, end: mainEnd + minutesOf(r) };
+    return { start: 0, end: leadMin };
+  };
   const clockAt = (curId: string | undefined) => {
     if (!minutesOf || !slotMin || !startedAt) return null;
     const gone = Math.max(0, ((pausedAt ?? now) - startedAt) / 60000);
-    const allMain = all.filter((q) => !q.backup);
-    const allBackups = all.filter((q) => q.backup);
+    const slot = slotFor(curId);
+    // Ahead: here before the plan says to be. Behind: still here after the
+    // plan says to have moved on. In between, on time.
+    const delta = gone < slot.start ? slot.start - gone : gone > slot.end ? slot.end - gone : 0;
+    // With the spare time in the plan too: what the tips go on.
+    const spare = delta + slack;
     const inMain = allMain.findIndex((q) => q.id === curId);
     const inBackups = allBackups.findIndex((q) => q.id === curId);
     const ahead = inMain >= 0 ? allMain.slice(inMain) : inBackups >= 0 ? [] : allMain;
-    // The one on screen: only what is left of its time is still to come.
-    const onThis =
-      curId && qAt.id === curId ? Math.max(0, ((pausedAt ?? now) - Math.max(qAt.at, startedAt)) / 60000) : 0;
-    const budget = inMain >= 0 ? minutesOf(allMain[inMain]) : inBackups >= 0 ? minutesOf(allBackups[inBackups]) : 0;
-    const toCome =
-      ahead.reduce((n, q) => n + minutesOf(q), 0) -
-      (inMain >= 0 ? Math.min(onThis, budget) : 0) +
-      (introsAt ? 0 : Math.max(0, leadMin - gone));
-    const left = slotMin - endMin - gone;
-    // The whole slot, counting down, the number a timekeeper holds up.
-    const remain = slotMin - gone;
-    const spare = left - toCome;
     // A reserve not yet reached: once you have been past one, it is done.
     const reserve = allBackups.slice(inBackups >= 0 ? inBackups + 1 : 0).find((q) => minutesOf(q) <= spare);
     // Running over with a question to everyone still to come: a minute each
@@ -230,7 +241,9 @@ export function AskMode({
         quick = one ? { q: one.q, saves: one.saves, both: false } : { q: toAll[0].q, saves: all2, both: toAll.length > 1 };
       }
     }
-    return { gone, left, spare, reserve, quick, remain, onThis, budget };
+    // The whole slot, counting down, for the close.
+    const remain = slotMin - gone;
+    return { gone, slot, delta, spare, reserve, quick, remain };
   };
   const goTo = (q: QuestionItem) => {
     setShow("all");
@@ -271,8 +284,6 @@ export function AskMode({
   const cur = flow[here];
   const hasIntro = Boolean(minutesOf && slotMin);
   const onIntro = mode === "one" && introOpen && here === 0 && hasIntro;
-  const qKey = onIntro ? "" : cur?.id || "";
-  if (qAt.id !== qKey) setQAt({ id: qKey, at: pausedAt ?? now });
   const clock = clockAt(onIntro ? undefined : cur?.id);
   const names = panel.length ? panel.join(", ").replace(/, ([^,]*)$/, " and $1") : "the panel";
 
@@ -319,15 +330,15 @@ export function AskMode({
               </Button>
             ) : (
               <>
-                {/* Counting down, and changing colour at 5 and 2 minutes, like
-                    the cards a timekeeper holds up. */}
+                {/* Time in, against the whole slot, amber with 5 minutes to go
+                    and red with 2. */}
                 <span
-                  title={`${mmss(clock.gone)} gone of ${slotMin} min`}
-                  className={`whitespace-nowrap font-semibold tabular-nums ${
+                  className={`whitespace-nowrap tabular-nums ${
                     pausedAt ? "text-muted" : clock.remain <= 2 ? "text-red-600" : clock.remain <= 5 ? "text-amber-600" : "text-ink"
                   }`}
                 >
-                  <span className="font-mono text-base">{mmss(Math.abs(clock.remain))}</span> {clock.remain >= 0 ? "left" : "over"}
+                  <span className="font-mono text-base font-semibold">{mmss(clock.gone)}</span>
+                  <span className="text-muted"> of {slotMin}:00</span>
                 </span>
                 {pausedAt ? (
                   <button
@@ -358,15 +369,21 @@ export function AskMode({
                   <RotateCcw size={12} /> Reset
                 </button>
                 <span
-                  className={`rounded-full px-2 py-0.5 font-semibold ${
-                    clock.spare >= 1 ? "bg-emerald-50 text-emerald-800" : clock.spare <= -1 ? "bg-amber-100 text-amber-900" : "bg-canvas text-ink/80"
+                  className={`whitespace-nowrap rounded-full px-2 py-0.5 font-semibold tabular-nums ${
+                    clock.delta >= 0.5
+                      ? "bg-emerald-50 text-emerald-800"
+                      : clock.delta <= -0.5
+                        ? clock.spare < 0
+                          ? "bg-red-100 text-red-900"
+                          : "bg-amber-100 text-amber-900"
+                        : "bg-canvas text-ink/80"
                   }`}
-                  title="Against your running order, from the question on screen: ahead is time in hand for a probe or a reserve."
+                  title={`The plan has this part from ${mmss(clock.slot.start)} to ${mmss(clock.slot.end)}.`}
                 >
-                  {clock.spare >= 1
-                    ? `${Math.round(clock.spare)} min ahead`
-                    : clock.spare <= -1
-                      ? `${Math.round(-clock.spare)} min behind`
+                  {clock.delta >= 0.5
+                    ? `${mmss(clock.delta)} ahead`
+                    : clock.delta <= -0.5
+                      ? `${mmss(-clock.delta)} behind`
                       : "On time"}
                 </span>
                 {clock.reserve && (
@@ -467,12 +484,26 @@ export function AskMode({
             )}
           </div>
         )}
-        <div className="h-1 bg-border">
-          <div
-            className="h-full bg-[var(--accent)] transition-all duration-300"
-            style={{ width: `${flow.length && !onIntro ? ((here + 1) / flow.length) * 100 : 0}%` }}
+        {minutesOf && slotMin ? (
+          <PlanStrip
+            parts={[
+              { key: "intro", label: "Intros", start: 0, end: leadMin, onClick: () => setIntroOpen(true) },
+              ...plan.map((p, i) => ({ key: p.q.id, label: `Q${i + 1}`, start: p.start, end: p.end, onClick: () => goTo(p.q) })),
+              ...(slack >= 0.5 ? [{ key: "spare", label: "Spare", start: mainEnd, end: mainEnd + slack, quiet: true }] : []),
+              { key: "close", label: endMin > 1.5 ? "Q&A, close" : "Close", start: slotMin - endMin, end: slotMin, quiet: true },
+            ]}
+            current={onIntro ? "intro" : cur && !cur.backup ? cur.id : ""}
+            slotMin={slotMin}
+            gone={clock?.gone ?? null}
           />
-        </div>
+        ) : (
+          <div className="h-1 bg-border">
+            <div
+              className="h-full bg-[var(--accent)] transition-all duration-300"
+              style={{ width: `${flow.length && !onIntro ? ((here + 1) / flow.length) * 100 : 0}%` }}
+            />
+          </div>
+        )}
       </header>
       {clock && clock.remain <= endMin && (
         <div
@@ -552,7 +583,7 @@ export function AskMode({
             )}
             <p className="mt-6 text-base text-ink/75">
               {opening.trim() ? "Then introduce" : "Welcome the room and introduce"}{" "}
-              {panel.length ? panel.join(", ").replace(/, ([^,]*)$/, " and $1") : "the panel"}. About {Math.round(leadMin)} minutes in all.
+              {names}. Plan: 0:00 to {mmss(leadMin)}.
               {onOpening && !editingOpening && (
                 <>
                   {" "}
@@ -588,22 +619,12 @@ export function AskMode({
                 </>
               )}
             </p>
-            {/* This question's own time: a guide, not an alarm. Whether the
-                whole panel is on time is the count at the top. */}
-            {clock && clock.budget > 0 && (
-              <div className={`mt-2 w-full max-w-xs ${align === "center" ? "mx-auto" : ""}`}>
-                <div className="h-1 overflow-hidden rounded-full bg-border">
-                  <div
-                    className={`h-full transition-all ${clock.onThis > clock.budget ? "bg-amber-500" : "bg-[var(--accent)]/60"}`}
-                    style={{ width: `${Math.min(100, (clock.onThis / clock.budget) * 100)}%` }}
-                  />
-                </div>
-                <p className={`mt-1 text-xs tabular-nums ${clock.onThis > clock.budget ? "text-amber-700" : "text-muted"} ${align === "center" ? "text-center" : ""}`}>
-                  {clock.onThis > clock.budget
-                    ? `${mmss(clock.onThis - clock.budget)} past this one's time`
-                    : `This one: ${mmss(clock.onThis)} of about ${Math.round(clock.budget)} min`}
-                </p>
-              </div>
+            {minutesOf && slotMin && (
+              <p className={`mt-1 text-xs tabular-nums text-muted ${align === "center" ? "text-center" : ""}`}>
+                {cur.backup
+                  ? "Not in the plan: only if you're ahead"
+                  : `Plan: ${mmss(slotFor(cur.id).start)} to ${mmss(slotFor(cur.id).end)}`}
+              </p>
             )}
 
             {/* The time check, on the question it is about, with the words. */}
@@ -613,19 +634,18 @@ export function AskMode({
               const name = who[0] || panel.find((n) => new RegExp(`\\b${n}\\b`, "i").test(cur.forWhom || "")) || "";
               const quick = quickOf?.(cur);
               if (clock.spare <= -1) {
-                const over = Math.max(1, Math.round(-clock.spare));
                 return (
                   <div className="mx-auto mt-4 w-full max-w-2xl rounded-xl bg-amber-50 px-4 py-3 text-center text-amber-950">
                     {quick != null ? (
                       <>
                         <p className="text-sm font-semibold">
-                          About {over} min behind. Ask for a minute each, which saves about {Math.round(minutesOf(cur) - quick)} min:
+                          {mmss(-clock.delta)} behind, with no spare left. Ask for a minute each, which saves about {Math.round(minutesOf(cur) - quick)} min:
                         </p>
                         <p className="mt-1 text-lg">&ldquo;A quick take from each of you, about a minute each, starting with {name || panel[0]}.&rdquo;</p>
                       </>
                     ) : (
                       <>
-                        <p className="text-sm font-semibold">About {over} min behind. Keep this one short:</p>
+                        <p className="text-sm font-semibold">{mmss(-clock.delta)} behind, with no spare left. Keep this one short:</p>
                         <p className="mt-1 text-lg">&ldquo;{name ? `${name}, in` : "In"} a sentence or two:&rdquo;</p>
                       </>
                     )}
@@ -635,7 +655,7 @@ export function AskMode({
               if (clock.spare >= 3 && cur.followUp)
                 return (
                   <p className="mx-auto mt-4 w-full max-w-2xl rounded-xl bg-emerald-50 px-4 py-2 text-center text-sm text-emerald-900">
-                    About {Math.round(clock.spare)} min spare: use the probe on this one.
+                    {Math.round(clock.spare)} min in hand: use the probe on this one.
                   </p>
                 );
               return null;
@@ -972,6 +992,66 @@ function toggleMark(el: HTMLTextAreaElement | null, m: string, apply: (next: str
     el.focus();
     el.setSelectionRange(from, to);
   });
+}
+
+// The plan across the top: a block for each part, as wide as its time, and a
+// line for now. The line past the end of the block you're on is behind; short
+// of its start is ahead.
+function PlanStrip({
+  parts,
+  current,
+  slotMin,
+  gone,
+}: {
+  parts: { key: string; label: string; start: number; end: number; quiet?: boolean; onClick?: () => void }[];
+  current: string;
+  slotMin: number;
+  gone: number | null;
+}) {
+  const pct = (m: number) => `${Math.max(0, Math.min(100, (m / slotMin) * 100))}%`;
+  return (
+    <div className="mx-auto w-full max-w-3xl px-4 pb-2">
+      <div className="relative h-6">
+        {parts.map((p) => {
+          const on = p.key === current;
+          const done = gone != null && gone >= p.end;
+          return (
+            <button
+              key={p.key}
+              type="button"
+              disabled={!p.onClick}
+              onClick={p.onClick}
+              title={`${p.label}: ${fmt(p.start)} to ${fmt(p.end)}`}
+              style={{ left: pct(p.start), width: `calc(${pct(p.end - p.start)} - 2px)` }}
+              className={`absolute top-0 flex h-full items-center justify-center overflow-hidden rounded text-[10px] font-semibold ${
+                on
+                  ? "bg-[var(--accent)] text-[var(--accent-fg)]"
+                  : p.quiet
+                    ? "border border-dashed border-border text-muted"
+                    : done
+                      ? "bg-[var(--accent)]/25 text-ink/70"
+                      : "bg-border/70 text-ink/70 hover:bg-border"
+              }`}
+            >
+              <span className="truncate px-0.5">{p.label}</span>
+            </button>
+          );
+        })}
+        {gone != null && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute -bottom-1 -top-1 w-0.5 rounded-full bg-ink"
+            style={{ left: pct(gone) }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function fmt(min: number) {
+  const t = Math.max(0, Math.round(min * 60));
+  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
 }
 
 // Ctrl+B and Ctrl+I in a box.
