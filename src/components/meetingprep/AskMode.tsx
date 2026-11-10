@@ -249,7 +249,9 @@ export function AskMode({
     // The part on screen: its last minute, and past its end. Shown round the
     // edge of the screen, to be caught without looking for it.
     const partLeft = gone >= slot.start ? slot.end - gone : null;
-    const edge: "near" | "past" | null = partLeft == null ? null : partLeft < 0 ? "past" : partLeft <= 1 ? "near" : null;
+    // Green with time in hand, yellow at 2 minutes left, orange at 1, red past.
+    const edge: "ok" | "soon" | "near" | "past" =
+      partLeft == null || partLeft > 2 ? "ok" : partLeft > 1 ? "soon" : partLeft >= 0 ? "near" : "past";
     return { gone, slot, delta, spare, reserve, quick, remain, partLeft, edge };
   };
   const goTo = (q: QuestionItem) => {
@@ -325,14 +327,25 @@ export function AskMode({
   }, [mode, flow.length, here, hasIntro, onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-canvas">
-      {/* Round the edge of the screen: amber in the last minute of the part
-          you're on, red once past its end. Seen without looking at the clock. */}
-      {clock && !pausedAt && clock.edge && (
+    <div
+      className={`fixed inset-0 z-50 flex flex-col transition-colors duration-700 ${
+        clock && !pausedAt && clock.edge === "past" ? "bg-red-100" : "bg-canvas"
+      }`}
+    >
+      {/* Round the edge of the screen, for the part you're on: green with time
+          in hand, yellow at 2 minutes left, orange at 1. Past its end the whole
+          screen goes red. Seen without looking at the clock. */}
+      {clock && !pausedAt && (
         <div
           aria-hidden
-          className={`pointer-events-none absolute inset-0 z-[60] border-[6px] transition-colors duration-700 ${
-            clock.edge === "past" ? "border-red-500" : "border-amber-400"
+          className={`pointer-events-none absolute inset-0 z-[60] transition-colors duration-700 ${
+            clock.edge === "past"
+              ? "border-[12px] border-red-600"
+              : clock.edge === "near"
+                ? "border-[8px] border-orange-500"
+                : clock.edge === "soon"
+                  ? "border-[8px] border-yellow-400"
+                  : "border-[6px] border-emerald-500"
           }`}
         />
       )}
@@ -392,8 +405,10 @@ export function AskMode({
                       : clock.delta < 0
                         ? "bg-red-100 text-red-900"
                         : clock.edge === "near"
-                          ? "bg-amber-100 text-amber-900"
-                          : "bg-canvas text-ink/80"
+                          ? "bg-orange-100 text-orange-900"
+                          : clock.edge === "soon"
+                            ? "bg-yellow-100 text-yellow-900"
+                            : "bg-emerald-50 text-emerald-800"
                   }`}
                   title={`The plan has this part from ${mmss(clock.slot.start)} to ${mmss(clock.slot.end)}.`}
                 >
@@ -401,7 +416,7 @@ export function AskMode({
                     ? `${mmss(clock.delta)} ahead`
                     : clock.delta < 0
                       ? `${mmss(-clock.delta)} behind`
-                      : clock.edge === "near" && clock.partLeft != null
+                      : (clock.edge === "near" || clock.edge === "soon") && clock.partLeft != null
                         ? `${mmss(clock.partLeft)} left on this`
                         : "On time"}
                 </span>
@@ -671,7 +686,7 @@ export function AskMode({
                   </div>
                 );
               }
-              if (clock.spare >= 3 && cur.followUp)
+              if (clock.spare >= 3 && cur.followUp && clock.edge === "ok")
                 return (
                   <p className="mx-auto mt-4 w-full max-w-2xl rounded-xl bg-emerald-50 px-4 py-2 text-center text-sm text-emerald-900">
                     {Math.round(clock.spare)} min in hand: use the probe on this one.
