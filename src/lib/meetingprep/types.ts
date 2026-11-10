@@ -974,11 +974,12 @@ export function sameQuestion<T extends { text: string; deleted?: boolean }>(item
 }
 
 /**
- * The words without the bold and italic marks typed for Ask mode
- * (**bold**, *italic*), for everywhere else a question is shown.
+ * The words without the marks typed for Ask mode (**bold**, *italic*, and
+ * <big> or <small> on words), for everywhere else a question is shown.
  */
 export function unmark(t: string | undefined): string {
   return String(t || "")
+    .replace(/<\/?(?:big|small)>/g, "")
     .replace(/\*\*(.+?)\*\*/g, "$1")
     .replace(/\*(.+?)\*/g, "$1");
 }

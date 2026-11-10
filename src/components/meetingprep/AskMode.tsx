@@ -5,10 +5,10 @@
 // no generating, no lists of twenty. One question at a size you can read from
 // arm's length, and a way to get to the next one.
 
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type TouchEvent as ReactTouchEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode, type TouchEvent as ReactTouchEvent } from "react";
 import { ArrowLeft, ArrowRight, ListChecks, Pause, Play, RotateCcw, Star, Timer, X, List, ListOrdered } from "lucide-react";
 import { Button } from "@/components/ui/Button";
-import { stripAskedQuestion, type QuestionItem, type QuestionOption } from "@/lib/meetingprep/types";
+import { stripAskedQuestion, unmark, type QuestionItem, type QuestionOption } from "@/lib/meetingprep/types";
 
 /**
  * Ask mode: the view you have open while the meeting is happening.
@@ -275,7 +275,7 @@ export function AskMode({
   const [editingText, setEditingText] = useState(false);
   const [editingOpening, setEditingOpening] = useState(false);
   // The box last typed in, for the B and I buttons.
-  const lastBox = useRef<HTMLTextAreaElement | null>(null);
+  const lastBox = useRef<HTMLDivElement | null>(null);
   // Left or centred, theirs to choose, kept between visits.
   const [align, setAlign] = useState<"left" | "center">(() => {
     try {
@@ -314,11 +314,8 @@ export function AskMode({
   // With words selected, bigger or smaller goes on those words only, the way
   // a word processor does it; it grew the whole box and not what they had
   // highlighted. With nothing selected, it is the size of all of it.
-  const stepFont = (d: number, el?: HTMLTextAreaElement | null, apply?: (next: string) => void) => {
-    if (el && apply && el.selectionStart !== el.selectionEnd) {
-      sizeWords(el, d, apply);
-      return;
-    }
+  const stepFont = (d: number) => {
+    if (lastBox.current && sizeSelection(lastBox.current, d)) return;
     const i = FONT_STEPS.indexOf(fontPx);
     const n = FONT_STEPS[Math.max(0, Math.min(FONT_STEPS.length - 1, (i < 0 ? 5 : i) + d))];
     setFontPx(n);
@@ -406,7 +403,7 @@ export function AskMode({
     const onKey = (e: KeyboardEvent) => {
       // Typing in a box is typing: Enter is a new line, not Asked it.
       const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT")) return;
+      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable)) return;
       if (e.key === "Escape") {
         closeRef.current();
         return;
@@ -657,7 +654,7 @@ export function AskMode({
                   ? allBackups.map((q, i) => ({
                       key: q.id,
                       label: allBackups.length === 1 ? "Spare" : `S${i + 1}`,
-                      title: `Spare: ${plainText(q.text)}`,
+                      title: `Spare: ${unmark(q.text)}`,
                       start: mainEnd + (slack * i) / allBackups.length,
                       end: mainEnd + (slack * (i + 1)) / allBackups.length,
                       quiet: true,
@@ -676,7 +673,7 @@ export function AskMode({
                 : allBackups.map((q, i) => ({
                     key: q.id,
                     label: allBackups.length === 1 ? "Spare" : `S${i + 1}`,
-                    title: `Spare: ${plainText(q.text)}`,
+                    title: `Spare: ${unmark(q.text)}`,
                     onClick: () => goTo(q),
                   }))
             }
@@ -726,10 +723,8 @@ export function AskMode({
               <div className={`mt-4 ${align === "center" ? "" : "text-left"}`}>
                 {editingOpening && onOpening && (
                   <EditToolbar
-                    onMark={(m) => toggleMark(lastBox.current, m, onOpening)}
-                    onList={(k) => toggleList(lastBox.current, k, onOpening)}
                     px={fontPx}
-                    onStep={(d) => stepFont(d, lastBox.current, onOpening)}
+                    onStep={stepFont}
                     wide={boxW != null}
                     onResetWidth={resetWidth}
                     onDone={() => setEditingOpening(false)}
@@ -739,18 +734,15 @@ export function AskMode({
                 <div className={`relative mt-1.5 leading-relaxed text-ink ${align === "center" ? "mx-auto" : ""}`} style={textStyle}>
                   {editingOpening && onOpening && <WidthGrip center={align === "center"} onDrag={dragWidth} />}
                   {editingOpening && onOpening ? (
-                    <textarea
-                      aria-label="Your opening"
+                    <RichBox
+                      label="Your opening"
                       autoFocus
                       value={opening}
                       placeholder="What you'll say to open, before the panel introduce themselves"
-                      onChange={(e) => onOpening(e.target.value)}
-                      onKeyDown={markKeys((el, m) => toggleMark(el, m, onOpening))}
-                      onFocus={(e) => (lastBox.current = e.currentTarget)}
-                      style={{ fieldSizing: "content" } as CSSProperties}
-                      className={`block min-h-[4lh] w-full resize-none rounded-sm bg-transparent p-0 text-ink outline-2 outline-offset-4 outline-dashed outline-[var(--accent)]/50 focus:outline-[var(--accent)] ${
-                        align === "center" ? "mx-auto text-center" : ""
-                      }`}
+                      onChange={onOpening}
+                      boxRef={lastBox}
+                      center={align === "center"}
+                      className="min-h-[4lh] text-ink"
                     />
                   ) : (
                     paragraphs(opening, false).map((para, i) => (
@@ -863,40 +855,13 @@ export function AskMode({
               // Their exact text once it has a break of its own, so an Enter at the end
               // of a line is not tidied away before the next word is typed.
               const setupEdit = /\n/.test(cur.setup || "") ? cur.setup || "" : sentences(setupShown).join("\n\n");
-              const box = `block w-full resize-none bg-transparent p-0 outline-2 outline-offset-4 outline-dashed outline-[var(--accent)]/50 rounded-sm focus:outline-[var(--accent)] ${
-                align === "center" ? "mx-auto text-center" : ""
-              }`;
-              const grow = { fieldSizing: "content" } as CSSProperties;
               const editing = editingText && onPatch;
-              // Bold or italic on the selected words: the marks go round
-              // them, or come off if they are already there.
-              const mark = (el: HTMLTextAreaElement | null, m: string) => {
-                if (!onPatch) return;
-                toggleMark(el, m, (next) =>
-                  onPatch(cur, el?.getAttribute("aria-label") === "Say first" ? { setup: next } : { text: next }),
-                );
-              };
-              const keys = markKeys(mark);
-              const list = (k: "bullet" | "number") => {
-                if (!onPatch) return;
-                const el = lastBox.current;
-                toggleList(el, k, (next) =>
-                  onPatch(cur, el?.getAttribute("aria-label") === "Say first" ? { setup: next } : { text: next }),
-                );
-              };
               return (
                 <div className={align === "center" ? "text-center" : ""}>
                   {editing && (
                     <EditToolbar
-                      onMark={(m) => mark(lastBox.current, m)}
-                      onList={list}
                       px={fontPx}
-                      onStep={(d) => {
-                        const el = lastBox.current;
-                        stepFont(d, el, (next) =>
-                          onPatch!(cur, el?.getAttribute("aria-label") === "Say first" ? { setup: next } : { text: next }),
-                        );
-                      }}
+                      onStep={stepFont}
                       wide={boxW != null}
                       onResetWidth={resetWidth}
                       onDone={() => setEditingText(false)}
@@ -908,15 +873,15 @@ export function AskMode({
                       <div className={`relative mt-1.5 leading-relaxed text-ink/75 ${align === "center" ? "mx-auto" : ""}`} style={textStyle}>
                         {editing && <WidthGrip center={align === "center"} onDrag={dragWidth} />}
                         {editing ? (
-                          <textarea
-                            aria-label="Say first"
+                          <RichBox
+                            key={`s${cur.id}`}
+                            label="Say first"
                             value={setupEdit}
                             placeholder="Setup, said first (optional)"
-                            onChange={(e) => onPatch!(cur, { setup: e.target.value })}
-                            onKeyDown={keys}
-                            onFocus={(e) => (lastBox.current = e.currentTarget)}
-                            style={grow}
-                            className={`${box} min-h-[3lh] text-ink/75`}
+                            onChange={(t) => onPatch!(cur, { setup: t })}
+                            boxRef={lastBox}
+                            center={align === "center"}
+                            className="min-h-[3lh] text-ink/75"
                           />
                         ) : (
                           paragraphs(setupShown).map((para, i) => (
@@ -940,14 +905,14 @@ export function AskMode({
                     <div className={`relative mt-1.5 leading-relaxed text-ink ${align === "center" ? "mx-auto" : ""}`} style={textStyle}>
                       {editing && <WidthGrip center={align === "center"} onDrag={dragWidth} />}
                       {editing ? (
-                        <textarea
-                          aria-label="Then ask"
+                        <RichBox
+                          key={`t${cur.id}`}
+                          label="Then ask"
                           value={cur.text}
-                          onChange={(e) => onPatch!(cur, { text: e.target.value })}
-                          onKeyDown={keys}
-                          onFocus={(e) => (lastBox.current = e.currentTarget)}
-                          style={grow}
-                          className={`${box} min-h-[2lh] text-ink`}
+                          onChange={(t) => onPatch!(cur, { text: t })}
+                          boxRef={lastBox}
+                          center={align === "center"}
+                          className="min-h-[2lh] text-ink"
                         />
                       ) : (
                         paragraphs(cur.text, false).map((para, i) => (
@@ -1148,10 +1113,10 @@ function AskRow({
       </button>
       <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
         {stripAskedQuestion(q.setup, q.text) && (
-          <span className="mb-0.5 block text-sm leading-snug text-muted">{plainText(stripAskedQuestion(q.setup, q.text))}</span>
+          <span className="mb-0.5 block text-sm leading-snug text-muted">{unmark(stripAskedQuestion(q.setup, q.text))}</span>
         )}
         <span className="block text-base leading-snug text-ink sm:text-lg">
-          {plainText(q.text)}
+          {unmark(q.text)}
         </span>
         {(q.askWho || q.forWhom) && (
           <span className="mt-0.5 block text-sm text-muted">
@@ -1179,65 +1144,6 @@ function AskRow({
  * line break is a new line and a blank line a new paragraph. With none, a
  * setup goes a sentence a paragraph and a question stays whole.
  */
-// Bold or italic on the selected words: the marks go round them, or come off
-// if they are already there.
-function toggleMark(el: HTMLTextAreaElement | null, m: string, apply: (next: string) => void) {
-  if (!el) return;
-  const { selectionStart: a, selectionEnd: b, value } = el;
-  if (a === b) return;
-  const on = value.slice(a - m.length, a) === m && value.slice(b, b + m.length) === m;
-  apply(
-    on
-      ? value.slice(0, a - m.length) + value.slice(a, b) + value.slice(b + m.length)
-      : value.slice(0, a) + m + value.slice(a, b) + m + value.slice(b),
-  );
-  const from = on ? a - m.length : a + m.length;
-  const to = on ? b - m.length : b + m.length;
-  requestAnimationFrame(() => {
-    el.focus();
-    el.setSelectionRange(from, to);
-  });
-}
-
-// Bigger or smaller on the selected words: <big> or <small> round them, a
-// step at a time, and a step back takes the opposite one off first. A
-// selection over several lines is marked line by line, so a mark never
-// spans a line break.
-function sizeWords(el: HTMLTextAreaElement, d: number, apply: (next: string) => void) {
-  const { selectionStart: a, selectionEnd: b, value } = el;
-  if (a === b) return;
-  const undo = d > 0 ? ["<small>", "</small>"] : ["<big>", "</big>"];
-  const add = d > 0 ? ["<big>", "</big>"] : ["<small>", "</small>"];
-  if (value.slice(a - undo[0].length, a) === undo[0] && value.slice(b, b + undo[1].length) === undo[1]) {
-    apply(value.slice(0, a - undo[0].length) + value.slice(a, b) + value.slice(b + undo[1].length));
-    requestAnimationFrame(() => {
-      el.focus();
-      el.setSelectionRange(a - undo[0].length, b - undo[0].length);
-    });
-    return;
-  }
-  const inner = value
-    .slice(a, b)
-    .split("\n")
-    .map((l) => {
-      if (!l.trim()) return l;
-      const lead = l.match(/^\s*(?:(?:[-\u2022]|\d+[.)])\s+)?/)?.[0] ?? "";
-      return lead + add[0] + l.slice(lead.length) + add[1];
-    })
-    .join("\n");
-  apply(value.slice(0, a) + inner + value.slice(b));
-  const one = !value.slice(a, b).includes("\n");
-  requestAnimationFrame(() => {
-    el.focus();
-    if (one) el.setSelectionRange(a + add[0].length, a + inner.length - add[1].length);
-    else el.setSelectionRange(a, a + inner.length);
-  });
-}
-
-/** Their marks taken out, for the list, which shows the words plain. */
-function plainText(t: string) {
-  return t.replace(/<\/?(?:big|small)>/g, "").replace(/\*\*(.+?)\*\*/g, "$1").replace(/\*(.+?)\*/g, "$1");
-}
 
 // The plan across the top: a block for each part, as wide as its time, and a
 // line for now. The line past the end of the block you're on is behind; short
@@ -1322,46 +1228,246 @@ function fmt(min: number) {
   return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
 }
 
-// Ctrl+B and Ctrl+I in a box.
-function markKeys(mark: (el: HTMLTextAreaElement, m: string) => void) {
-  return (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-    if (!(e.ctrlKey || e.metaKey)) return;
-    const k = e.key.toLowerCase();
-    if (k === "b" || k === "i") {
-      e.preventDefault();
-      mark(e.currentTarget, k === "b" ? "**" : "*");
-    }
-  };
-}
 
 const FONT_STEPS = [14, 16, 18, 20, 22, 24, 28, 32, 36, 40];
 
-// Bullets or numbers on the lines the selection touches, or off if they all
-// have them already.
-function toggleList(el: HTMLTextAreaElement | null, kind: "bullet" | "number", apply: (next: string) => void) {
-  if (!el) return;
-  const { selectionStart: a, selectionEnd: b, value } = el;
-  const from = value.lastIndexOf("\n", a - 1) + 1;
-  let to = value.indexOf("\n", b);
-  if (to < 0) to = value.length;
-  const lines = value.slice(from, to).split("\n");
-  const has = kind === "bullet" ? /^[-\u2022]\s+/ : /^\d+[.)]\s+/;
-  const on = lines.every((l) => !l.trim() || has.test(l));
-  let n = 0;
-  const block = lines
-    .map((l) => {
-      if (!l.trim()) return l;
-      const bare = l.replace(/^(?:[-\u2022]|\d+[.)])\s+/, "");
-      if (on) return bare;
-      n += 1;
-      return (kind === "bullet" ? "- " : `${n}. `) + bare;
-    })
-    .join("\n");
-  apply(value.slice(0, from) + block + value.slice(to));
-  requestAnimationFrame(() => {
-    el.focus();
-    el.setSelectionRange(from, from + block.length);
-  });
+
+/**
+ * A box edited the way a notes editor is: bold looks bold, a bigger word is
+ * bigger, bullets are bullets, with no marks to read past. "<big>afternoon</big>"
+ * on screen was hated. What is saved is still the plain text with its marks,
+ * so the rest of meeting prep reads it as before.
+ */
+function RichBox({
+  value,
+  onChange,
+  label,
+  placeholder,
+  boxRef,
+  center,
+  autoFocus,
+  className = "",
+}: {
+  value: string;
+  onChange: (t: string) => void;
+  label: string;
+  placeholder?: string;
+  boxRef: { current: HTMLDivElement | null };
+  center: boolean;
+  autoFocus?: boolean;
+  className?: string;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  // The text this box last sent: a value coming back the same is its own,
+  // and redrawing it would lose the cursor.
+  const sent = useRef<string | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || value === sent.current) return;
+    if (sent.current !== null && document.activeElement === el) return;
+    el.innerHTML = textToHtml(value);
+    sent.current = value;
+  }, [value]);
+  useEffect(() => {
+    if (autoFocus) ref.current?.focus();
+  }, [autoFocus]);
+  return (
+    <div
+      ref={ref}
+      role="textbox"
+      aria-multiline
+      aria-label={label}
+      contentEditable
+      suppressContentEditableWarning
+      data-placeholder={placeholder}
+      onFocus={(e) => {
+        boxRef.current = e.currentTarget;
+        try {
+          document.execCommand("defaultParagraphSeparator", false, "div");
+        } catch {
+          // Older browsers: a new line is a <div> there anyway.
+        }
+      }}
+      onInput={(e) => {
+        const t = htmlToText(e.currentTarget);
+        sent.current = t;
+        onChange(t);
+      }}
+      // Pasted as words only: Word and web pages bring fonts and colours.
+      onPaste={(e) => {
+        e.preventDefault();
+        document.execCommand("insertText", false, e.clipboardData.getData("text/plain"));
+      }}
+      className={`block w-full whitespace-pre-wrap break-words rounded-sm p-0 outline-2 outline-offset-4 outline-dashed outline-[var(--accent)]/50 focus:outline-[var(--accent)] empty:before:text-muted empty:before:content-[attr(data-placeholder)] [&_b]:font-semibold [&_strong]:font-semibold [&_ol]:list-decimal [&_ol]:pl-[1.2em] [&_ol]:text-left [&_ul]:list-disc [&_ul]:pl-[1.2em] [&_ul]:text-left ${
+        center ? "mx-auto text-center [&_ol]:mx-auto [&_ol]:w-fit [&_ul]:mx-auto [&_ul]:w-fit" : "text-left"
+      } ${className}`}
+    />
+  );
+}
+
+const SIZE_SPAN = { "1": "1.25em", "-1": "0.8em" } as const;
+
+/** The saved text, drawn as formatting for the box. */
+function textToHtml(t: string): string {
+  const esc = (x: string) => x.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const inline = (x: string) =>
+    esc(x)
+      .replace(/&lt;big&gt;/g, `<span data-s="1" style="font-size:${SIZE_SPAN["1"]}">`)
+      .replace(/&lt;small&gt;/g, `<span data-s="-1" style="font-size:${SIZE_SPAN["-1"]}">`)
+      .replace(/&lt;\/(?:big|small)&gt;/g, "</span>")
+      .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+      .replace(/\*(.+?)\*/g, "<i>$1</i>");
+  const out: string[] = [];
+  let list: "ul" | "ol" | null = null;
+  const close = () => {
+    if (list) out.push(`</${list}>`);
+    list = null;
+  };
+  for (const line of t.split("\n")) {
+    const m = line.match(/^\s*(?:([-\u2022])|\d+[.)])\s+(.*)$/);
+    if (m) {
+      const kind = m[1] ? "ul" : "ol";
+      if (list !== kind) {
+        close();
+        out.push(`<${kind}>`);
+        list = kind;
+      }
+      out.push(`<li>${inline(m[2]) || "<br>"}</li>`);
+    } else {
+      close();
+      out.push(`<div>${inline(line) || "<br>"}</div>`);
+    }
+  }
+  close();
+  return out.join("");
+}
+
+/** The box's formatting, back to the saved text with its marks. */
+function htmlToText(root: HTMLElement): string {
+  const BLOCK = /^(?:DIV|P|LI|UL|OL)$/;
+  const inline = (n: Node): string => {
+    if (n.nodeType === Node.TEXT_NODE) return (n.textContent || "").replace(/\u00a0/g, " ");
+    if (!(n instanceof HTMLElement)) return "";
+    if (n.tagName === "BR") return "\n";
+    const inner = Array.from(n.childNodes).map(inline).join("");
+    // Spaces stay outside the marks: "** word**" is not bold.
+    const wrap = (a: string, b: string) => {
+      const m = inner.match(/^(\s*)([\s\S]*?)(\s*)$/)!;
+      return m[2] ? m[1] + a + m[2] + b + m[3] : inner;
+    };
+    const w = n.style.fontWeight;
+    if (n.tagName === "B" || n.tagName === "STRONG" || w === "bold" || Number(w) >= 600) return wrap("**", "**");
+    if (n.tagName === "I" || n.tagName === "EM" || n.style.fontStyle === "italic") return wrap("*", "*");
+    if (n.dataset.s === "1") return wrap("<big>", "</big>");
+    if (n.dataset.s === "-1") return wrap("<small>", "</small>");
+    if (BLOCK.test(n.tagName)) return `\n${inner}\n`;
+    return inner;
+  };
+  const lines: string[] = [];
+  let run = "";
+  let open = false;
+  const flush = () => {
+    if (open) lines.push(...run.split("\n"));
+    run = "";
+    open = false;
+  };
+  const block = (n: Node) => {
+    if (n instanceof HTMLElement && (n.tagName === "UL" || n.tagName === "OL")) {
+      flush();
+      let i = 0;
+      for (const li of Array.from(n.children)) {
+        if (li.tagName !== "LI") continue;
+        i += 1;
+        lines.push((n.tagName === "UL" ? "- " : `${i}. `) + inline(li).replace(/\s*\n\s*/g, " ").trim());
+      }
+      return;
+    }
+    if (n instanceof HTMLElement && BLOCK.test(n.tagName)) {
+      flush();
+      if (n.querySelector("div, p, ul, ol")) {
+        n.childNodes.forEach(block);
+        flush();
+        return;
+      }
+      const inner = Array.from(n.childNodes).map(inline).join("");
+      lines.push(...inner.replace(/\n$/, "").split("\n"));
+      return;
+    }
+    if (n instanceof HTMLElement && n.tagName === "BR") {
+      lines.push(run);
+      run = "";
+      open = false;
+      return;
+    }
+    run += inline(n);
+    open = true;
+  };
+  root.childNodes.forEach(block);
+  flush();
+  return lines
+    .map((l) => l.replace(/\s+$/, ""))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/^\n+|\n+$/g, "");
+}
+
+/**
+ * Bigger or smaller on the words selected in a box, a step at a time; the
+ * other button takes a step back off. False with nothing selected there, for
+ * the size of all of it instead.
+ */
+function sizeSelection(box: HTMLElement, d: number): boolean {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount || sel.isCollapsed) return false;
+  const range = sel.getRangeAt(0);
+  if (!box.contains(range.commonAncestorContainer)) return false;
+  const pieces: { node: Text; a: number; b: number }[] = [];
+  const walk = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+  for (let n = walk.nextNode() as Text | null; n; n = walk.nextNode() as Text | null) {
+    if (!range.intersectsNode(n)) continue;
+    const a = n === range.startContainer ? range.startOffset : 0;
+    const b = n === range.endContainer ? range.endOffset : n.length;
+    if (b > a && n.data.slice(a, b).trim()) pieces.push({ node: n, a, b });
+  }
+  if (!pieces.length) return false;
+  const back = String(-d);
+  const wrapped = (p: (typeof pieces)[number]) => {
+    const up = p.node.parentElement;
+    return up && up.dataset.s === back && up.childNodes.length === 1 && p.a === 0 && p.b === p.node.length ? up : null;
+  };
+  let first: Node;
+  let last: Node;
+  if (pieces.every(wrapped)) {
+    // A step back: the opposite size comes off.
+    const nodes = pieces.map((p) => {
+      const up = wrapped(p)!;
+      up.replaceWith(p.node);
+      return p.node;
+    });
+    first = nodes[0];
+    last = nodes[nodes.length - 1];
+  } else {
+    const spans = pieces.map(({ node, a, b }) => {
+      let t = node;
+      if (b < t.length) t.splitText(b);
+      if (a > 0) t = t.splitText(a);
+      const span = document.createElement("span");
+      span.dataset.s = String(d);
+      span.style.fontSize = d > 0 ? SIZE_SPAN["1"] : SIZE_SPAN["-1"];
+      t.replaceWith(span);
+      span.appendChild(t);
+      return span;
+    });
+    first = spans[0];
+    last = spans[spans.length - 1];
+  }
+  const r = document.createRange();
+  r.setStartBefore(first);
+  r.setEndAfter(last);
+  sel.removeAllRanges();
+  sel.addRange(r);
+  box.dispatchEvent(new Event("input", { bubbles: true }));
+  return true;
 }
 
 // Smaller and bigger, with the size between.
@@ -1383,16 +1489,12 @@ function FontStepper({ px, onStep }: { px: number; onStep: (d: number) => void }
 // The formatting bar along the top of a box being edited: size, bold,
 // italics, lists, and Done. It stays in view while a long box scrolls.
 function EditToolbar({
-  onMark,
-  onList,
   px,
   onStep,
   wide,
   onResetWidth,
   onDone,
 }: {
-  onMark: (m: string) => void;
-  onList: (k: "bullet" | "number") => void;
   px: number;
   onStep: (d: number) => void;
   wide: boolean;
@@ -1402,21 +1504,24 @@ function EditToolbar({
   const btn = "grid h-7 min-w-7 place-items-center rounded-md px-1.5 text-sm text-ink hover:bg-canvas";
   // Keep the words selected: a click would take the focus first.
   const keepSel = (e: { preventDefault: () => void }) => e.preventDefault();
+  // On the words selected in the box being edited, the way a notes editor
+  // does it: what you see while typing is what shows when presenting.
+  const cmd = (c: string) => document.execCommand(c);
   return (
     <div className="sticky top-2 z-10 mx-auto mb-4 flex w-fit max-w-full flex-wrap items-center gap-1 rounded-xl border border-border bg-surface px-1.5 py-1 text-left shadow-sm">
       <FontStepper px={px} onStep={onStep} />
       <span className="mx-0.5 h-5 w-px bg-border" aria-hidden />
-      <button type="button" title="Bold (Ctrl+B)" aria-label="Bold (Ctrl+B)" onMouseDown={keepSel} onClick={() => onMark("**")} className={`${btn} font-bold`}>
+      <button type="button" title="Bold (Ctrl+B)" aria-label="Bold (Ctrl+B)" onMouseDown={keepSel} onClick={() => cmd("bold")} className={`${btn} font-bold`}>
         B
       </button>
-      <button type="button" title="Italic (Ctrl+I)" aria-label="Italic (Ctrl+I)" onMouseDown={keepSel} onClick={() => onMark("*")} className={`${btn} italic`}>
+      <button type="button" title="Italic (Ctrl+I)" aria-label="Italic (Ctrl+I)" onMouseDown={keepSel} onClick={() => cmd("italic")} className={`${btn} italic`}>
         I
       </button>
       <span className="mx-0.5 h-5 w-px bg-border" aria-hidden />
-      <button type="button" title="Bullets" aria-label="Bullets" onMouseDown={keepSel} onClick={() => onList("bullet")} className={btn}>
+      <button type="button" title="Bullets" aria-label="Bullets" onMouseDown={keepSel} onClick={() => cmd("insertUnorderedList")} className={btn}>
         <List size={16} />
       </button>
-      <button type="button" title="Numbered list" aria-label="Numbered list" onMouseDown={keepSel} onClick={() => onList("number")} className={btn}>
+      <button type="button" title="Numbered list" aria-label="Numbered list" onMouseDown={keepSel} onClick={() => cmd("insertOrderedList")} className={btn}>
         <ListOrdered size={16} />
       </button>
       {wide && (
