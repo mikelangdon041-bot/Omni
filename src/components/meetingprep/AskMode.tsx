@@ -5,8 +5,8 @@
 // no generating, no lists of twenty. One question at a size you can read from
 // arm's length, and a way to get to the next one.
 
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
-import { ArrowLeft, ArrowRight, ListChecks, Pause, Play, RotateCcw, Star, Timer, X } from "lucide-react";
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { ArrowLeft, ArrowRight, ListChecks, Pause, Play, RotateCcw, Star, Timer, X, List, ListOrdered } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { stripAskedQuestion, type QuestionItem, type QuestionOption } from "@/lib/meetingprep/types";
 
@@ -284,32 +284,49 @@ export function AskMode({
       return "center";
     }
   });
-  // Text size and width, for fitting more on a line. Kept between visits.
-  const [textSize, setTextSize] = useState<"s" | "m" | "l">(() => {
+  // Text size and the width of the text, for fitting more on a line: a size
+  // stepped up and down, and a width dragged from the box's edge. Both apply
+  // to the screen as well as the box, and are kept between visits.
+  const [fontPx, setFontPx] = useState<number>(() => {
     try {
-      const v = localStorage.getItem("mp:ask-size");
-      return v === "s" || v === "l" ? v : "m";
+      const v = Number(localStorage.getItem("mp:ask-font"));
+      return FONT_STEPS.includes(v) ? v : 24;
     } catch {
-      return "m";
+      return 24;
     }
   });
-  const [wide, setWide] = useState(() => {
+  const [boxW, setBoxW] = useState<number | null>(() => {
     try {
-      return localStorage.getItem("mp:ask-wide") === "1";
+      const v = Number(localStorage.getItem("mp:ask-width"));
+      return v >= 240 ? v : null;
     } catch {
-      return false;
+      return null;
     }
   });
-  const keep = (k: string, v: string) => {
+  const keep = (k: string, v: string | null) => {
     try {
-      localStorage.setItem(k, v);
+      if (v == null) localStorage.removeItem(k);
+      else localStorage.setItem(k, v);
     } catch {
       // Only a preference.
     }
   };
-  const sizeCls = textSize === "s" ? "text-lg sm:text-xl" : textSize === "l" ? "text-2xl sm:text-3xl" : "text-xl sm:text-2xl";
-  const textW = wide ? "max-w-none" : "max-w-2xl";
-  const pageW = wide ? "max-w-6xl" : "max-w-3xl";
+  const stepFont = (d: number) => {
+    const i = FONT_STEPS.indexOf(fontPx);
+    const n = FONT_STEPS[Math.max(0, Math.min(FONT_STEPS.length - 1, (i < 0 ? 5 : i) + d))];
+    setFontPx(n);
+    keep("mp:ask-font", String(n));
+  };
+  const dragWidth = (w: number) => {
+    setBoxW(w);
+    keep("mp:ask-width", String(w));
+  };
+  const resetWidth = () => {
+    setBoxW(null);
+    keep("mp:ask-width", null);
+  };
+  const textStyle: CSSProperties = { fontSize: fontPx, maxWidth: boxW ?? 672 };
+  const pageStyle: CSSProperties = { maxWidth: Math.max(768, (boxW ?? 672) + 48) };
   const setAlignTo = (a: "left" | "center") => {
     setAlign(a);
     try {
@@ -355,55 +372,15 @@ export function AskMode({
     return () => window.removeEventListener("keydown", onKey);
   }, [mode, flow.length, here, hasIntro, onClose]);
 
-  // Text size and width: under More, and beside B and I while editing, where
-  // they are looked for. Under More alone they were not found.
+  // Text size, and putting the width back, for More.
   const viewControls = (
     <>
-    <div className="inline-flex items-center rounded-lg border border-border bg-canvas p-0.5" aria-label="Text size">
-      {(
-        [
-          ["s", "Smaller text", "text-[11px]"],
-          ["m", "Medium text", "text-[13px]"],
-          ["l", "Larger text", "text-[15px]"],
-        ] as const
-      ).map(([k, lbl, cls]) => (
-        <button
-          key={k}
-          type="button"
-          title={lbl}
-          aria-label={lbl}
-          aria-pressed={textSize === k}
-          onClick={() => {
-            setTextSize(k);
-            keep("mp:ask-size", k);
-          }}
-          className={`rounded-md px-2 py-0.5 font-semibold leading-none ${cls} ${textSize === k ? "bg-surface text-ink shadow-sm" : "text-muted hover:text-ink"}`}
-        >
-          A
+      <FontStepper px={fontPx} onStep={stepFont} />
+      {boxW != null && (
+        <button type="button" onClick={resetWidth} className="rounded-lg border border-border px-2 py-0.5 text-muted hover:text-ink">
+          Normal width
         </button>
-      ))}
-    </div>
-    <div className="inline-flex rounded-lg border border-border bg-canvas p-0.5">
-      {(
-        [
-          [false, "Normal width"],
-          [true, "Wide"],
-        ] as const
-      ).map(([k, lbl]) => (
-        <button
-          key={lbl}
-          type="button"
-          aria-pressed={wide === k}
-          onClick={() => {
-            setWide(k);
-            keep("mp:ask-wide", k ? "1" : "0");
-          }}
-          className={`rounded-md px-2 py-0.5 ${wide === k ? "bg-surface font-medium text-ink shadow-sm" : "text-muted hover:text-ink"}`}
-        >
-          {lbl}
-        </button>
-      ))}
-    </div>
+      )}
     </>
   );
 
@@ -655,15 +632,27 @@ export function AskMode({
         ) : onIntro ? (
           // Introductions are a step of their own, before question 1, so the
           // clock knows when the questions really started.
-          <div className={`mx-auto flex min-h-full w-full ${pageW} flex-col justify-center px-5 py-8 text-center`}>
+          <div className="mx-auto flex min-h-full w-full flex-col justify-center px-5 py-8 text-center" style={pageStyle}>
             <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">Before the questions</p>
             <h2 className="mt-2 text-2xl font-medium text-ink">Opening and introductions</h2>
             {/* Their own words to open with, laid out and edited the way the
                 questions are. */}
             {(opening.trim() || editingOpening) && (
               <div className={`mt-6 ${align === "center" ? "" : "text-left"}`}>
+                {editingOpening && onOpening && (
+                  <EditToolbar
+                    onMark={(m) => toggleMark(lastBox.current, m, onOpening)}
+                    onList={(k) => toggleList(lastBox.current, k, onOpening)}
+                    px={fontPx}
+                    onStep={stepFont}
+                    wide={boxW != null}
+                    onResetWidth={resetWidth}
+                    onDone={() => setEditingOpening(false)}
+                  />
+                )}
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Say first</p>
-                <div className={`mt-1.5 ${textW} ${sizeCls} leading-relaxed text-ink ${align === "center" ? "mx-auto" : ""}`}>
+                <div className={`relative mt-1.5 leading-relaxed text-ink ${align === "center" ? "mx-auto" : ""}`} style={textStyle}>
+                  {editingOpening && onOpening && <WidthGrip center={align === "center"} onDrag={dragWidth} />}
                   {editingOpening && onOpening ? (
                     <textarea
                       aria-label="Your opening"
@@ -674,7 +663,7 @@ export function AskMode({
                       onKeyDown={markKeys((el, m) => toggleMark(el, m, onOpening))}
                       onFocus={(e) => (lastBox.current = e.currentTarget)}
                       style={{ fieldSizing: "content" } as CSSProperties}
-                      className={`block min-h-[4lh] w-full ${textW} resize-none rounded-sm bg-transparent p-0 text-ink outline-2 outline-offset-4 outline-dashed outline-[var(--accent)]/50 focus:outline-[var(--accent)] ${
+                      className={`block min-h-[4lh] w-full resize-none rounded-sm bg-transparent p-0 text-ink outline-2 outline-offset-4 outline-dashed outline-[var(--accent)]/50 focus:outline-[var(--accent)] ${
                         align === "center" ? "mx-auto text-center" : ""
                       }`}
                     />
@@ -686,25 +675,13 @@ export function AskMode({
                             &nbsp;
                           </span>
                         )}
-                        {para.map((line, j) => (
-                          <span key={j} className="block">
-                            <Spoken text={line} />
-                          </span>
-                        ))}
+                        <SpokenLines lines={para} />
                       </p>
                     ))
                   )}
                 </div>
                 {editingOpening && onOpening && (
-                  <>
-                    <MarkButtons onMark={(m) => toggleMark(lastBox.current, m, onOpening)} extra={viewControls} />
-                    <p className="mt-2 text-center text-xs text-muted">
-                      Enter for a new line, a blank line for a gap.{" "}
-                      <button type="button" onClick={() => setEditingOpening(false)} className="font-medium text-[var(--accent)] hover:underline">
-                        Done
-                      </button>
-                    </p>
-                  </>
+                  <p className="mt-3 text-center text-xs text-muted">Drag the handle on the right edge to make the box wider or narrower.</p>
                 )}
               </div>
             )}
@@ -733,7 +710,7 @@ export function AskMode({
             </p>
           </div>
         ) : mode === "one" ? (
-          <div className={`mx-auto flex min-h-full w-full ${pageW} flex-col justify-center px-5 py-8`}>
+          <div className="mx-auto flex min-h-full w-full flex-col justify-center px-5 py-8" style={pageStyle}>
             <p className={`text-xs text-muted ${align === "center" ? "text-center" : ""}`}>
               {cur.backup ? "In reserve" : `${here + 1} of ${main.length}`}
               {cur.askWho ? ` · ${asks(cur).join(", ")}` : cur.forWhom ? ` · ${cur.forWhom}` : ""}
@@ -797,7 +774,7 @@ export function AskMode({
               // Their exact text once it has a break of its own, so an Enter at the end
               // of a line is not tidied away before the next word is typed.
               const setupEdit = /\n/.test(cur.setup || "") ? cur.setup || "" : sentences(setupShown).join("\n\n");
-              const box = `block w-full ${textW} resize-none bg-transparent p-0 outline-2 outline-offset-4 outline-dashed outline-[var(--accent)]/50 rounded-sm focus:outline-[var(--accent)] ${
+              const box = `block w-full resize-none bg-transparent p-0 outline-2 outline-offset-4 outline-dashed outline-[var(--accent)]/50 rounded-sm focus:outline-[var(--accent)] ${
                 align === "center" ? "mx-auto text-center" : ""
               }`;
               const grow = { fieldSizing: "content" } as CSSProperties;
@@ -811,12 +788,31 @@ export function AskMode({
                 );
               };
               const keys = markKeys(mark);
+              const list = (k: "bullet" | "number") => {
+                if (!onPatch) return;
+                const el = lastBox.current;
+                toggleList(el, k, (next) =>
+                  onPatch(cur, el?.getAttribute("aria-label") === "Say first" ? { setup: next } : { text: next }),
+                );
+              };
               return (
                 <div className={align === "center" ? "text-center" : ""}>
+                  {editing && (
+                    <EditToolbar
+                      onMark={(m) => mark(lastBox.current, m)}
+                      onList={list}
+                      px={fontPx}
+                      onStep={stepFont}
+                      wide={boxW != null}
+                      onResetWidth={resetWidth}
+                      onDone={() => setEditingText(false)}
+                    />
+                  )}
                   {(setupShown || editing) && (
                     <div className="mt-4">
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Say first</p>
-                      <div className={`mt-1.5 ${textW} ${sizeCls} leading-relaxed text-ink/75 ${align === "center" ? "mx-auto" : ""}`}>
+                      <div className={`relative mt-1.5 leading-relaxed text-ink/75 ${align === "center" ? "mx-auto" : ""}`} style={textStyle}>
+                        {editing && <WidthGrip center={align === "center"} onDrag={dragWidth} />}
                         {editing ? (
                           <textarea
                             aria-label="Say first"
@@ -836,11 +832,7 @@ export function AskMode({
                                   &nbsp;
                                 </span>
                               )}
-                              {para.map((line, j) => (
-                                <span key={j} className="block">
-                                  <Spoken text={line} />
-                                </span>
-                              ))}
+                              <SpokenLines lines={para} />
                             </p>
                           ))
                         )}
@@ -851,7 +843,8 @@ export function AskMode({
                     {(setupShown || editing) && (
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">Then ask</p>
                     )}
-                    <div className={`mt-1.5 ${textW} ${sizeCls} leading-relaxed text-ink ${align === "center" ? "mx-auto" : ""}`}>
+                    <div className={`relative mt-1.5 leading-relaxed text-ink ${align === "center" ? "mx-auto" : ""}`} style={textStyle}>
+                      {editing && <WidthGrip center={align === "center"} onDrag={dragWidth} />}
                       {editing ? (
                         <textarea
                           aria-label="Then ask"
@@ -870,24 +863,14 @@ export function AskMode({
                                 &nbsp;
                               </span>
                             )}
-                            {para.map((line, j) => (
-                              <span key={j} className="block">
-                                <Spoken text={line} names={i === 0 && j === 0 ? panel : []} />
-                              </span>
-                            ))}
+                            <SpokenLines lines={para} names={i === 0 ? panel : []} />
                           </p>
                         ))
                       )}
                     </div>
                   </div>
-                  {editing && <MarkButtons onMark={(m) => mark(lastBox.current, m)} extra={viewControls} />}
                   {editing && (
-                    <p className="mt-2 text-xs text-muted">
-                      Type straight into it. Enter for a new line, a blank line for a gap. Bold, italics and numbers show when you&apos;re done.{" "}
-                      <button type="button" onClick={() => setEditingText(false)} className="font-medium text-[var(--accent)] hover:underline">
-                        Done
-                      </button>
-                    </p>
+                    <p className="mt-3 text-xs text-muted">Drag the handle on the right edge to make the boxes wider or narrower.</p>
                   )}
                 </div>
               );
@@ -1193,32 +1176,189 @@ function markKeys(mark: (el: HTMLTextAreaElement, m: string) => void) {
   };
 }
 
-// The B and I buttons under a box being edited.
-function MarkButtons({ onMark, extra }: { onMark: (m: string) => void; extra?: ReactNode }) {
+const FONT_STEPS = [14, 16, 18, 20, 22, 24, 28, 32, 36, 40];
+
+// Bullets or numbers on the lines the selection touches, or off if they all
+// have them already.
+function toggleList(el: HTMLTextAreaElement | null, kind: "bullet" | "number", apply: (next: string) => void) {
+  if (!el) return;
+  const { selectionStart: a, selectionEnd: b, value } = el;
+  const from = value.lastIndexOf("\n", a - 1) + 1;
+  let to = value.indexOf("\n", b);
+  if (to < 0) to = value.length;
+  const lines = value.slice(from, to).split("\n");
+  const has = kind === "bullet" ? /^[-\u2022]\s+/ : /^\d+[.)]\s+/;
+  const on = lines.every((l) => !l.trim() || has.test(l));
+  let n = 0;
+  const block = lines
+    .map((l) => {
+      if (!l.trim()) return l;
+      const bare = l.replace(/^(?:[-\u2022]|\d+[.)])\s+/, "");
+      if (on) return bare;
+      n += 1;
+      return (kind === "bullet" ? "- " : `${n}. `) + bare;
+    })
+    .join("\n");
+  apply(value.slice(0, from) + block + value.slice(to));
+  requestAnimationFrame(() => {
+    el.focus();
+    el.setSelectionRange(from, from + block.length);
+  });
+}
+
+// Smaller and bigger, with the size between.
+function FontStepper({ px, onStep }: { px: number; onStep: (d: number) => void }) {
+  const btn = "h-7 rounded-md px-2 text-ink hover:bg-canvas disabled:opacity-30";
   return (
-    <div className="mt-3 flex flex-wrap items-center justify-center gap-1.5">
-      {(
-        [
-          ["**", "B", "font-bold", "Bold (Ctrl+B)"],
-          ["*", "I", "italic", "Italic (Ctrl+I)"],
-        ] as const
-      ).map(([m, label, cls, title]) => (
-        <button
-          key={m}
-          type="button"
-          title={title}
-          aria-label={title}
-          // Keep the words selected: a click would take the focus first.
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => onMark(m)}
-          className={`h-7 w-7 rounded-md border border-border bg-surface text-sm text-ink hover:bg-canvas ${cls}`}
-        >
-          {label}
-        </button>
-      ))}
-      <span className="text-xs text-muted">Select words, then B or I.</span>
-      {extra && <span className="ml-2 inline-flex flex-wrap items-center gap-1.5 text-xs">{extra}</span>}
+    <span className="inline-flex items-center rounded-lg border border-border bg-surface" aria-label="Text size">
+      <button type="button" title="Smaller text" aria-label="Smaller text" disabled={px <= FONT_STEPS[0]} onMouseDown={(e) => e.preventDefault()} onClick={() => onStep(-1)} className={`${btn} text-xs`}>
+        A&minus;
+      </button>
+      <span className="min-w-[2.2em] text-center text-xs tabular-nums text-muted">{px}</span>
+      <button type="button" title="Bigger text" aria-label="Bigger text" disabled={px >= FONT_STEPS[FONT_STEPS.length - 1]} onMouseDown={(e) => e.preventDefault()} onClick={() => onStep(1)} className={`${btn} text-sm font-semibold`}>
+        A+
+      </button>
+    </span>
+  );
+}
+
+// The formatting bar along the top of a box being edited: size, bold,
+// italics, lists, and Done. It stays in view while a long box scrolls.
+function EditToolbar({
+  onMark,
+  onList,
+  px,
+  onStep,
+  wide,
+  onResetWidth,
+  onDone,
+}: {
+  onMark: (m: string) => void;
+  onList: (k: "bullet" | "number") => void;
+  px: number;
+  onStep: (d: number) => void;
+  wide: boolean;
+  onResetWidth: () => void;
+  onDone: () => void;
+}) {
+  const btn = "grid h-7 min-w-7 place-items-center rounded-md px-1.5 text-sm text-ink hover:bg-canvas";
+  // Keep the words selected: a click would take the focus first.
+  const keepSel = (e: { preventDefault: () => void }) => e.preventDefault();
+  return (
+    <div className="sticky top-2 z-10 mx-auto mb-4 flex w-fit max-w-full flex-wrap items-center gap-1 rounded-xl border border-border bg-surface px-1.5 py-1 text-left shadow-sm">
+      <FontStepper px={px} onStep={onStep} />
+      <span className="mx-0.5 h-5 w-px bg-border" aria-hidden />
+      <button type="button" title="Bold (Ctrl+B)" aria-label="Bold (Ctrl+B)" onMouseDown={keepSel} onClick={() => onMark("**")} className={`${btn} font-bold`}>
+        B
+      </button>
+      <button type="button" title="Italic (Ctrl+I)" aria-label="Italic (Ctrl+I)" onMouseDown={keepSel} onClick={() => onMark("*")} className={`${btn} italic`}>
+        I
+      </button>
+      <span className="mx-0.5 h-5 w-px bg-border" aria-hidden />
+      <button type="button" title="Bullets" aria-label="Bullets" onMouseDown={keepSel} onClick={() => onList("bullet")} className={btn}>
+        <List size={16} />
+      </button>
+      <button type="button" title="Numbered list" aria-label="Numbered list" onMouseDown={keepSel} onClick={() => onList("number")} className={btn}>
+        <ListOrdered size={16} />
+      </button>
+      {wide && (
+        <>
+          <span className="mx-0.5 h-5 w-px bg-border" aria-hidden />
+          <button type="button" onClick={onResetWidth} className="h-7 rounded-md px-2 text-xs text-muted hover:bg-canvas hover:text-ink">
+            Normal width
+          </button>
+        </>
+      )}
+      <span className="mx-0.5 h-5 w-px bg-border" aria-hidden />
+      <button type="button" onClick={onDone} className="h-7 rounded-md bg-[var(--accent)] px-3 text-xs font-semibold text-[var(--accent-fg)] hover:bg-[var(--accent-hover)]">
+        Done
+      </button>
     </div>
+  );
+}
+
+// A handle on the right edge of a box, dragged to make it wider or
+// narrower. Centred text grows both ways, so it moves twice as far.
+function WidthGrip({ center, onDrag }: { center: boolean; onDrag: (w: number) => void }) {
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Drag to make the box wider or narrower"
+      title="Drag to make the box wider or narrower"
+      onPointerDown={(e) => {
+        const box = e.currentTarget.parentElement;
+        if (!box) return;
+        e.preventDefault();
+        const x0 = e.clientX;
+        const w0 = box.getBoundingClientRect().width;
+        const move = (ev: PointerEvent) =>
+          onDrag(Math.round(Math.max(240, Math.min(window.innerWidth - 32, w0 + (ev.clientX - x0) * (center ? 2 : 1)))));
+        const up = () => {
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", up);
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+      }}
+      className="absolute -right-5 top-1/2 z-10 flex h-14 w-3 -translate-y-1/2 cursor-ew-resize touch-none items-center justify-center rounded-full bg-[var(--accent)]/60 hover:bg-[var(--accent)]"
+    >
+      <span className="h-6 w-px bg-white/80" aria-hidden />
+    </div>
+  );
+}
+
+const LIST_LINE = /^(?:[-•]|\d+[.)])\s+/;
+
+// The lines of a paragraph. A run of bullets or numbers is kept together as
+// one list, left-aligned within itself, so centred text does not leave each
+// bullet at a different place. Names colour only the first line.
+function SpokenLines({ lines, names = [] }: { lines: string[]; names?: string[] }) {
+  const runs: { list: boolean; lines: string[]; at: number }[] = [];
+  lines.forEach((l, i) => {
+    const list = LIST_LINE.test(l);
+    const last = runs[runs.length - 1];
+    if (last && last.list === list && list) last.lines.push(l);
+    else runs.push({ list, lines: [l], at: i });
+  });
+  return (
+    <>
+      {runs.map((r) =>
+        r.list ? (
+          <span key={r.at} className="block">
+            <span className="inline-block max-w-full text-left">
+              {r.lines.map((l, j) => (
+                <SpokenLine key={j} text={l} names={r.at + j === 0 ? names : []} />
+              ))}
+            </span>
+          </span>
+        ) : (
+          <SpokenLine key={r.at} text={r.lines[0]} names={r.at === 0 ? names : []} />
+        ),
+      )}
+    </>
+  );
+}
+
+// One line said: a bullet or a number hangs, the words wrap beside it.
+function SpokenLine({ text, names }: { text: string; names?: string[] }) {
+  const m = text.match(/^(?:[-\u2022]|(\d+[.)]))\s+(.+)$/);
+  if (!m) {
+    return (
+      <span className="block">
+        <Spoken text={text} names={names} />
+      </span>
+    );
+  }
+  return (
+    <span className="block">
+      <span className="flex max-w-full gap-[0.5em] text-left">
+        <span className="shrink-0">{m[1] ?? "\u2022"}</span>
+        <span className="min-w-0">
+          <Spoken text={m[2]} names={names} />
+        </span>
+      </span>
+    </span>
   );
 }
 
