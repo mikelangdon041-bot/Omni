@@ -5,7 +5,7 @@
 // no generating, no lists of twenty. One question at a size you can read from
 // arm's length, and a way to get to the next one.
 
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, ListChecks, Pause, Play, RotateCcw, Star, Timer, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { stripAskedQuestion, type QuestionItem, type QuestionOption } from "@/lib/meetingprep/types";
@@ -355,6 +355,58 @@ export function AskMode({
     return () => window.removeEventListener("keydown", onKey);
   }, [mode, flow.length, here, hasIntro, onClose]);
 
+  // Text size and width: under More, and beside B and I while editing, where
+  // they are looked for. Under More alone they were not found.
+  const viewControls = (
+    <>
+    <div className="inline-flex items-center rounded-lg border border-border bg-canvas p-0.5" aria-label="Text size">
+      {(
+        [
+          ["s", "Smaller text", "text-[11px]"],
+          ["m", "Medium text", "text-[13px]"],
+          ["l", "Larger text", "text-[15px]"],
+        ] as const
+      ).map(([k, lbl, cls]) => (
+        <button
+          key={k}
+          type="button"
+          title={lbl}
+          aria-label={lbl}
+          aria-pressed={textSize === k}
+          onClick={() => {
+            setTextSize(k);
+            keep("mp:ask-size", k);
+          }}
+          className={`rounded-md px-2 py-0.5 font-semibold leading-none ${cls} ${textSize === k ? "bg-surface text-ink shadow-sm" : "text-muted hover:text-ink"}`}
+        >
+          A
+        </button>
+      ))}
+    </div>
+    <div className="inline-flex rounded-lg border border-border bg-canvas p-0.5">
+      {(
+        [
+          [false, "Normal width"],
+          [true, "Wide"],
+        ] as const
+      ).map(([k, lbl]) => (
+        <button
+          key={lbl}
+          type="button"
+          aria-pressed={wide === k}
+          onClick={() => {
+            setWide(k);
+            keep("mp:ask-wide", k ? "1" : "0");
+          }}
+          className={`rounded-md px-2 py-0.5 ${wide === k ? "bg-surface font-medium text-ink shadow-sm" : "text-muted hover:text-ink"}`}
+        >
+          {lbl}
+        </button>
+      ))}
+    </div>
+    </>
+  );
+
   return (
     <div
       className={`fixed inset-0 z-50 flex flex-col transition-colors duration-700 ${
@@ -513,51 +565,7 @@ export function AskMode({
                   </button>
                 ))}
               </div>
-              <div className="inline-flex items-center rounded-lg border border-border bg-canvas p-0.5" aria-label="Text size">
-                {(
-                  [
-                    ["s", "Smaller text", "text-[11px]"],
-                    ["m", "Medium text", "text-[13px]"],
-                    ["l", "Larger text", "text-[15px]"],
-                  ] as const
-                ).map(([k, lbl, cls]) => (
-                  <button
-                    key={k}
-                    type="button"
-                    title={lbl}
-                    aria-label={lbl}
-                    aria-pressed={textSize === k}
-                    onClick={() => {
-                      setTextSize(k);
-                      keep("mp:ask-size", k);
-                    }}
-                    className={`rounded-md px-2 py-0.5 font-semibold leading-none ${cls} ${textSize === k ? "bg-surface text-ink shadow-sm" : "text-muted hover:text-ink"}`}
-                  >
-                    A
-                  </button>
-                ))}
-              </div>
-              <div className="inline-flex rounded-lg border border-border bg-canvas p-0.5">
-                {(
-                  [
-                    [false, "Normal width"],
-                    [true, "Wide"],
-                  ] as const
-                ).map(([k, lbl]) => (
-                  <button
-                    key={lbl}
-                    type="button"
-                    aria-pressed={wide === k}
-                    onClick={() => {
-                      setWide(k);
-                      keep("mp:ask-wide", k ? "1" : "0");
-                    }}
-                    className={`rounded-md px-2 py-0.5 ${wide === k ? "bg-surface font-medium text-ink shadow-sm" : "text-muted hover:text-ink"}`}
-                  >
-                    {lbl}
-                  </button>
-                ))}
-              </div>
+              {viewControls}
               {onPatch && mode === "one" && (
                 <button
                   type="button"
@@ -689,7 +697,7 @@ export function AskMode({
                 </div>
                 {editingOpening && onOpening && (
                   <>
-                    <MarkButtons onMark={(m) => toggleMark(lastBox.current, m, onOpening)} />
+                    <MarkButtons onMark={(m) => toggleMark(lastBox.current, m, onOpening)} extra={viewControls} />
                     <p className="mt-2 text-center text-xs text-muted">
                       Enter for a new line, a blank line for a gap.{" "}
                       <button type="button" onClick={() => setEditingOpening(false)} className="font-medium text-[var(--accent)] hover:underline">
@@ -872,7 +880,7 @@ export function AskMode({
                       )}
                     </div>
                   </div>
-                  {editing && <MarkButtons onMark={(m) => mark(lastBox.current, m)} />}
+                  {editing && <MarkButtons onMark={(m) => mark(lastBox.current, m)} extra={viewControls} />}
                   {editing && (
                     <p className="mt-2 text-xs text-muted">
                       Type straight into it. Enter for a new line, a blank line for a gap. Bold, italics and numbers show when you&apos;re done.{" "}
@@ -1186,7 +1194,7 @@ function markKeys(mark: (el: HTMLTextAreaElement, m: string) => void) {
 }
 
 // The B and I buttons under a box being edited.
-function MarkButtons({ onMark }: { onMark: (m: string) => void }) {
+function MarkButtons({ onMark, extra }: { onMark: (m: string) => void; extra?: ReactNode }) {
   return (
     <div className="mt-3 flex flex-wrap items-center justify-center gap-1.5">
       {(
@@ -1209,6 +1217,7 @@ function MarkButtons({ onMark }: { onMark: (m: string) => void }) {
         </button>
       ))}
       <span className="text-xs text-muted">Select words, then B or I.</span>
+      {extra && <span className="ml-2 inline-flex flex-wrap items-center gap-1.5 text-xs">{extra}</span>}
     </div>
   );
 }
