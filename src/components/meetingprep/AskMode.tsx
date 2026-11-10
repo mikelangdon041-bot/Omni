@@ -254,9 +254,12 @@ export function AskMode({
       partLeft == null || partLeft > 2 ? "ok" : partLeft > 1 ? "soon" : partLeft >= 0 ? "near" : "past";
     return { gone, slot, delta, spare, reserve, quick, remain, partLeft, edge };
   };
+  // Off the introductions too: going to question 1 from there left the
+  // opening on screen, so the plan strip looked dead once the clock ran.
   const goTo = (q: QuestionItem) => {
     setShow("all");
     setMode("one");
+    setIntroOpen(false);
     const order = [...all.filter((x) => !x.backup), ...all.filter((x) => x.backup)];
     setAt(Math.max(0, order.findIndex((x) => x.id === q.id)));
   };
@@ -592,7 +595,18 @@ export function AskMode({
         {minutesOf && slotMin ? (
           <PlanStrip
             parts={[
-              { key: "intro", label: "Intros", start: 0, end: leadMin, onClick: () => setIntroOpen(true) },
+              {
+                key: "intro",
+                label: "Intros",
+                start: 0,
+                end: leadMin,
+                onClick: () => {
+                  setShow("all");
+                  setMode("one");
+                  setAt(0);
+                  setIntroOpen(true);
+                },
+              },
               ...plan.map((p, i) => ({ key: p.q.id, label: `Q${i + 1}`, start: p.start, end: p.end, onClick: () => goTo(p.q) })),
               ...(slack >= 0.5 ? [{ key: "spare", label: "Spare", start: mainEnd, end: mainEnd + slack, quiet: true }] : []),
               { key: "close", label: endMin > 1.5 ? "Q&A, close" : "Close", start: slotMin - endMin, end: slotMin, quiet: true },
