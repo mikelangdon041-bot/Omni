@@ -131,6 +131,9 @@ export function AskMode({
     }
   });
   const [introOpen, setIntroOpen] = useState(() => !introsAt);
+  // When the question on screen came up, so its own time can be shown and
+  // the time it has already had is not counted again as still to come.
+  const [qAt, setQAt] = useState<{ id: string; at: number }>({ id: "", at: 0 });
   const startClock = (on: boolean, from?: number) => {
     const v = on ? (from ?? clockNow()) : null;
     setStartedAt(v);
@@ -164,6 +167,7 @@ export function AskMode({
     const i2 = introsAt ? introsAt + shift : null;
     setStartedAt(s2);
     if (i2) setIntrosAt(i2);
+    setQAt((q) => ({ ...q, at: q.at + shift }));
     setPausedAt(null);
     setNow(t);
     try {
@@ -199,8 +203,17 @@ export function AskMode({
     const inMain = allMain.findIndex((q) => q.id === curId);
     const inBackups = allBackups.findIndex((q) => q.id === curId);
     const ahead = inMain >= 0 ? allMain.slice(inMain) : inBackups >= 0 ? [] : allMain;
-    const toCome = ahead.reduce((n, q) => n + minutesOf(q), 0) + (introsAt ? 0 : Math.max(0, leadMin - gone));
+    // The one on screen: only what is left of its time is still to come.
+    const onThis =
+      curId && qAt.id === curId ? Math.max(0, ((pausedAt ?? now) - Math.max(qAt.at, startedAt)) / 60000) : 0;
+    const budget = inMain >= 0 ? minutesOf(allMain[inMain]) : inBackups >= 0 ? minutesOf(allBackups[inBackups]) : 0;
+    const toCome =
+      ahead.reduce((n, q) => n + minutesOf(q), 0) -
+      (inMain >= 0 ? Math.min(onThis, budget) : 0) +
+      (introsAt ? 0 : Math.max(0, leadMin - gone));
     const left = slotMin - endMin - gone;
+    // The whole slot, counting down, the number a timekeeper holds up.
+    const remain = slotMin - gone;
     const spare = left - toCome;
     // A reserve not yet reached: once you have been past one, it is done.
     const reserve = allBackups.slice(inBackups >= 0 ? inBackups + 1 : 0).find((q) => minutesOf(q) <= spare);
@@ -217,7 +230,7 @@ export function AskMode({
         quick = one ? { q: one.q, saves: one.saves, both: false } : { q: toAll[0].q, saves: all2, both: toAll.length > 1 };
       }
     }
-    return { gone, left, spare, reserve, quick };
+    return { gone, left, spare, reserve, quick, remain, onThis, budget };
   };
   const goTo = (q: QuestionItem) => {
     setShow("all");
@@ -258,7 +271,10 @@ export function AskMode({
   const cur = flow[here];
   const hasIntro = Boolean(minutesOf && slotMin);
   const onIntro = mode === "one" && introOpen && here === 0 && hasIntro;
+  const qKey = onIntro ? "" : cur?.id || "";
+  if (qAt.id !== qKey) setQAt({ id: qKey, at: pausedAt ?? now });
   const clock = clockAt(onIntro ? undefined : cur?.id);
+  const names = panel.length ? panel.join(", ").replace(/, ([^,]*)$/, " and $1") : "the panel";
 
   useEffect(() => {
     document.body.style.overflow = "hidden";
@@ -303,7 +319,16 @@ export function AskMode({
               </Button>
             ) : (
               <>
-                <span className={`font-mono text-base font-semibold tabular-nums ${pausedAt ? "text-muted" : "text-ink"}`}>{mmss(clock.gone)}</span>
+                {/* Counting down, and changing colour at 5 and 2 minutes, like
+                    the cards a timekeeper holds up. */}
+                <span
+                  title={`${mmss(clock.gone)} gone of ${slotMin} min`}
+                  className={`whitespace-nowrap font-semibold tabular-nums ${
+                    pausedAt ? "text-muted" : clock.remain <= 2 ? "text-red-600" : clock.remain <= 5 ? "text-amber-600" : "text-ink"
+                  }`}
+                >
+                  <span className="font-mono text-base">{mmss(Math.abs(clock.remain))}</span> {clock.remain >= 0 ? "left" : "over"}
+                </span>
                 {pausedAt ? (
                   <button
                     type="button"
@@ -336,12 +361,12 @@ export function AskMode({
                   className={`rounded-full px-2 py-0.5 font-semibold ${
                     clock.spare >= 1 ? "bg-emerald-50 text-emerald-800" : clock.spare <= -1 ? "bg-amber-100 text-amber-900" : "bg-canvas text-ink/80"
                   }`}
-                  title="Time left after every question in your running order you haven't ticked yet. Tick each one as you finish it."
+                  title="Against your running order, from the question on screen: ahead is time in hand for a probe or a reserve."
                 >
                   {clock.spare >= 1
-                    ? `${Math.round(clock.spare)} min spare`
+                    ? `${Math.round(clock.spare)} min ahead`
                     : clock.spare <= -1
-                      ? `${Math.round(-clock.spare)} min over`
+                      ? `${Math.round(-clock.spare)} min behind`
                       : "On time"}
                 </span>
                 {clock.reserve && (
@@ -449,6 +474,20 @@ export function AskMode({
           />
         </div>
       </header>
+      {clock && clock.remain <= endMin && (
+        <div
+          role="status"
+          className={`shrink-0 px-4 py-2 text-center text-sm font-semibold ${
+            clock.remain <= 0 ? "bg-red-600 text-white" : "bg-red-50 text-red-900"
+          }`}
+        >
+          {clock.remain <= 0
+            ? `Time's up: thank ${names} and close.`
+            : clock.remain > 1.05
+              ? `${Math.ceil(clock.remain)} min left: time for audience questions, then the close at 1 min.`
+              : `About a minute left: thank ${names} and close.`}
+        </div>
+      )}
 
       <main className="min-h-0 flex-1 overflow-y-auto">
         {!cur ? (
@@ -549,10 +588,27 @@ export function AskMode({
                 </>
               )}
             </p>
+            {/* This question's own time: a guide, not an alarm. Whether the
+                whole panel is on time is the count at the top. */}
+            {clock && clock.budget > 0 && (
+              <div className={`mt-2 w-full max-w-xs ${align === "center" ? "mx-auto" : ""}`}>
+                <div className="h-1 overflow-hidden rounded-full bg-border">
+                  <div
+                    className={`h-full transition-all ${clock.onThis > clock.budget ? "bg-amber-500" : "bg-[var(--accent)]/60"}`}
+                    style={{ width: `${Math.min(100, (clock.onThis / clock.budget) * 100)}%` }}
+                  />
+                </div>
+                <p className={`mt-1 text-xs tabular-nums ${clock.onThis > clock.budget ? "text-amber-700" : "text-muted"} ${align === "center" ? "text-center" : ""}`}>
+                  {clock.onThis > clock.budget
+                    ? `${mmss(clock.onThis - clock.budget)} past this one's time`
+                    : `This one: ${mmss(clock.onThis)} of about ${Math.round(clock.budget)} min`}
+                </p>
+              </div>
+            )}
 
             {/* The time check, on the question it is about, with the words. */}
             {(() => {
-              if (!clock || cur.backup || !minutesOf) return null;
+              if (!clock || cur.backup || !minutesOf || clock.remain <= endMin) return null;
               const who = asks(cur);
               const name = who[0] || panel.find((n) => new RegExp(`\\b${n}\\b`, "i").test(cur.forWhom || "")) || "";
               const quick = quickOf?.(cur);
@@ -563,13 +619,13 @@ export function AskMode({
                     {quick != null ? (
                       <>
                         <p className="text-sm font-semibold">
-                          About {over} min over. Ask for a minute each, which saves about {Math.round(minutesOf(cur) - quick)} min:
+                          About {over} min behind. Ask for a minute each, which saves about {Math.round(minutesOf(cur) - quick)} min:
                         </p>
                         <p className="mt-1 text-lg">&ldquo;A quick take from each of you, about a minute each, starting with {name || panel[0]}.&rdquo;</p>
                       </>
                     ) : (
                       <>
-                        <p className="text-sm font-semibold">About {over} min over. Keep this one short:</p>
+                        <p className="text-sm font-semibold">About {over} min behind. Keep this one short:</p>
                         <p className="mt-1 text-lg">&ldquo;{name ? `${name}, in` : "In"} a sentence or two:&rdquo;</p>
                       </>
                     )}
