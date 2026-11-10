@@ -281,6 +281,32 @@ export function AskMode({
       return "center";
     }
   });
+  // Text size and width, for fitting more on a line. Kept between visits.
+  const [textSize, setTextSize] = useState<"s" | "m" | "l">(() => {
+    try {
+      const v = localStorage.getItem("mp:ask-size");
+      return v === "s" || v === "l" ? v : "m";
+    } catch {
+      return "m";
+    }
+  });
+  const [wide, setWide] = useState(() => {
+    try {
+      return localStorage.getItem("mp:ask-wide") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const keep = (k: string, v: string) => {
+    try {
+      localStorage.setItem(k, v);
+    } catch {
+      // Only a preference.
+    }
+  };
+  const sizeCls = textSize === "s" ? "text-lg sm:text-xl" : textSize === "l" ? "text-2xl sm:text-3xl" : "text-xl sm:text-2xl";
+  const textW = wide ? "max-w-none" : "max-w-2xl";
+  const pageW = wide ? "max-w-6xl" : "max-w-3xl";
   const setAlignTo = (a: "left" | "center") => {
     setAlign(a);
     try {
@@ -484,6 +510,51 @@ export function AskMode({
                   </button>
                 ))}
               </div>
+              <div className="inline-flex items-center rounded-lg border border-border bg-canvas p-0.5" aria-label="Text size">
+                {(
+                  [
+                    ["s", "Smaller text", "text-[11px]"],
+                    ["m", "Medium text", "text-[13px]"],
+                    ["l", "Larger text", "text-[15px]"],
+                  ] as const
+                ).map(([k, lbl, cls]) => (
+                  <button
+                    key={k}
+                    type="button"
+                    title={lbl}
+                    aria-label={lbl}
+                    aria-pressed={textSize === k}
+                    onClick={() => {
+                      setTextSize(k);
+                      keep("mp:ask-size", k);
+                    }}
+                    className={`rounded-md px-2 py-0.5 font-semibold leading-none ${cls} ${textSize === k ? "bg-surface text-ink shadow-sm" : "text-muted hover:text-ink"}`}
+                  >
+                    A
+                  </button>
+                ))}
+              </div>
+              <div className="inline-flex rounded-lg border border-border bg-canvas p-0.5">
+                {(
+                  [
+                    [false, "Normal width"],
+                    [true, "Wide"],
+                  ] as const
+                ).map(([k, lbl]) => (
+                  <button
+                    key={lbl}
+                    type="button"
+                    aria-pressed={wide === k}
+                    onClick={() => {
+                      setWide(k);
+                      keep("mp:ask-wide", k ? "1" : "0");
+                    }}
+                    className={`rounded-md px-2 py-0.5 ${wide === k ? "bg-surface font-medium text-ink shadow-sm" : "text-muted hover:text-ink"}`}
+                  >
+                    {lbl}
+                  </button>
+                ))}
+              </div>
               {onPatch && mode === "one" && (
                 <button
                   type="button"
@@ -562,7 +633,7 @@ export function AskMode({
         ) : onIntro ? (
           // Introductions are a step of their own, before question 1, so the
           // clock knows when the questions really started.
-          <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center px-5 py-8 text-center">
+          <div className={`mx-auto flex min-h-full w-full ${pageW} flex-col justify-center px-5 py-8 text-center`}>
             <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">Before the questions</p>
             <h2 className="mt-2 text-2xl font-medium text-ink">Opening and introductions</h2>
             {/* Their own words to open with, laid out and edited the way the
@@ -570,7 +641,7 @@ export function AskMode({
             {(opening.trim() || editingOpening) && (
               <div className={`mt-6 ${align === "center" ? "" : "text-left"}`}>
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Say first</p>
-                <div className={`mt-1.5 max-w-2xl text-xl leading-relaxed text-ink sm:text-2xl ${align === "center" ? "mx-auto" : ""}`}>
+                <div className={`mt-1.5 ${textW} ${sizeCls} leading-relaxed text-ink ${align === "center" ? "mx-auto" : ""}`}>
                   {editingOpening && onOpening ? (
                     <textarea
                       aria-label="Your opening"
@@ -581,7 +652,7 @@ export function AskMode({
                       onKeyDown={markKeys((el, m) => toggleMark(el, m, onOpening))}
                       onFocus={(e) => (lastBox.current = e.currentTarget)}
                       style={{ fieldSizing: "content" } as CSSProperties}
-                      className={`block min-h-[4lh] w-full max-w-2xl resize-none rounded-sm bg-transparent p-0 text-ink outline-2 outline-offset-4 outline-dashed outline-[var(--accent)]/50 focus:outline-[var(--accent)] ${
+                      className={`block min-h-[4lh] w-full ${textW} resize-none rounded-sm bg-transparent p-0 text-ink outline-2 outline-offset-4 outline-dashed outline-[var(--accent)]/50 focus:outline-[var(--accent)] ${
                         align === "center" ? "mx-auto text-center" : ""
                       }`}
                     />
@@ -640,7 +711,7 @@ export function AskMode({
             </p>
           </div>
         ) : mode === "one" ? (
-          <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center px-5 py-8">
+          <div className={`mx-auto flex min-h-full w-full ${pageW} flex-col justify-center px-5 py-8`}>
             <p className={`text-xs text-muted ${align === "center" ? "text-center" : ""}`}>
               {cur.backup ? "In reserve" : `${here + 1} of ${main.length}`}
               {cur.askWho ? ` · ${asks(cur).join(", ")}` : cur.forWhom ? ` · ${cur.forWhom}` : ""}
@@ -704,7 +775,7 @@ export function AskMode({
               // Their exact text once it has a break of its own, so an Enter at the end
               // of a line is not tidied away before the next word is typed.
               const setupEdit = /\n/.test(cur.setup || "") ? cur.setup || "" : sentences(setupShown).join("\n\n");
-              const box = `block w-full max-w-2xl resize-none bg-transparent p-0 outline-2 outline-offset-4 outline-dashed outline-[var(--accent)]/50 rounded-sm focus:outline-[var(--accent)] ${
+              const box = `block w-full ${textW} resize-none bg-transparent p-0 outline-2 outline-offset-4 outline-dashed outline-[var(--accent)]/50 rounded-sm focus:outline-[var(--accent)] ${
                 align === "center" ? "mx-auto text-center" : ""
               }`;
               const grow = { fieldSizing: "content" } as CSSProperties;
@@ -723,7 +794,7 @@ export function AskMode({
                   {(setupShown || editing) && (
                     <div className="mt-4">
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Say first</p>
-                      <div className={`mt-1.5 max-w-2xl text-xl leading-relaxed text-ink/75 sm:text-2xl ${align === "center" ? "mx-auto" : ""}`}>
+                      <div className={`mt-1.5 ${textW} ${sizeCls} leading-relaxed text-ink/75 ${align === "center" ? "mx-auto" : ""}`}>
                         {editing ? (
                           <textarea
                             aria-label="Say first"
@@ -758,7 +829,7 @@ export function AskMode({
                     {(setupShown || editing) && (
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">Then ask</p>
                     )}
-                    <div className={`mt-1.5 max-w-2xl text-xl leading-relaxed text-ink sm:text-2xl ${align === "center" ? "mx-auto" : ""}`}>
+                    <div className={`mt-1.5 ${textW} ${sizeCls} leading-relaxed text-ink ${align === "center" ? "mx-auto" : ""}`}>
                       {editing ? (
                         <textarea
                           aria-label="Then ask"
