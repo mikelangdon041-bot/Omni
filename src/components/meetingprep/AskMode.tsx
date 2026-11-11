@@ -382,6 +382,10 @@ export function AskMode({
     if (here === 0 && hasIntro) setIntroOpen(true);
     else setAt((n) => Math.max(0, n - 1));
   };
+  const step = useRef({ forward, backward });
+  useEffect(() => {
+    step.current = { forward, backward };
+  });
   const onSwipeStart = (e: ReactTouchEvent) => {
     const t = e.touches[0];
     swipe.current = mode === "one" && !editingText && !editingOpening && e.touches.length === 1 ? { x: t.clientX, y: t.clientY } : null;
@@ -409,18 +413,19 @@ export function AskMode({
         return;
       }
       if (mode !== "one") return;
+      // The same steps as a swipe. From the opening, the arrow went to
+      // question 2: it added one to the question while the opening was up.
       if (e.key === "ArrowRight" || e.key === " ") {
         e.preventDefault();
-        setAt((n) => Math.min(flow.length - 1, n + 1));
+        step.current.forward();
       } else if (e.key === "ArrowLeft") {
         e.preventDefault();
-        if (here === 0 && hasIntro) setIntroOpen(true);
-        else setAt((n) => Math.max(0, n - 1));
+        step.current.backward();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [mode, flow.length, here, hasIntro, onClose]);
+  }, [mode]);
 
   // Text size, and putting the width back, for More.
   const viewControls = (
