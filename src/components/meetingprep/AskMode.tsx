@@ -464,7 +464,9 @@ export function AskMode({
       )}
       {/* One line: the clock and where you stand. Everything else is
           under More: it was five rows of controls above the question. */}
-      <header className="shrink-0 border-b border-border bg-surface">
+      {/* Below the phone's status bar: the app draws under it (a see-through
+          status bar), and the clock row sat under the time and battery. */}
+      <header className="shrink-0 border-b border-border bg-surface" style={{ paddingTop: "env(safe-area-inset-top)" }}>
         <div className="mx-auto flex w-full max-w-3xl items-center gap-2.5 px-4 py-2 text-xs">
           {/* Wraps on a phone: in one row it pushed the X off the screen,
               with no way out of Ask mode. */}
@@ -709,6 +711,7 @@ export function AskMode({
 
       <main
         className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-x-none"
+        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
         onTouchStart={onSwipeStart}
         onTouchEnd={onSwipeEnd}
       >
