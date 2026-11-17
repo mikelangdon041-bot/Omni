@@ -44,12 +44,19 @@ import {
   renameInText,
   isFirstPerson,
 } from "@/lib/meetingprep/rename";
-import { writerRenamer } from "@/lib/meetingprep/asWriter";
+import { speakersRenamer, writerRenamer, type Renamer } from "@/lib/meetingprep/asWriter";
 import { useConfirm, useToast } from "@/components/ui/Feedback";
 import { useSessionProfile } from "@/lib/session";
 import { TranscriptCapture } from "@/components/studio/TranscriptCapture";
 import { useKolLite } from "./KolLink";
 import { MentionedPeople } from "./MentionedPeople";
+import { WhoIsWho } from "./WhoIsWho";
+import {
+  relabelTranscript,
+  transcriptLabel,
+  unnamedLabels,
+  type SpeakerAssignment,
+} from "@/lib/meetingprep/speakers";
 import { logMeetingToTerritory } from "@/lib/meetingprep/territoryLog";
 import { useSpellings } from "@/lib/meetingprep/hooks";
 import {
@@ -264,7 +271,8 @@ export function DebriefTab({
   const setNote = (key: string, value: string) =>
     save({ debrief: { ...debrief, notes: { ...notes, [key]: value } } });
 
-  async function analyze(transcriptOverride?: string) {
+  async function analyze(transcriptOverride?: string, speakersOverride?: SpeakerAssignment[]) {
+    const whoIsWho = speakersOverride ?? debrief.speakers ?? [];
     const source = (transcriptOverride ?? debrief.transcript ?? "").trim();
     // Anything typed into the debrief questions is the writer's own notes —
     // it goes in as such, so it gets the priority weighting, rather than
@@ -296,6 +304,8 @@ export function DebriefTab({
           emphasizeNotes,
           // Whoever was marked "This was me" comes back first person.
           writer: Object.entries(debrief.nameMap || {}).find(([, v]) => isFirstPerson(v))?.[0] || "",
+          // Who's who, by the labels the stored transcript now carries.
+          speakers: whoIsWho.map((a) => ({ ...a, label: transcriptLabel(a) })),
         }),
       });
       const json = await res.json();
@@ -307,6 +317,7 @@ export function DebriefTab({
           ...(transcriptOverride !== undefined
             ? { transcript: transcriptOverride }
             : {}),
+          ...(speakersOverride ? { speakers: speakersOverride } : {}),
           notesHtml: applyNameMap(
             tidyNotesHtml(json.notes || ""),
             debrief.nameMap,
@@ -494,15 +505,30 @@ export function DebriefTab({
   // Replace a name (or any wording) everywhere at once — notes, follow-ups
   // and the stored transcript. A name that came out wrong is usually wrong in
   // every place it appears, so fixing them one at a time is the wrong shape.
-  async function replaceEverywhere(what: string, to: string, rememberIt: boolean) {
-    if (!what || !to) return;
-    setFindOpen(false);
-    setFindWhat("");
-    if (isFirstPerson(to)) toast("info", "Rewriting the notes in your voice…");
-    // "This was me" is a rewrite, not a word swap: the model puts the prose
-    // into the first person (my, mine, me, the verbs, every "he" that meant
-    // them). Everything else, and any failure, gets the swap.
-    const R = await writerRenamer(what, to, {
+  // The model gives no progress, so a rewrite shows the same estimated bar
+  // the notes do. Without it the notes sat unchanged for half a minute after
+  // the dialog closed and the rename looked like it had done nothing.
+  async function withProgress<T>(expectedMs: number, work: () => Promise<T>): Promise<T> {
+    setBusy(true);
+    setPct(0);
+    const startedAt = Date.now();
+    const ticker = setInterval(() => {
+      const elapsed = Date.now() - startedAt;
+      setPct(Math.min(95, Math.round((1 - Math.exp(-elapsed / (expectedMs / 2.5))) * 95)));
+    }, 250);
+    try {
+      const out = await work();
+      setPct(100);
+      return out;
+    } finally {
+      clearInterval(ticker);
+      setBusy(false);
+    }
+  }
+
+  // The prose pieces of a meeting, keyed, for a rewrite.
+  function prosePieces(): Record<string, string> {
+    return {
       notes: notesHtml,
       ...(debrief.recap ? { recap: debrief.recap.html } : {}),
       ...(m.objectives ? { objectives: m.objectives } : {}),
@@ -510,10 +536,56 @@ export function DebriefTab({
       ...(m.concerns ? { concerns: m.concerns } : {}),
       ...Object.fromEntries(actions.map((a, i) => [`action${i}`, a.text])),
       ...Object.fromEntries(Object.entries(notes).map(([k, v]) => [`typed_${k}`, String(v || "")])),
-    });
+    };
+  }
 
-    // Every place a name lives, not just the notes. Missing one leaves the
-    // meeting half-renamed, which reads worse than not renaming at all.
+  async function replaceEverywhere(what: string, to: string, rememberIt: boolean) {
+    if (!what || !to) return;
+    setFindOpen(false);
+    setFindWhat("");
+    // "This was me" is a rewrite, not a word swap: the model puts the prose
+    // into the first person (my, mine, me, the verbs, every "he" that meant
+    // them). Everything else, and any failure, gets the swap.
+    const R = isFirstPerson(to)
+      ? await withProgress(30_000, () => writerRenamer(what, to, prosePieces()))
+      : await writerRenamer(what, to, {});
+    applyRewrite(R, { [what]: to });
+    if (rememberIt) {
+      remember(what, to).then(
+        () => toast("success", `"${what}" is now "${to}" here, and new notes will spell it that way.`),
+        (e: Error) => toast("error", `Replaced here, but not remembered: ${e.message}`),
+      );
+    } else {
+      toast("success", `"${what}" is now "${to}" throughout.`);
+    }
+  }
+
+  // Who's who applied. With the transcript still here, the notes are written
+  // again from it, relabelled, so every point is attributed knowing who is
+  // who. Without it, the notes there are rewritten with it.
+  async function assignSpeakers(assignments: SpeakerAssignment[]) {
+    const transcript = debrief.transcript || "";
+    const inTranscript = assignments.some((a) => transcript.split("\n").some((l) => l.startsWith(`${a.label}:`)));
+    const named = assignments.filter((a) => !a.me && a.name.trim()).map((a) => a.name.trim());
+    const existing = new Set(attendeeNames);
+    const added = named.filter((n) => !existing.has(n)).map((name) => ({ name, role: "", org: "", notes: "" }));
+    if (added.length) save({ attendees: [...(m.attendees || []), ...added] });
+    if (inTranscript) {
+      await analyze(relabelTranscript(transcript, assignments), [...(debrief.speakers || []), ...assignments]);
+      return;
+    }
+    const R = await withProgress(30_000, () => speakersRenamer(assignments, prosePieces()));
+    applyRewrite(
+      R,
+      Object.fromEntries(assignments.map((a) => [a.label, a.me ? "I" : a.name.trim()])),
+      assignments,
+    );
+    toast("success", "Speakers named throughout.");
+  }
+
+  // Every place a name lives, not just the notes. Missing one leaves the
+  // meeting half-renamed, which reads worse than not renaming at all.
+  function applyRewrite(R: Renamer, mapAdd: Record<string, string>, speakersAdd?: SpeakerAssignment[]) {
     const typedNotes: Record<string, string> = {};
     for (const [k, v] of Object.entries(notes)) {
       typedNotes[k] = R(String(v || ""));
@@ -542,7 +614,8 @@ export function DebriefTab({
           ? { transcript: R(debrief.transcript) }
           : {}),
         // Remembered, so re-running the notes doesn't undo it.
-        nameMap: { ...(debrief.nameMap || {}), [what]: to },
+        nameMap: { ...(debrief.nameMap || {}), ...mapAdd },
+        ...(speakersAdd ? { speakers: [...(debrief.speakers || []), ...speakersAdd] } : {}),
         ...(debrief.recap
           ? {
               recap: {
@@ -566,14 +639,6 @@ export function DebriefTab({
 
     syncTaskTitles(renamedActions, actions);
 
-    if (rememberIt) {
-      remember(what, to).then(
-        () => toast("success", `"${what}" is now "${to}" here, and new notes will spell it that way.`),
-        (e: Error) => toast("error", `Replaced here, but not remembered: ${e.message}`),
-      );
-    } else {
-      toast("success", `"${what}" is now "${to}" throughout.`);
-    }
   }
 
   // A kept recording is fetched behind a short-lived signed link rather than
@@ -1060,6 +1125,19 @@ export function DebriefTab({
             {/* One document, not a stack of cards: these get pasted whole
                 into OneNote, and separate blocks can't be. Top-level bullets
                 are the topics; everything nests beneath them. */}
+            {!busy && (
+              <WhoIsWho
+                labels={unnamedLabels(notesHtml, ...actions.map((a) => a.text))}
+                sample={sampleFor}
+                people={attendeeNames}
+                applyHint={
+                  (debrief.transcript || "").trim()
+                    ? "Writes the notes again from the transcript"
+                    : "Rewrites the notes"
+                }
+                onApply={(a) => void assignSpeakers(a)}
+              />
+            )}
             {busy && (
               <div className="mb-3 rounded-lg border border-border bg-canvas p-4">
                 <div className="flex items-center gap-3">

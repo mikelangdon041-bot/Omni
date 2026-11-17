@@ -30,6 +30,7 @@ import {
   MonitorSpeaker,
   Replace,
   ShieldCheck,
+  Sparkles,
   Square,
   Trash2,
 } from "lucide-react";
@@ -44,6 +45,14 @@ import { tidyNotesHtml } from "@/lib/meetingprep/notes";
 import type { MpFolder } from "@/lib/meetingprep/types";
 import { countMatches, countMatchesInHtml, isFirstPerson } from "@/lib/meetingprep/rename";
 import { writerRenamer } from "@/lib/meetingprep/asWriter";
+import { WhoIsWho } from "./WhoIsWho";
+import {
+  relabelTranscript,
+  transcriptLabel,
+  unnamedLabels,
+  type Pronouns,
+  type SpeakerAssignment,
+} from "@/lib/meetingprep/speakers";
 import { useSpellings } from "@/lib/meetingprep/hooks";
 import { ReplaceModal } from "@/components/meetingprep/ReplaceModal";
 import { transcribeUpload, type UploadProgress } from "@/lib/meetingprep/uploadCapture";
@@ -190,6 +199,11 @@ export function MeetingRecorder({
   // blank they stay "Speaker A" — the model is barred from guessing.
   const [speakers, setSpeakers] = useState<string[]>([]);
   const [speakerNames, setSpeakerNames] = useState<Record<string, string>>({});
+  // Which voice is the writer, and anyone's pronouns, so the notes come back
+  // with "I" for them and the right he/she/they for everyone else.
+  const [meLabel, setMeLabel] = useState("");
+  const [reviewRewriting, setReviewRewriting] = useState(false);
+  const [pronouns, setPronouns] = useState<Record<string, Pronouns>>({});
   // Type the room once, then pick from it per voice — faster than retyping the
   // same name and it stops "Dr Chen" / "Dr. Chen" becoming two people.
   const [roster, setRoster] = useState("");
@@ -407,26 +421,6 @@ export function MeetingRecorder({
   const removeAction = (index: number) =>
     setResult((r) => (r ? { ...r, actions: r.actions.filter((_, i) => i !== index) } : r));
 
-  // Rewrite "Speaker A:" to the name the user gave, at line starts only. This
-  // is the one safe way to attach names: it comes from the person who was in
-  // the room, not from the model inferring identity out of context.
-  function applySpeakerNames(text: string): string {
-    const named = Object.entries(speakerNames).filter(([, v]) => v.trim());
-    if (named.length === 0) return text;
-    return text
-      .split("\n")
-      .map((line) => {
-        for (const [label, name] of named) {
-          const prefix = `Speaker ${label}:`;
-          if (line.startsWith(prefix)) {
-            return `${name.trim()}:${line.slice(prefix.length)}`;
-          }
-        }
-        return line;
-      })
-      .join("\n");
-  }
-
   // Renaming before anything is saved. Same behaviour as the Debrief tab, but
   // operating on local state: fixing a name shouldn't require saving a meeting
   // with the wrong name in it first.
@@ -450,12 +444,13 @@ export function MeetingRecorder({
   async function applyReviewRename(what: string, to: string, rememberIt: boolean) {
     if (!what || !to || !result) return;
     setRenameOpen(false);
-    if (isFirstPerson(to)) toast("info", "Rewriting the notes in your voice…");
     // "This was me" rewrites the prose in the first person (see asWriter.ts).
+    // It takes half a minute, so the notes say so while it runs.
+    setReviewRewriting(isFirstPerson(to));
     const R = await writerRenamer(what, to, {
       notes: result.notesHtml,
       ...Object.fromEntries(result.actions.map((a, i) => [`action${i}`, a.text])),
-    });
+    }).finally(() => setReviewRewriting(false));
     setResult((cur) => cur && {
       ...cur,
       title: R(cur.title),
@@ -479,7 +474,21 @@ export function MeetingRecorder({
     .map((n) => n.trim())
     .filter(Boolean);
 
-  const summarize = () => summarizeText(applySpeakerNames(transcript));
+  // Who's who as the notes prompt takes it, from the boxes above.
+  function assignments(): SpeakerAssignment[] {
+    return speakers
+      .map((l) => ({
+        label: `Speaker ${l}`,
+        name: (speakerNames[l] || "").trim(),
+        me: meLabel === l,
+        pronouns: (pronouns[l] || "") as Pronouns,
+      }))
+      .filter((a) => a.me || a.name);
+  }
+  const summarize = () => {
+    const who = assignments();
+    return summarizeText(relabelTranscript(transcript, who), who);
+  };
 
   // The first thing each voice says — enough to recognise who it was without
   // going back to the recording.
@@ -491,7 +500,7 @@ export function MeetingRecorder({
 
   // Takes the text explicitly: the paste path calls this in the same tick it
   // sets `transcript`, so reading the state here would send an empty string.
-  async function summarizeText(source: string) {
+  async function summarizeText(source: string, who: SpeakerAssignment[] = []) {
     setPhase("summarizing");
     setNotesPct(0);
     // The model gives no progress signal, so this is an estimate paced off
@@ -513,6 +522,8 @@ export function MeetingRecorder({
           transcript: source,
           hint,
           ownNotes,
+          // Labels as the relabelled transcript now carries them.
+          speakers: who.map((a) => ({ ...a, label: transcriptLabel(a) })),
           emphasizeNotes,
         }),
       });
@@ -554,6 +565,7 @@ export function MeetingRecorder({
     // Whoever was named goes onto the meeting as an attendee, so the roster
     // is captured once rather than retyped in Setup afterwards.
     const named = speakers
+      .filter((label) => label !== meLabel)
       .map((label) => (speakerNames[label] || "").trim())
       .filter(Boolean);
     const attendees = [...new Set([...named, ...rosterNames])];
@@ -719,19 +731,46 @@ export function MeetingRecorder({
                         Speaker {label}
                       </span>
                       <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
                         <input
-                          value={speakerNames[label] || ""}
+                          value={meLabel === label ? "" : speakerNames[label] || ""}
+                          disabled={meLabel === label}
                           onChange={(e) =>
                             setSpeakerNames((m) => ({ ...m, [label]: e.target.value }))
                           }
                           list="omni-roster"
-                          placeholder={
+                          placeholder={meLabel === label ? "You" : 
                             rosterNames.length
                               ? "Pick or type a name"
                               : "Name (optional)"
                           }
-                          className="w-full rounded-md border border-border bg-canvas px-2 py-1.5 text-sm outline-none transition focus:border-[var(--accent)]"
+                          className="min-w-0 flex-1 rounded-md border border-border bg-canvas px-2 py-1.5 text-sm outline-none transition focus:border-[var(--accent)]"
                         />
+                        <button
+                          type="button"
+                          onClick={() => setMeLabel((cur) => (cur === label ? "" : label))}
+                          className={`rounded-md border px-2.5 py-1.5 text-xs font-medium transition ${
+                            meLabel === label
+                              ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
+                              : "border-border text-muted hover:text-ink"
+                          }`}
+                        >
+                          Me
+                        </button>
+                        {meLabel !== label && (
+                          <select
+                            value={pronouns[label] || ""}
+                            onChange={(e) => setPronouns((p) => ({ ...p, [label]: e.target.value as Pronouns }))}
+                            className="rounded-md border border-border bg-canvas px-1.5 py-1.5 text-xs"
+                            aria-label={`Pronouns for Speaker ${label}`}
+                          >
+                            <option value="">Pronouns</option>
+                            <option value="he">he</option>
+                            <option value="she">she</option>
+                            <option value="they">they</option>
+                          </select>
+                        )}
+                        </div>
                         {speakerSample(label) && (
                           <p className="mt-1 truncate text-[11px] italic text-muted">
                             &ldquo;{speakerSample(label)}…&rdquo;
@@ -890,6 +929,31 @@ export function MeetingRecorder({
           <p className="mb-3 mt-1 text-xs text-muted">
             Edit anything below before saving — nothing is written until you do.
           </p>
+
+          {reviewRewriting && (
+            <p className="mb-3 flex items-center gap-2 rounded-lg border border-border bg-canvas p-3 text-sm font-medium">
+              <Sparkles size={15} className="animate-pulse text-[var(--accent)]" />
+              Rewriting the notes in your voice…
+            </p>
+          )}
+          <WhoIsWho
+            busy={reviewRewriting}
+            labels={unnamedLabels(result.notesHtml, ...result.actions.map((a) => a.text))}
+            sample={(l) => speakerSample(l.replace(/^Speaker /, ""))}
+            people={rosterNames}
+            applyHint="Writes the notes again knowing who is who"
+            onApply={(who) => {
+              // Kept in the boxes too, so a later redo and the save see them.
+              for (const a of who) {
+                const l = a.label.replace(/^Speaker /, "");
+                if (a.me) setMeLabel(l);
+                else setSpeakerNames((m) => ({ ...m, [l]: a.name.trim() }));
+                if (a.pronouns) setPronouns((p) => ({ ...p, [l]: a.pronouns as Pronouns }));
+              }
+              const all = [...assignments().filter((x) => !who.some((w) => w.label === x.label)), ...who];
+              void summarizeText(relabelTranscript(transcript, all), all);
+            }}
+          />
 
           <div
             ref={reviewRef}

@@ -10,7 +10,8 @@ import {
   stripDashes,
 } from "@/lib/meetingprep/captureAi";
 import { loadSpellings } from "@/lib/meetingprep/spellings";
-import { rewriteAsWriter } from "@/lib/meetingprep/firstPerson";
+import { rewriteAsWriter, rewriteWithSpeakers } from "@/lib/meetingprep/firstPerson";
+import type { SpeakerAssignment } from "@/lib/meetingprep/speakers";
 import { voiceFor, writeRecap } from "@/lib/meetingprep/recapAi";
 import { stripHtml } from "@/lib/territory/utils";
 import {
@@ -880,6 +881,26 @@ ${OUTLINE_RULE}`,
 
     // "This was me": the notes, follow-ups and email rewritten so that one
     // speaker is the writer (see lib/meetingprep/firstPerson.ts).
+    // Who's who: names (and "me") put into notes written with speaker
+    // labels, rewritten so the meaning follows who is who.
+    if (action === "assignSpeakers") {
+      const speakers: SpeakerAssignment[] = (Array.isArray(body?.speakers) ? body.speakers : [])
+        .slice(0, 20)
+        .map((a: Record<string, unknown>) => ({
+          label: String(a?.label || "").slice(0, 80),
+          name: String(a?.name || "").slice(0, 80),
+          me: a?.me === true,
+          pronouns: (["he", "she", "they"].includes(String(a?.pronouns)) ? a.pronouns : "") as SpeakerAssignment["pronouns"],
+        }))
+        .filter((a: SpeakerAssignment) => a.label);
+      const raw = body?.pieces && typeof body.pieces === "object" ? body.pieces : {};
+      const pieces: Record<string, string> = {};
+      for (const [k, v] of Object.entries(raw).slice(0, 80)) {
+        if (typeof v === "string") pieces[k] = v.slice(0, 40000);
+      }
+      return NextResponse.json({ pieces: await rewriteWithSpeakers(speakers, pieces) });
+    }
+
     if (action === "asWriter") {
       const who = String(body?.who || "").trim().slice(0, 80);
       const raw = body?.pieces && typeof body.pieces === "object" ? body.pieces : {};

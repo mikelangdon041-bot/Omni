@@ -1,3 +1,4 @@
+import type { SpeakerAssignment } from "./speakers";
 // Meeting Prep shared types + the default brief blueprint.
 
 import { htmlToPlain } from "@/lib/writer/types";
@@ -576,6 +577,9 @@ export interface Debrief {
   // re-analysis, which regenerates the notes from the transcript, doesn't
   // undo their naming — the map is replayed over the fresh output.
   nameMap?: Record<string, string>;
+  // Who's who (speakers.ts): what the writer said each speaker label is.
+  // Passed to a re-analysis so the notes are written knowing it.
+  speakers?: SpeakerAssignment[];
   // Storage path of the recording, when the user chose to keep it. Absent
   // means the audio was deleted after transcription, which is the default.
   audioPath?: string;

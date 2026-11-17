@@ -10,7 +10,8 @@
 
 import { anthropic, CHECK_MODEL, WRITER_MODEL } from "@/lib/anthropic";
 import { applySpellings, spellingPromptBlock, type Spelling } from "./spellings";
-import { writerRule } from "./firstPerson";
+import { speakersRule, writerRule } from "./firstPerson";
+import type { SpeakerAssignment } from "./speakers";
 
 // How much of a transcript the notes are written from. It was 120,000
 // characters, which is about two hours of talk: a longer meeting lost its
@@ -150,6 +151,8 @@ export interface CaptureInput {
   spellings?: Spelling[];
   /** The speaker the user marked "This was me", so the notes come back first person. */
   writer?: string;
+  /** Who's who, from the writer, with labels as they now appear in the transcript. */
+  speakers?: SpeakerAssignment[];
 }
 
 export interface CaptureOutput {
@@ -180,6 +183,8 @@ export async function captureFromTranscript(input: CaptureInput): Promise<Captur
   const spellings = input.spellings || [];
   const spellingBlock = spellingPromptBlock(spellings);
   const writer = String(input.writer || "").trim().slice(0, 80);
+  const speakers = (Array.isArray(input.speakers) ? input.speakers : []).slice(0, 20);
+  const whoIsWho = speakersRule(speakers);
 
   const res = await anthropic().messages.create({
     model: WRITER_MODEL,
@@ -245,7 +250,9 @@ BEFORE YOU FINISH: reread every bullet you have written. If it narrates someone 
   - found: true only when there is a genuine run of opening pleasantries. A one-line "hi, how are you" before real content does not count.
   - description: what it was, 3-8 words ("greetings and weekend plans", "waiting for Dr. Ruiz to join").
   - firstSubstantiveLine: the first 8-15 words of the first sentence that carries real content, copied VERBATIM from the transcript — exact characters, including any speaker label. It is used to locate the cut point, so a paraphrase is useless. Empty string when found is false.${
-      writer ? `
+      whoIsWho ? `
+
+${whoIsWho}` : writer ? `
 
 ${writerRule(writer)}` : ""
     }${
