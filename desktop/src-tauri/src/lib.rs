@@ -691,10 +691,12 @@ async fn upload_and_capture(
 ) -> Result<omni::Captured, String> {
     let base = settings.normalized_url();
     let config = auth::fetch_config(&base).await.map_err(|e| e.to_string())?;
-    let token = auth::access_token(&config, &settings.username)
+    // Signed in at all? Asked up front so a signed-out app says so before
+    // any upload starts; the client fetches its own tokens from here on.
+    auth::access_token(&config, &settings.username)
         .await
         .map_err(|e| e.to_string())?;
-    let client = omni::Client::new(&base, &token).map_err(|e| e.to_string())?;
+    let client = omni::Client::new(&base, &config, &settings.username).map_err(|e| e.to_string())?;
 
     let progress = {
         let app = app.clone();
@@ -1099,10 +1101,12 @@ async fn list_folders(app: AppHandle) -> Result<serde_json::Value, String> {
     };
     let base = settings.normalized_url();
     let config = auth::fetch_config(&base).await.map_err(|e| e.to_string())?;
-    let token = auth::access_token(&config, &settings.username)
+    // Signed in at all? Asked up front so a signed-out app says so before
+    // any upload starts; the client fetches its own tokens from here on.
+    auth::access_token(&config, &settings.username)
         .await
         .map_err(|e| e.to_string())?;
-    let client = omni::Client::new(&base, &token).map_err(|e| e.to_string())?;
+    let client = omni::Client::new(&base, &config, &settings.username).map_err(|e| e.to_string())?;
     client.list_folders().await.map_err(|e| e.to_string())
 }
 
@@ -1118,10 +1122,12 @@ async fn create_folder(app: AppHandle, kind: String, name: String) -> Result<ser
     };
     let base = settings.normalized_url();
     let config = auth::fetch_config(&base).await.map_err(|e| e.to_string())?;
-    let token = auth::access_token(&config, &settings.username)
+    // Signed in at all? Asked up front so a signed-out app says so before
+    // any upload starts; the client fetches its own tokens from here on.
+    auth::access_token(&config, &settings.username)
         .await
         .map_err(|e| e.to_string())?;
-    let client = omni::Client::new(&base, &token).map_err(|e| e.to_string())?;
+    let client = omni::Client::new(&base, &config, &settings.username).map_err(|e| e.to_string())?;
     client.create_folder(&kind, &name).await.map_err(|e| e.to_string())
 }
 

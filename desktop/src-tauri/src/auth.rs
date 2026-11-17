@@ -66,6 +66,30 @@ struct Cached {
 
 static CACHE: Mutex<Option<Cached>> = Mutex::new(None);
 
+// One refresh at a time. Supabase rotates the refresh token on every use, and
+// a transcription sends ten requests at once: ten refreshes racing would
+// spend the same refresh token ten times, and the losers are refused, which
+// signs the app out. Whoever waits here finds the fresh token in the cache.
+static REFRESH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn cached() -> Option<String> {
+    let cached = CACHE.lock().unwrap();
+    cached
+        .as_ref()
+        .filter(|c| Instant::now() < c.expires)
+        .map(|c| c.token.clone())
+}
+
+/// Omni turned this token down: stop handing it out, so the next request
+/// refreshes. Only if it is still the cached one; another request may have
+/// replaced it already.
+pub fn forget(token: &str) {
+    let mut cached = CACHE.lock().unwrap();
+    if cached.as_ref().is_some_and(|c| c.token == token) {
+        *cached = None;
+    }
+}
+
 fn client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(60))
@@ -236,13 +260,12 @@ fn cache(token: String, expires_in: u64) {
 
 /// A usable access token, refreshing if the cached one is spent.
 pub async fn access_token(config: &DesktopConfig, username: &str) -> Result<String> {
-    {
-        let cached = CACHE.lock().unwrap();
-        if let Some(c) = cached.as_ref() {
-            if Instant::now() < c.expires {
-                return Ok(c.token.clone());
-            }
-        }
+    if let Some(token) = cached() {
+        return Ok(token);
+    }
+    let _one_at_a_time = REFRESH.lock().await;
+    if let Some(token) = cached() {
+        return Ok(token);
     }
 
     let username = username.trim().to_lowercase();

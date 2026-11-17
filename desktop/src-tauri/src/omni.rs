@@ -76,14 +76,20 @@ struct ApiError {
     error: Option<String>,
 }
 
+// The client asks for a token on every request rather than holding one.
+// It used to take one when a job started and keep it through upload,
+// transcription and save; a token that had a few minutes left at the start
+// ran out halfway through a long meeting, and the save at the end came back
+// "Omni rejected the sign-in" with nothing wrong with the sign-in at all.
 pub struct Client {
     http: reqwest::Client,
     base: String,
-    token: String,
+    config: crate::auth::DesktopConfig,
+    username: String,
 }
 
 impl Client {
-    pub fn new(base: &str, token: &str) -> Result<Self> {
+    pub fn new(base: &str, config: &crate::auth::DesktopConfig, username: &str) -> Result<Self> {
         Ok(Self {
             http: reqwest::Client::builder()
                 // Generous: `prepare` runs ffmpeg over the whole recording,
@@ -92,21 +98,41 @@ impl Client {
                 .build()
                 .context("Could not start the HTTP client")?,
             base: base.trim_end_matches('/').to_string(),
-            token: token.to_string(),
+            config: config.clone(),
+            username: username.to_string(),
         })
     }
 
+    async fn token(&self) -> Result<String> {
+        crate::auth::access_token(&self.config, &self.username).await
+    }
+
+    /// Send with a current token. A 401 drops that token and tries once more
+    /// with a fresh one; only a second 401 is a real sign-in problem.
+    async fn send(
+        &self,
+        build: impl Fn(&str) -> reqwest::RequestBuilder,
+    ) -> Result<(reqwest::StatusCode, String)> {
+        let mut attempt = 0;
+        loop {
+            let token = self.token().await?;
+            let res = build(&token).send().await.context("Could not reach Omni")?;
+            let status = res.status();
+            let text = res.text().await.unwrap_or_default();
+            if status == reqwest::StatusCode::UNAUTHORIZED && attempt == 0 {
+                crate::auth::forget(&token);
+                attempt += 1;
+                continue;
+            }
+            return Ok((status, text));
+        }
+    }
+
     async fn post(&self, path: &str, body: serde_json::Value) -> Result<String> {
-        let res = self
-            .http
-            .post(format!("{}{path}", self.base))
-            .bearer_auth(&self.token)
-            .json(&body)
-            .send()
-            .await
-            .context("Could not reach Omni")?;
-        let status = res.status();
-        let text = res.text().await.unwrap_or_default();
+        let url = format!("{}{path}", self.base);
+        let (status, text) = self
+            .send(|token| self.http.post(&url).bearer_auth(token).json(&body))
+            .await?;
         if !status.is_success() {
             let detail = serde_json::from_str::<ApiError>(&text)
                 .ok()
@@ -127,15 +153,8 @@ impl Client {
     }
 
     async fn get(&self, path: &str) -> Result<String> {
-        let res = self
-            .http
-            .get(format!("{}{path}", self.base))
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .context("Could not reach Omni")?;
-        let status = res.status();
-        let text = res.text().await.unwrap_or_default();
+        let url = format!("{}{path}", self.base);
+        let (status, text) = self.send(|token| self.http.get(&url).bearer_auth(token)).await?;
         if !status.is_success() {
             let detail = serde_json::from_str::<ApiError>(&text)
                 .ok()
