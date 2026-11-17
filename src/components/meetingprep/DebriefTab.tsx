@@ -42,7 +42,9 @@ import {
   countMatchesInHtml,
   renameInHtml,
   renameInText,
+  isFirstPerson,
 } from "@/lib/meetingprep/rename";
+import { writerRenamer } from "@/lib/meetingprep/asWriter";
 import { useConfirm, useToast } from "@/components/ui/Feedback";
 import { useSessionProfile } from "@/lib/session";
 import { TranscriptCapture } from "@/components/studio/TranscriptCapture";
@@ -292,6 +294,8 @@ export function DebriefTab({
           hint: meetingContextText(m),
           ownNotes: source ? notesText : "",
           emphasizeNotes,
+          // Whoever was marked "This was me" comes back first person.
+          writer: Object.entries(debrief.nameMap || {}).find(([, v]) => isFirstPerson(v))?.[0] || "",
         }),
       });
       const json = await res.json();
@@ -490,50 +494,65 @@ export function DebriefTab({
   // Replace a name (or any wording) everywhere at once — notes, follow-ups
   // and the stored transcript. A name that came out wrong is usually wrong in
   // every place it appears, so fixing them one at a time is the wrong shape.
-  function replaceEverywhere(what: string, to: string, rememberIt: boolean) {
+  async function replaceEverywhere(what: string, to: string, rememberIt: boolean) {
     if (!what || !to) return;
+    setFindOpen(false);
+    setFindWhat("");
+    if (isFirstPerson(to)) toast("info", "Rewriting the notes in your voice…");
+    // "This was me" is a rewrite, not a word swap: the model puts the prose
+    // into the first person (my, mine, me, the verbs, every "he" that meant
+    // them). Everything else, and any failure, gets the swap.
+    const R = await writerRenamer(what, to, {
+      notes: notesHtml,
+      ...(debrief.recap ? { recap: debrief.recap.html } : {}),
+      ...(m.objectives ? { objectives: m.objectives } : {}),
+      ...(m.background ? { background: m.background } : {}),
+      ...(m.concerns ? { concerns: m.concerns } : {}),
+      ...Object.fromEntries(actions.map((a, i) => [`action${i}`, a.text])),
+      ...Object.fromEntries(Object.entries(notes).map(([k, v]) => [`typed_${k}`, String(v || "")])),
+    });
 
     // Every place a name lives, not just the notes. Missing one leaves the
     // meeting half-renamed, which reads worse than not renaming at all.
     const typedNotes: Record<string, string> = {};
     for (const [k, v] of Object.entries(notes)) {
-      typedNotes[k] = renameInText(String(v || ""), what, to);
+      typedNotes[k] = R(String(v || ""));
     }
 
-    const renamedActions = actions.map((a) => ({ ...a, text: renameInText(a.text, what, to) }));
+    const renamedActions = actions.map((a) => ({ ...a, text: R(a.text) }));
     save({
-      title: renameInText(m.title || "", what, to),
-      topic: renameInText(m.topic || "", what, to),
-      location: renameInText(m.location || "", what, to),
-      objectives: renameInHtml(m.objectives || "", what, to),
-      background: renameInHtml(m.background || "", what, to),
-      concerns: renameInHtml(m.concerns || "", what, to),
+      title: R(m.title || ""),
+      topic: R(m.topic || ""),
+      location: R(m.location || ""),
+      objectives: R(m.objectives || "", true),
+      background: R(m.background || "", true),
+      concerns: R(m.concerns || "", true),
       attendees: (m.attendees || []).map((a) => ({
         ...a,
-        name: renameInText(a.name || "", what, to),
-        role: renameInText(a.role || "", what, to),
-        notes: renameInText(a.notes || "", what, to),
+        name: R(a.name || ""),
+        role: R(a.role || ""),
+        notes: R(a.notes || ""),
       })),
       debrief: {
         ...debrief,
-        notesHtml: renameInHtml(notesHtml, what, to),
+        notesHtml: R(notesHtml, true),
         notes: typedNotes,
         actions: renamedActions,
         ...(debrief.transcript
-          ? { transcript: renameInText(debrief.transcript, what, to) }
+          ? { transcript: R(debrief.transcript) }
           : {}),
         // Remembered, so re-running the notes doesn't undo it.
         nameMap: { ...(debrief.nameMap || {}), [what]: to },
         ...(debrief.recap
           ? {
               recap: {
-                subject: renameInText(debrief.recap.subject, what, to),
-                html: renameInHtml(debrief.recap.html, what, to),
+                subject: R(debrief.recap.subject),
+                html: R(debrief.recap.html, true),
                 // The email was renamed along with the notes, so it is still
                 // up to date with them.
                 source:
                   debrief.recap.source &&
-                  recapSource(renameInHtml(notesHtml, what, to), renamedActions),
+                  recapSource(R(notesHtml, true), renamedActions),
               },
             }
           : {}),
@@ -542,13 +561,11 @@ export function DebriefTab({
 
     // The email on screen is local state as well as saved, so both copies
     // are renamed or the box keeps showing the old name.
-    setMailSubject((v) => renameInText(v, what, to));
-    setMailHtml((v) => renameInHtml(v, what, to));
+    setMailSubject((v) => R(v));
+    setMailHtml((v) => R(v, true));
 
     syncTaskTitles(renamedActions, actions);
 
-    setFindOpen(false);
-    setFindWhat("");
     if (rememberIt) {
       remember(what, to).then(
         () => toast("success", `"${what}" is now "${to}" here, and new notes will spell it that way.`),

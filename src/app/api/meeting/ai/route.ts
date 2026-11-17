@@ -10,6 +10,7 @@ import {
   stripDashes,
 } from "@/lib/meetingprep/captureAi";
 import { loadSpellings } from "@/lib/meetingprep/spellings";
+import { rewriteAsWriter } from "@/lib/meetingprep/firstPerson";
 import { voiceFor, writeRecap } from "@/lib/meetingprep/recapAi";
 import { stripHtml } from "@/lib/territory/utils";
 import {
@@ -875,6 +876,19 @@ ${OUTLINE_RULE}`,
           return NextResponse.json({ error: e.message }, { status: 502 });
         throw e;
       }
+    }
+
+    // "This was me": the notes, follow-ups and email rewritten so that one
+    // speaker is the writer (see lib/meetingprep/firstPerson.ts).
+    if (action === "asWriter") {
+      const who = String(body?.who || "").trim().slice(0, 80);
+      const raw = body?.pieces && typeof body.pieces === "object" ? body.pieces : {};
+      const pieces: Record<string, string> = {};
+      for (const [k, v] of Object.entries(raw).slice(0, 80)) {
+        if (typeof v === "string") pieces[k] = v.slice(0, 40000);
+      }
+      if (!who) return NextResponse.json({ error: "Who is the writer?" }, { status: 400 });
+      return NextResponse.json({ pieces: await rewriteAsWriter(who, pieces) });
     }
 
     // Condense one bullet (and whatever is nested under it) without touching

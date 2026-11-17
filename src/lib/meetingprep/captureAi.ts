@@ -10,12 +10,28 @@
 
 import { anthropic, CHECK_MODEL, WRITER_MODEL } from "@/lib/anthropic";
 import { applySpellings, spellingPromptBlock, type Spelling } from "./spellings";
+import { writerRule } from "./firstPerson";
 
 // How much of a transcript the notes are written from. It was 120,000
 // characters, which is about two hours of talk: a longer meeting lost its
 // ending from the notes without a word said. This is about seven hours,
 // roughly 100k tokens, inside every model the notes run on.
 export const TRANSCRIPT_CHARS = 400_000;
+
+// The notes used to read like a report about the meeting: "The handling of a
+// candidate interview on Friday is a point of friction, with the two sides
+// reading the arrangement differently and no full resolution reached." The
+// rule against narrating "X said" pushed the model into nouns and passives.
+// These are the writer's own notes, so they are written the way a person
+// types notes: first person, plain words, short.
+export const NOTES_VOICE_RULE = `WRITE IT THE WAY A PERSON TYPES THEIR OWN NOTES. These are the writer's notes on a meeting they were in, not a report about it. For every bullet ask: would anyone actually type this?
+- First person. The writer was in the room, so what was agreed is "we" ("We agreed to…", "We don't see Friday the same way"). A speaker who is plainly the writer (labelled "Me" or "You", or named as the writer in the hint) is "I", "me", "my". Otherwise keep speaker labels as they are: the writer renames them afterwards, and a label renamed to "I" has to still read naturally ("Speaker B and I…").
+- Plain, everyday words, short sentences. Fragments are fine when they are clear: "Not settled." "Approved, set it up."
+- Never the report voice. No "the handling of", "a point of friction", "no full resolution reached", "remains an open item", "was discussed", "alignment on", "going forward", "in terms of", "it was agreed that". Nouns made out of verbs and passive sentences are the tell. Name the thing, then say where it stands.
+  BAD:  "The handling of a candidate interview on Friday is a point of friction, with the two sides reading the arrangement differently and no full resolution reached."
+  GOOD: "Friday's candidate interview: we read the setup differently. Not settled."
+  BAD:  "Alignment was reached on prioritising endocrinology accounts going forward."
+  GOOD: "We're sticking with endo accounts first."`;
 
 export const NO_DASH_RULE =
   "Never use an em dash or an en dash. Not to join clauses, not as an aside, not before a list. Use a comma, a semicolon, a colon or a full stop instead. Hyphens inside compound words (tier-one, endo-first, one-on-one) are fine.";
@@ -132,6 +148,8 @@ export interface CaptureInput {
   emphasizeNotes?: boolean;
   /** Words the user has corrected in earlier meetings (see spellings.ts). */
   spellings?: Spelling[];
+  /** The speaker the user marked "This was me", so the notes come back first person. */
+  writer?: string;
 }
 
 export interface CaptureOutput {
@@ -161,6 +179,7 @@ export async function captureFromTranscript(input: CaptureInput): Promise<Captur
   const emphasizeNotes = input.emphasizeNotes !== false;
   const spellings = input.spellings || [];
   const spellingBlock = spellingPromptBlock(spellings);
+  const writer = String(input.writer || "").trim().slice(0, 80);
 
   const res = await anthropic().messages.create({
     model: WRITER_MODEL,
@@ -173,13 +192,15 @@ Attribution, which matters and is easy to get wrong:
 - Use speaker labels EXACTLY as they appear. Never rename a speaker, never map a label onto a person named elsewhere in the conversation, and never merge or swap two labels. A label like "Speaker A" means voice separation found a distinct person but nobody has said who they are — leave it as "Speaker A". Somebody being greeted or thanked by name tells you a name was said, NOT which label it belongs to; the person saying "thanks, Sarah" is the one person it definitely is not.
 - Never state or imply a speaker's gender. Do not write he, she, his, her, him, or hers about a participant unless the transcript itself says so outright. Use their label or name, or they/them. Voice pitch is not evidence and is not available to you anyway.
 - If you cannot tell who did something, say so plainly ("one participant asked…") rather than picking whoever seems most likely. A confident wrong attribution is far worse than an unattributed note: it puts words in someone's mouth and the reader has no way to tell it was a guess.
-- If it has NO speaker labels, you cannot tell who spoke. Write the notes impersonally ("the dosing schedule was questioned"). Do NOT guess who said what, do NOT invent speaker names, and do NOT assume it was all one person — a single unlabelled block is usually several people talking in turn.
-- Line breaks often mark a change of speaker even when nobody is named — Apple Voice Memos and several other tools put each turn on its own line. Treat a line-broken transcript as a multi-party conversation with turns, and let that shape the notes ("this was pushed back on", "the two sides landed on…"). Use the turn structure; still don't invent who owns which turn.
+- If it has NO speaker labels, you cannot tell who spoke. Write the notes without naming anyone ("Not everyone's sold on the dosing schedule"). Do NOT guess who said what, do NOT invent speaker names, and do NOT assume it was all one person — a single unlabelled block is usually several people talking in turn.
+- Line breaks often mark a change of speaker even when nobody is named — Apple Voice Memos and several other tools put each turn on its own line. Treat a line-broken transcript as a multi-party conversation with turns, and let that shape the notes ("there was pushback on this", "we landed on…"). Use the turn structure; still don't invent who owns which turn.
 
 - title: a short, specific name for this meeting as a person would write it in a calendar (5-8 words, no quotes). Use real names/topics from the transcript when they're clear, e.g. "Dr. Patel — dosing concerns and advisory board". If the transcript is too thin to tell, use a plain descriptive title.
 - notes: ONE nested bullet list covering the whole meeting, as HTML using ONLY <ul>, <li>, <b> and <i>. No headings, no <p>, no styling attributes, no markdown. Structure:
   - Top level: one <li> per topic, in the order topics came up, 3-7 of them; no "Introduction" / "Discussion" / "Conclusion" filler. The topic bullet is itself a complete statement of what that topic came to — it is not a heading and it is not a label. It must NOT end in a dash, colon, ellipsis or any other trailing punctuation waiting for the nested bullets to finish the thought; it has to stand on its own if the nested list under it were deleted.
-  - Nested <ul> inside each topic for the substance, 2-3 levels deep. Complete sentences. Preserve names, figures, product names and dates exactly as spoken. Never invent anything that wasn't said.
+  - Nested <ul> inside each topic for the substance. It is a TREE, not a topic with a flat list under it: a point under a topic gets its own nested <ul> for the detail behind it (the reason, the figures, who, when, what is still open), and a detail can go one level deeper again when it has specifics of its own. Every topic goes at least three levels deep wherever the meeting gave that much detail on it; a topic with only one level under it is the exception, kept for something genuinely thin. Shape:
+    <ul><li>Friday's candidate interview: not settled.<ul><li>We each thought we were leading.<ul><li>HR sent the scorecard to both of us.</li></ul></li><li>Possible split: clinical questions to one, the rest to the other.<ul><li>Not locked in until I check with Priya, who set it up.</li></ul></li></ul></li></ul>
+  - Preserve names, figures, product names and dates exactly as spoken. Never invent anything that wasn't said.
   - FIGURES. Every number keeps what it counts and where it comes from: "28 logged in the activity log for July" is not "July had 28", and a count in one system is not the same as a count in another. Never call a figure a target, goal, quota, budget or deadline unless it was said as one, and when a target is stated, record it exactly with its unit (20 to 25 a month is not a quarterly number). Do not add figures up or work out new ones and present them as something that was said or agreed. Adding counts together and calling the total a target is exactly the mistake to avoid.
   - It must read as one document someone can paste straight into OneNote or Word and have it keep its shape.
   - ${NO_DASH_RULE}
@@ -195,25 +216,21 @@ Record both sides of every disagreement as separate positions. If the same perso
 
 THEN write "notes" using only what you recorded. Every attribution in the notes must correspond to a position you recorded, and to that position's speaker. A point you could not ground goes in the notes with no attribution rather than being guessed at. Never merge two speakers' positions into one bullet, and never move a concern from the person who raised it to the person who responded.
 
-WRITE NOTES, NOT A RETELLING. This is the difference between useful and useless, so weigh it heavily.
+${NOTES_VOICE_RULE}
 
-THE BANNED SENTENCE SHAPE: a bullet must never open with a person, role or pronoun followed by a verb of speaking, thinking or feeling. Not "I", not "Shrey", not "the manager", not "they". The banned verbs include said, told, explained, noted, stated, clarified, affirmed, confirmed, flagged, raised, mentioned, added, responded, replied, asked, acknowledged, committed, understood, felt, thought, believed, emphasised, pointed out, indicated, reported, expressed, suggested, argued, pushed back, wanted, offered, agreed, disagreed. Swapping one of these verbs for another one is NOT a fix — the shape is the problem, not the word. "I clarified…" is exactly as wrong as "I said…".
-
-Write what is now true, decided, or open — not who uttered it:
+NOT A RETELLING EITHER. A bullet never narrates who said what: no person, role or pronoun followed by a verb of speaking (said, told, explained, noted, stated, clarified, confirmed, flagged, raised, mentioned, responded, asked, acknowledged, emphasised, pointed out, reported, expressed). "I clarified…" is as wrong as "Shrey said…". Say the thing itself:
   BAD:  "I clarified that it was never a direction but an option."
-  GOOD: "Talking to other specialties who see Cushing's is an option, not a direction; endo-first guidance stands."
+  GOOD: "Other specialties who see Cushing's are an option, not a direction. Endo first still stands."
   BAD:  "Shrey flagged a perceived East/West divide and a drop in team morale."
-  GOOD: "A perceived East/West divide and falling team morale are live concerns beyond this 1:1."
+  GOOD: "Morale's down and people feel there's an East/West divide. Bigger than this 1:1."
   BAD:  "Shrey reported that several colleagues feel a lack of confidence and support."
-  GOOD: "Several colleagues feel a lack of confidence and support, and the intent behind recent changes is landing as negative."
+  GOOD: "Several people don't feel confident or supported, and the recent changes are landing badly."
   BAD:  "I stated they know nothing about this territory and only wanted the MSL to walk them through it."
-  GOOD: "The territory review is for orientation — colour and background a list cannot give, plus who the key people are. Explicitly not a performance review."
+  GOOD: "Territory review is just orientation: background a list can't give, and who the key people are. Not a performance review."
   BAD:  "I committed to following up with team members."
-  GOOD: "The morale concerns need a follow-up with the wider team." The subject and why it matters stay in the notes; who does what goes in actions.
+  GOOD: "Morale needs a follow-up with the wider team." Who does what goes in actions.
 
-Most bullets need no attribution at all. Add the bracketed name only where a reader would act differently for knowing who holds the view: a contested position, an unresolved disagreement, a commitment someone owns. Shared context, agreed facts and background carry no name. If more than about a third of your bullets end in a name, you are over-attributing and should strip the ones that do not change what the reader does.
-
-Attribution, when it genuinely matters — a contested position, an unresolved disagreement, a view the reader must respond to — goes in brackets at the end of the sentence, never as the verb: "Endo-first guidance stands (Shrey had read earlier feedback as a steer toward tier-one cardiology)."
+Most bullets need no name at all. Name someone only where it changes what the reader does: a view still contested, a disagreement not settled. Then say it the way you would in your own notes, "Shrey reads the earlier feedback as a steer toward cardiology; it wasn't one", or put the name in brackets at the end. Shared context and agreed facts carry no name. If more than about a third of your bullets name someone, strip the ones that do not change anything.
 
 Also:
 - Organise by topic and by what came out of it, never by the order people spoke.
@@ -222,12 +239,16 @@ Also:
 
 EVERY FOLLOW-UP HAS A HOME IN THE NOTES. A reader who sees a follow-up must be able to find, in the notes, what it is about and why it came up. When part of the conversation produced nothing but a next step, usually the last few minutes, it still gets a bullet saying what was discussed: what the thing is, what state it is in, what was agreed about it. A follow-up that mentions something the notes never mention is a sign that a topic was dropped. Put it back.
 
-BEFORE YOU FINISH: reread every bullet you have written. If it describes someone saying, thinking or feeling something rather than stating what is true, decided or open, rewrite it. If a bullet is only a promise ("I will send…"), reword it as what was decided and put the promise in actions. Then read the actions one by one and check each has a bullet behind it.
+BEFORE YOU FINISH: reread every bullet you have written. If it narrates someone saying something rather than stating what is true, decided or open, rewrite it. If it reads like a report about the meeting rather than notes someone typed for themselves, rewrite it shorter and plainer. If a bullet is only a promise ("I will send…"), reword it as what was decided and put the promise in actions. Then read the actions one by one and check each has a bullet behind it.
 - actions: every concrete follow-up the recording implies or someone promised, each as one imperative sentence, with the owner and any deadline when stated (e.g. "Send Dr. Chen the phase 3 subgroup data by Friday"). Only real commitments and next steps — not topics, not general observations. Empty array if there genuinely are none.
 - smallTalk: meetings usually open with pleasantries — greetings, travel, weather, weekend plans, waiting for people to join, tech checks — before anyone says anything substantive. Never make a section for it.
   - found: true only when there is a genuine run of opening pleasantries. A one-line "hi, how are you" before real content does not count.
   - description: what it was, 3-8 words ("greetings and weekend plans", "waiting for Dr. Ruiz to join").
   - firstSubstantiveLine: the first 8-15 words of the first sentence that carries real content, copied VERBATIM from the transcript — exact characters, including any speaker label. It is used to locate the cut point, so a paraphrase is useless. Empty string when found is false.${
+      writer ? `
+
+${writerRule(writer)}` : ""
+    }${
       spellingBlock ? `
 
 ${spellingBlock}` : ""
@@ -434,6 +455,7 @@ Rules for a bullet:
 - Only what the transcript says. With no transcript, or nothing in it beyond the follow-up, the bullet says just that much, plainly, and stops.
 - It is a note, not a to-do: never an imperative, and never a copy of the follow-up. The follow-up says "Send the deck to Dr. Chen"; the note says "The updated deck has not gone to Dr. Chen yet."
 - State what is true, decided or open. Never open with a person or pronoun followed by a verb of speaking (said, asked, noted, mentioned...).
+- ${NOTES_VOICE_RULE}
 - When two uncovered follow-ups are about the same thing, write the bullet once, on the first, and leave the second "".
 - ${NO_DASH_RULE}`,
       messages: [

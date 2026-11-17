@@ -35,7 +35,28 @@ function keepCapital(matched: string, to: string): string {
   return /^[A-Z]/.test(matched) && /^[a-z]/.test(to) ? to[0].toUpperCase() + to.slice(1) : to;
 }
 
-const FIRST_PERSON = new Set(["I", "i", "me"]);
+const FIRST_PERSON = new Set(["I", "i", "me", "Me"]);
+
+export function isFirstPerson(to: string): boolean {
+  return FIRST_PERSON.has(to.trim());
+}
+
+// After "I" the verb has to agree: "I goes" and "I is" are what a bare swap
+// leaves behind. Words that end in s but are not verbs are left alone.
+const NOT_VERBS = new Set(["always", "perhaps", "sometimes", "is", "was", "has", "does", "this", "thus", "plus", "yes"]);
+function agree(verb: string): string {
+  const lower = verb.toLowerCase();
+  if (lower === "is") return "am";
+  if (lower === "has") return "have";
+  if (lower === "does") return "do";
+  if (lower === "isn't" || lower === "isn’t") return "am not";
+  if (lower === "hasn't" || lower === "hasn’t") return "haven't";
+  if (lower === "doesn't" || lower === "doesn’t") return "don't";
+  if (NOT_VERBS.has(lower) || !/^[a-z]+s$/.test(lower) || /(ss|us|is)$/.test(lower)) return verb;
+  if (/[^aeiou]ies$/.test(lower)) return verb.slice(0, -3) + "y";
+  if (/(ches|shes|xes|zes|oes)$/.test(lower)) return verb.slice(0, -2);
+  return verb.slice(0, -1);
+}
 
 // Rename `from` to `to` inside a plain string.
 export function renameInText(text: string, from: string, to: string): string {
@@ -45,6 +66,20 @@ export function renameInText(text: string, from: string, to: string): string {
     const f = escapeRx(from);
     return (
       text
+        // A transcript's speaker label: "Speaker A: ..." is "Me: ...".
+        .replace(new RegExp(`(^|\\n)${f}:`, "gi"), "$1Me:")
+        // A follow-up's owner: "Speaker A to check with Priya" is "I'll check".
+        .replace(new RegExp(`(?<![A-Za-z0-9])${f}\\s+to\\s+(?=[a-z])`, "gi"), "I'll ")
+        // A bracketed attribution: "(Speaker A)" is "(me)".
+        .replace(new RegExp(`\\(${f}\\)`, "gi"), "(me)")
+        // "Speaker A and Dr. Chen" leads with the other person.
+        .replace(
+          new RegExp(
+            `(?<![A-Za-z0-9])${f}\\s+and\\s+((?:Dr\\.\\s+)?[A-Z][A-Za-z'’-]*(?:\\s+[A-Z][A-Za-z'’-]*)?)`,
+            "g",
+          ),
+          (_m, other) => `${other} and ${from}`,
+        )
         // Possessive first: "the manager's team" is "my team", not "I's team".
         // Both apostrophes matter — generated notes use the typographic one,
         // and matching only the straight one is why this used to produce "I".
@@ -59,6 +94,8 @@ export function renameInText(text: string, from: string, to: string): string {
         )
         // Whatever is left is the subject.
         .replace(boundedRx(from, "gi"), "I")
+        // ...and the verb after it agrees.
+        .replace(/\bI\s+([A-Za-z]+(?:['’]t)?)\b/g, (_m, verb) => `I ${agree(verb)}`)
         // The substitutions above are lower case by design; sentence starts
         // need their capital back.
         .replace(

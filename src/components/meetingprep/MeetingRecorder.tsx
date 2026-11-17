@@ -42,7 +42,8 @@ import { FolderPicker } from "@/components/meetingprep/FolderPicker";
 import { startLiveCapture, type LiveCapture } from "@/lib/meetingprep/liveCapture";
 import { tidyNotesHtml } from "@/lib/meetingprep/notes";
 import type { MpFolder } from "@/lib/meetingprep/types";
-import { countMatches, countMatchesInHtml, renameInHtml, renameInText } from "@/lib/meetingprep/rename";
+import { countMatches, countMatchesInHtml, isFirstPerson } from "@/lib/meetingprep/rename";
+import { writerRenamer } from "@/lib/meetingprep/asWriter";
 import { useSpellings } from "@/lib/meetingprep/hooks";
 import { ReplaceModal } from "@/components/meetingprep/ReplaceModal";
 import { transcribeUpload, type UploadProgress } from "@/lib/meetingprep/uploadCapture";
@@ -446,18 +447,24 @@ export function MeetingRecorder({
     });
   }
 
-  function applyReviewRename(what: string, to: string, rememberIt: boolean) {
+  async function applyReviewRename(what: string, to: string, rememberIt: boolean) {
     if (!what || !to || !result) return;
-    setResult({
-      ...result,
-      title: renameInText(result.title, what, to),
-      notesHtml: renameInHtml(result.notesHtml, what, to),
-      actions: result.actions.map((a) => ({ ...a, text: renameInText(a.text, what, to) })),
-      transcript: renameInText(result.transcript, what, to),
+    setRenameOpen(false);
+    if (isFirstPerson(to)) toast("info", "Rewriting the notes in your voice…");
+    // "This was me" rewrites the prose in the first person (see asWriter.ts).
+    const R = await writerRenamer(what, to, {
+      notes: result.notesHtml,
+      ...Object.fromEntries(result.actions.map((a, i) => [`action${i}`, a.text])),
+    });
+    setResult((cur) => cur && {
+      ...cur,
+      title: R(cur.title),
+      notesHtml: R(cur.notesHtml, true),
+      actions: cur.actions.map((a) => ({ ...a, text: R(a.text) })),
+      transcript: R(cur.transcript),
     });
     // Carried onto the saved meeting so a redo from the transcript keeps it.
     setNameMap((m) => ({ ...m, [what]: to }));
-    setRenameOpen(false);
     setRenameWhat("");
     setActionPick("");
     if (rememberIt) {
