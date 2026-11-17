@@ -40,8 +40,6 @@ import {
 import {
   applyNameMap,
   countMatchesInHtml,
-  renameInHtml,
-  renameInText,
   isFirstPerson,
 } from "@/lib/meetingprep/rename";
 import { speakersRenamer, writerRenamer, type Renamer } from "@/lib/meetingprep/asWriter";
@@ -50,7 +48,7 @@ import { useSessionProfile } from "@/lib/session";
 import { TranscriptCapture } from "@/components/studio/TranscriptCapture";
 import { useKolLite } from "./KolLink";
 import { MentionedPeople } from "./MentionedPeople";
-import { WhoIsWho } from "./WhoIsWho";
+import { WhoIsWho, speakerClues } from "./WhoIsWho";
 import {
   relabelTranscript,
   transcriptLabel,
@@ -1128,13 +1126,16 @@ export function DebriefTab({
             {!busy && (
               <WhoIsWho
                 labels={unnamedLabels(notesHtml, ...actions.map((a) => a.text))}
-                sample={sampleFor}
-                people={attendeeNames}
-                applyHint={
-                  (debrief.transcript || "").trim()
-                    ? "Writes the notes again from the transcript"
-                    : "Rewrites the notes"
+                targetRef={notesRef}
+                watch={notesHtml}
+                clues={(label) =>
+                  speakerClues(label, {
+                    transcript: debrief.transcript,
+                    notesHtml,
+                    actions: actions.map((a) => a.text),
+                  })
                 }
+                people={attendeeNames}
                 onApply={(a) => void assignSpeakers(a)}
               />
             )}

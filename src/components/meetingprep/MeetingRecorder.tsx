@@ -45,7 +45,7 @@ import { tidyNotesHtml } from "@/lib/meetingprep/notes";
 import type { MpFolder } from "@/lib/meetingprep/types";
 import { countMatches, countMatchesInHtml, isFirstPerson } from "@/lib/meetingprep/rename";
 import { writerRenamer } from "@/lib/meetingprep/asWriter";
-import { WhoIsWho } from "./WhoIsWho";
+import { WhoIsWho, speakerClues } from "./WhoIsWho";
 import {
   relabelTranscript,
   transcriptLabel,
@@ -494,7 +494,9 @@ export function MeetingRecorder({
   // going back to the recording.
   function speakerSample(label: string): string {
     const prefix = `Speaker ${label}:`;
-    const line = transcript.split("\n").find((l) => l.startsWith(prefix));
+    // Skips "Yeah." and "Right": a few words can't be recognised as anyone.
+    const lines = transcript.split("\n").filter((l) => l.startsWith(prefix));
+    const line = lines.find((l) => l.split(/\s+/).length >= 6) || lines[0];
     return line ? line.slice(prefix.length).trim().slice(0, 90) : "";
   }
 
@@ -939,9 +941,16 @@ export function MeetingRecorder({
           <WhoIsWho
             busy={reviewRewriting}
             labels={unnamedLabels(result.notesHtml, ...result.actions.map((a) => a.text))}
-            sample={(l) => speakerSample(l.replace(/^Speaker /, ""))}
+            targetRef={reviewRef}
+            watch={result.notesHtml}
+            clues={(label) =>
+              speakerClues(label, {
+                transcript,
+                notesHtml: result.notesHtml,
+                actions: result.actions.map((a) => a.text),
+              })
+            }
             people={rosterNames}
-            applyHint="Writes the notes again knowing who is who"
             onApply={(who) => {
               // Kept in the boxes too, so a later redo and the save see them.
               for (const a of who) {
