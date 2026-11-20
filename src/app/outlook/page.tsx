@@ -50,6 +50,7 @@ import {
 } from "@/lib/writer/hooks";
 import { useOutlookSignIn } from "@/lib/outlook-remember";
 import { MeetingCard } from "@/components/outlook/MeetingCard";
+import { FollowupCard } from "@/components/outlook/FollowupCard";
 import {
   cleanEmail,
   displayName,
@@ -102,6 +103,9 @@ type OfficeItem = {
   to?: OfficeRecipients;
   cc?: OfficeRecipients;
   dateTimeCreated?: Date;
+  // The message's own Internet id, read mode only. How the PC runner finds
+  // this email again to reply on it (components/outlook/FollowupCard.tsx).
+  internetMessageId?: string;
   body: OfficeBody;
   displayReplyForm?: (html: string) => void;
   displayReplyAllForm?: (html: string) => void;
@@ -156,6 +160,9 @@ interface ReadEmail {
    * invites, and what quietly fills the directory.
    */
   people: DirectoryPerson[];
+  /** The sender's address, and the message's Internet id ("" in a draft). */
+  fromEmail: string;
+  messageId: string;
 }
 
 /** How much of a thread goes to the model. */
@@ -177,6 +184,7 @@ const sameEmail = (a: ReadEmail, b: ReadEmail) =>
   a.cc === b.cc &&
   a.body === b.body &&
   a.composing === b.composing &&
+  a.messageId === b.messageId &&
   a.people.map((p) => p.email).join() === b.people.map((p) => p.email).join();
 
 /** Office's address list as directory rows, one per address. */
@@ -417,6 +425,9 @@ export default function OutlookPage() {
   // (editing, refining, inserting) happens against this doc without ever
   // leaving the pane.
   const [resultDoc, setResultDoc] = useState<WriterDoc | null>(null);
+  // Set when "Set up a meeting" opens an invite: then the reminder card offers
+  // itself, because a meeting is the commonest thing to remind people about.
+  const [invitesOpened, setInvitesOpened] = useState("");
   const [resultContent, setResultContent] = useState("");
   const [resultSubject, setResultSubject] = useState("");
   const [guidance, setGuidance] = useState("");
@@ -503,6 +514,8 @@ export default function OutlookPage() {
               body: body.slice(0, 40000),
               composing,
               people: peopleFrom(addresses, body.slice(0, 40000)),
+              fromEmail: (item.from?.emailAddress || item.sender?.emailAddress || "").toLowerCase(),
+              messageId: composing ? "" : String(item.internetMessageId || ""),
             };
             // Same message as last time → same object, so a re-read on focus
             // does not re-render the whole panel for nothing.
@@ -2246,6 +2259,37 @@ export default function OutlookPage() {
                 thread={wholeThread}
                 people={email.people}
                 me={me}
+                onOpened={() => setInvitesOpened(`${email.from}|${email.subject}`)}
+              />
+            )}
+
+            {!resultDoc && (
+              <FollowupCard
+                key={`${email.from}|${email.subject}`}
+                userId={userId}
+                subject={email.subject}
+                from={email.from}
+                thread={wholeThread}
+                people={email.people}
+                me={me}
+                messageId={email.messageId}
+                nudge={
+                  invitesOpened === `${email.from}|${email.subject}`
+                    ? "Send everyone a reminder email about this before it happens?"
+                    : !email.composing && email.fromEmail && email.fromEmail === me.email.toLowerCase()
+                      ? "Waiting on an answer? Send a reminder about this in a week, and follow up if nobody replies?"
+                      : ""
+                }
+                voices={styles
+                  .filter((s) => activeStyleIds.includes(s.id))
+                  .map((s) => ({
+                    name: s.name,
+                    text: s.kind === "voice" ? s.voice_profile : s.rules,
+                    samples: s.kind === "voice" ? s.samples || "" : "",
+                  }))}
+                signature={signature}
+                signsOff={signsOff}
+                wordSwaps={settings?.word_swaps || []}
               />
             )}
 

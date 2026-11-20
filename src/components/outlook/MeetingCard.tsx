@@ -15,6 +15,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { agendaHtml } from "@/lib/meeting-body";
 import {
   isPersonAddress,
   parseDirectory,
@@ -65,7 +66,7 @@ function nextWorkingMorning(): { date: string; time: string } {
 }
 
 /** "Friday 20 November 2026, 14:05 (Europe/London)": what "Thursday" is relative to. */
-function nowForModel(): string {
+export function nowForModel(): string {
   const d = new Date();
   const day = d.toLocaleDateString("en-GB", {
     weekday: "long",
@@ -178,6 +179,7 @@ export function MeetingCard({
   thread,
   people,
   me,
+  onOpened,
 }: {
   userId: string;
   subject: string;
@@ -186,6 +188,8 @@ export function MeetingCard({
   /** Everyone on the open email, with addresses. */
   people: DirectoryPerson[];
   me: { name: string; email: string };
+  /** An invite was opened in Outlook. */
+  onOpened?: () => void;
 }) {
   const [request, setRequest] = useState("");
   const [busy, setBusy] = useState(false);
@@ -374,7 +378,7 @@ export function MeetingCard({
       end,
       subject: draft.subject,
       location: draft.location,
-      body: draft.agenda,
+      body: agendaHtml(draft.agenda),
     };
     const ticked = list.map((x, j) => (j === i ? { ...x, opened: true } : x));
     saveDrafts(key, ticked);
@@ -387,6 +391,7 @@ export function MeetingCard({
     }
     setDraftsState(ticked);
     setError("");
+    onOpened?.();
     // Inviting someone is writing to them: next time "Rachel" means this
     // Rachel a little more surely. Awaited via then(), or it never runs.
     void supabase
@@ -405,7 +410,10 @@ export function MeetingCard({
       if (list[i].opened) continue;
       if (!openInOutlook(i, list)) return;
       list = list.map((x, j) => (j === i ? { ...x, opened: true } : x));
-      await new Promise((r) => setTimeout(r, 700));
+      // A breath between windows. Teams is NOT ours to add (Outlook's own
+      // setting puts it on each new meeting, and it skipped some at random),
+      // so the pane says to check it rather than pretending this fixes it.
+      await new Promise((r) => setTimeout(r, 1500));
     }
   }
 
@@ -504,7 +512,8 @@ export function MeetingCard({
             </button>
             <p className="text-[10px] leading-snug text-muted">
               Outlook opens its own meeting window with each invite filled in.
-              Switch on Teams there if you want a call link. Nothing is sent
+              Before you send each one, check the Teams Meeting button is on:
+              Outlook adds Teams itself and sometimes skips one. Nothing is sent
               until you press Send.
             </p>
           </>
@@ -795,7 +804,7 @@ function InviteEditor({
   );
 }
 /** Find someone in the directory by name or address and add them. */
-function PersonSearch({
+export function PersonSearch({
   userId,
   onPick,
 }: {
