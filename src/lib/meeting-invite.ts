@@ -171,9 +171,11 @@ Return only the JSON.`,
           seen.add(key);
           return true;
         });
-      const start = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(String(m.start || ""))
-        ? String(m.start)
-        : "";
+      // "2026-12-17T13:00:00", "2026-12-17 13:00" and "2026-12-17T9:00" are
+      // all a time. Holding out for the exact shape threw away the first
+      // session's 1:00 PM and showed it as "nothing says when".
+      const when = String(m.start || "").match(/^(\d{4}-\d{2}-\d{2})[T ](\d{1,2}):(\d{2})/);
+      const start = when ? `${when[1]}T${when[2].padStart(2, "0")}:${when[3]}` : "";
       return {
         subject: stripEmDashes(String(m.subject || subject), { asSubject: true }).replace(
           /^(re|fw|fwd):\s*/i,

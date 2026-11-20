@@ -307,7 +307,11 @@ export function resolvePerson(
 ): Resolved {
   const given = cleanEmail(email) || cleanEmail(asked);
   if (given) {
-    const known = [...onThread, ...directory].find((p) => p.email === given);
+    // A header often names someone by their bare address ("scheier.c@...");
+    // the directory's "Chris Scheier" is the better record of them.
+    const matches = [...onThread, ...directory].filter((p) => p.email === given);
+    const known =
+      matches.find((p) => p.name && !p.name.includes("@")) || matches[0];
     return {
       asked,
       status: "found",

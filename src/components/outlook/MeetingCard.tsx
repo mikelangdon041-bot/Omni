@@ -340,21 +340,24 @@ export function MeetingCard({
     );
   }
 
-  function openInOutlook(i: number) {
-    const draft = drafts?.[i];
-    if (!draft) return;
+  // Opens one invite in Outlook's own meeting window. The tick is saved
+  // BEFORE Outlook is asked, because opening a meeting can close this pane
+  // on the spot, and a tick saved afterwards never lands.
+  function openInOutlook(i: number, list: Draft[] | null = drafts): boolean {
+    const draft = list?.[i];
+    if (!list || !draft) return false;
     const mailbox = window.Office?.context?.mailbox;
     const show = mailbox?.displayNewAppointmentForm;
     if (typeof show !== "function") {
       setError("This Outlook won't open a meeting from the pane.");
-      return;
+      return false;
     }
     const [y, m, d] = draft.date.split("-").map(Number);
     const [hh, mm] = draft.time.split(":").map(Number);
     const start = new Date(y, m - 1, d, hh, mm);
     if (Number.isNaN(start.getTime())) {
-      setError("Pick a date and time first.");
-      return;
+      setError(`Invite ${i + 1}: pick a date and time first.`);
+      return false;
     }
     const end = new Date(start.getTime() + draft.duration * 60000);
     const ready = draft.attendees.filter(
@@ -373,17 +376,36 @@ export function MeetingCard({
       location: draft.location,
       body: draft.agenda,
     };
+    const ticked = list.map((x, j) => (j === i ? { ...x, opened: true } : x));
+    saveDrafts(key, ticked);
     try {
       show.call(mailbox, form);
-      update(i, { opened: true });
-      setError("");
-      // Inviting someone is writing to them: next time "Rachel" means this
-      // Rachel a little more surely. Awaited via then(), or it never runs.
-      void supabase
-        .rpc("directory_bump", { emails: ready.map((a) => a.person!.email) })
-        .then(() => undefined);
     } catch (e) {
+      saveDrafts(key, list);
       setError((e as Error).message || "Outlook wouldn't open the meeting.");
+      return false;
+    }
+    setDraftsState(ticked);
+    setError("");
+    // Inviting someone is writing to them: next time "Rachel" means this
+    // Rachel a little more surely. Awaited via then(), or it never runs.
+    void supabase
+      .rpc("directory_bump", { emails: ready.map((a) => a.person!.email) })
+      .then(() => undefined);
+    return true;
+  }
+
+  // Every invite not opened yet, one after another. If Outlook closes the
+  // pane part way, the ones already opened are ticked and this button
+  // offers the rest when the pane comes back.
+  async function openAll() {
+    let list = drafts;
+    if (!list) return;
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].opened) continue;
+      if (!openInOutlook(i, list)) return;
+      list = list.map((x, j) => (j === i ? { ...x, opened: true } : x));
+      await new Promise((r) => setTimeout(r, 700));
     }
   }
 
@@ -448,8 +470,18 @@ export function MeetingCard({
           <>
             {drafts.length > 1 && (
               <p className="text-[11px] leading-snug text-muted">
-                {`${drafts.length} invites, ${drafts.filter((d) => d.opened).length} opened so far. Open each one in Outlook and send it. If the pane closes when Outlook opens one, open it again: the rest are kept here.`}
+                {`${drafts.length} invites, ${drafts.filter((d) => d.opened).length} opened so far. Each opens as its own Outlook meeting window for you to check and send. If the pane closes, open it again: the rest are kept here.`}
               </p>
+            )}
+            {drafts.length > 1 && drafts.some((d) => !d.opened) && (
+              <button
+                onClick={() => void openAll()}
+                className="w-full rounded-lg bg-[var(--accent)] px-3 py-2 text-xs font-semibold text-white transition hover:opacity-90"
+              >
+                {drafts.some((d) => d.opened)
+                  ? `Open the other ${drafts.filter((d) => !d.opened).length} in Outlook`
+                  : `Open all ${drafts.length} in Outlook`}
+              </button>
             )}
             {drafts.map((draft, i) => (
               <InviteEditor
