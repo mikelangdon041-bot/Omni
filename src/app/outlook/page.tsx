@@ -2242,6 +2242,7 @@ export default function OutlookPage() {
               <MeetingCard
                 userId={userId}
                 subject={email.subject}
+                from={email.from}
                 thread={wholeThread}
                 people={email.people}
                 me={me}

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { cleanEmail, type DirectoryPerson } from "@/lib/directory";
-import { planMeeting } from "@/lib/meeting-invite";
+import { planMeetings } from "@/lib/meeting-invite";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -50,7 +50,7 @@ export async function POST(req: Request) {
 
   try {
     return NextResponse.json(
-      await planMeeting({
+      await planMeetings({
         thread,
         subject: String(body?.subject || "").slice(0, 300),
         request,
@@ -59,11 +59,15 @@ export async function POST(req: Request) {
         onThread,
         directory,
         meRow,
+        // Stop in the pane aborts the fetch, which aborts this request.
+        signal: req.signal,
       }),
     );
-  } catch {
+  } catch (e) {
+    if (req.signal.aborted) return new NextResponse(null, { status: 499 });
+    const msg = e instanceof Error && /ran out of room|didn't find|declined/.test(e.message) ? e.message : "";
     return NextResponse.json(
-      { error: "Couldn't read the meeting out of that. Try again." },
+      { error: msg || "Couldn't read the meeting out of that. Try again." },
       { status: 500 },
     );
   }

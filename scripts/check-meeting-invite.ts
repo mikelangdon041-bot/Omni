@@ -26,7 +26,8 @@ function check(ok: boolean, what: string, detail = "") {
 
 async function main() {
   const { parseDirectory, resolvePerson, peopleInText } = await import("../src/lib/directory");
-  const { planMeeting } = await import("../src/lib/meeting-invite");
+  const { planMeetings } = await import("../src/lib/meeting-invite");
+  type Plan = Awaited<ReturnType<typeof planMeetings>>["meetings"][number];
 
   // --- Import -------------------------------------------------------------
   const outlookCsv = [
@@ -60,37 +61,37 @@ async function main() {
   check(quoted.length === 3 && quoted[0].name === "Glenn Ross", "people read out of quoted headers", JSON.stringify(quoted.map((q) => q.name)));
 
   // --- Matching -----------------------------------------------------------
-  const directory = [...fromCsv, ...fromTsv, { name: "Christopher Hale", email: "chale@acme.com" }];
+  const directory = [...fromCsv, ...fromTsv, { name: "Carltopher Hale", email: "chale@acme.com" }];
   const ambiguous = resolvePerson("Shane", "", [], directory);
   check(ambiguous.status === "choose" && ambiguous.options.length === 2, "two Shanes: asks which");
   const onThread = resolvePerson("Shane", "", [{ name: "Shane Patel", email: "shane.patel@acme.com" }], directory);
   check(onThread.person?.email === "shane.patel@acme.com", "the Shane on the thread wins");
   check(resolvePerson("Shane O'Brien", "", [], directory).person?.email === "shane.obrien@acme.com", "full name, apostrophe");
-  check(resolvePerson("Chris", "", [], directory).person?.email === "chale@acme.com", "Chris finds Christopher");
+  check(resolvePerson("Carl", "", [], directory).person?.email === "chale@acme.com", "Carl finds Carltopher");
   check(resolvePerson("Nobody Here", "", [], directory).status === "unknown", "unknown stays unknown");
 
-  // --- Which Rachel ---------------------------------------------------------
+  // --- Which Rita ---------------------------------------------------------
   const me = { name: "Zak B", email: "zak@acme.com", department: "Medical Affairs", company: "Acme US" };
   const rachels = [
-    { name: "Rachel Italy", email: "r.italy@acme.it", company: "Acme SpA", department: "Sales" },
-    { name: "Rachel Dept", email: "r.dept@acme.com", company: "Acme US", department: "Medical Affairs" },
-    { name: "Rachel Report", email: "r.report@acme.com", company: "Acme US", department: "Field", relation: "report" },
-    { name: "Rachel Us", email: "r.us@acme.com", company: "Acme US", department: "Finance" },
+    { name: "Rita Italy", email: "r.italy@acme.it", company: "Acme SpA", department: "Sales" },
+    { name: "Rita Dept", email: "r.dept@acme.com", company: "Acme US", department: "Medical Affairs" },
+    { name: "Rita Report", email: "r.report@acme.com", company: "Acme US", department: "Field", relation: "report" },
+    { name: "Rita Us", email: "r.us@acme.com", company: "Acme US", department: "Finance" },
   ];
-  const r1 = resolvePerson("Rachel", "", [], rachels, me);
+  const r1 = resolvePerson("Rita", "", [], rachels, me);
   check(r1.person?.email === "r.report@acme.com" && r1.options.length === 3, "no history: your report wins, others kept", `${r1.person?.email} / ${r1.why}`);
-  const r2 = resolvePerson("Rachel", "", [], rachels.map((p) => (p.email === "r.italy@acme.it" ? { ...p, sent_count: 25 } : { ...p, sent_count: 1 })), me);
+  const r2 = resolvePerson("Rita", "", [], rachels.map((p) => (p.email === "r.italy@acme.it" ? { ...p, sent_count: 25 } : { ...p, sent_count: 1 })), me);
   check(r2.person?.email === "r.italy@acme.it", "the one you email most beats the org chart", r2.why);
-  const r3 = resolvePerson("Rachel", "", [], rachels.filter((p) => !p.relation), me);
+  const r3 = resolvePerson("Rita", "", [], rachels.filter((p) => !p.relation), me);
   check(r3.person?.email === "r.dept@acme.com", "then your department", r3.why);
-  const r4 = resolvePerson("Rachel", "", [], rachels.filter((p) => !p.relation && p.department !== "Medical Affairs"), me);
+  const r4 = resolvePerson("Rita", "", [], rachels.filter((p) => !p.relation && p.department !== "Medical Affairs"), me);
   check(r4.person?.email === "r.us@acme.com", "then your company", r4.why);
-  const r5 = resolvePerson("Rachel", "", [], [rachels[0], { ...rachels[0], name: "Rachel Other", email: "r.o@acme.it" }], me);
+  const r5 = resolvePerson("Rita", "", [], [rachels[0], { ...rachels[0], name: "Rita Other", email: "r.o@acme.it" }], me);
   check(r5.status === "choose", "still level: asks");
-  const r6 = resolvePerson("Rachel", "", [], rachels.map((p, i) => ({ ...p, sent_count: i === 0 ? 4 : i === 1 ? 3 : 0 })), me);
+  const r6 = resolvePerson("Rita", "", [], rachels.map((p, i) => ({ ...p, sent_count: i === 0 ? 4 : i === 1 ? 3 : 0 })), me);
   check(r6.person?.email === "r.report@acme.com", "two written to about as often: org chart decides", r6.why);
-  const csvRanked = parseDirectory('"Name","Email","Job Title","Department","Company","Relation","Emailed","Last Emailed"\n"Rachel High","r.high@acme.com","MSL","Field","Acme US","report","12","2026-11-02"');
-  check(csvRanked[0].sent_count === 12 && csvRanked[0].relation === "report" && csvRanked[0].last_sent === "2026-11-02" && csvRanked[0].email === "r.high@acme.com", "export columns read, Emailed not taken for the address");
+  const csvRanked = parseDirectory('"Name","Email","Job Title","Department","Company","Relation","Emailed","Last Emailed"\n"Rita Hale","r.hale@acme.com","MSL","Field","Acme US","report","12","2026-11-02"');
+  check(csvRanked[0].sent_count === 12 && csvRanked[0].relation === "report" && csvRanked[0].last_sent === "2026-11-02" && csvRanked[0].email === "r.hale@acme.com", "export columns read, Emailed not taken for the address");
 
   // --- The model ------------------------------------------------------------
   // Friday 20 November 2026.
@@ -117,7 +118,7 @@ Shane
         { name: "Glenn Ross", email: "glenn.ross@acme.com" },
       ],
       request: "",
-      expect: (p: Awaited<ReturnType<typeof planMeeting>>) => {
+      expect: (p: Plan) => {
         const emails = p.attendees.map((a) => a.person?.email);
         check(p.start === "2026-11-26T14:00", "Thursday 2pm next week = 26 Nov 14:00", p.start);
         check(p.durationMinutes === 60, "the hour", String(p.durationMinutes));
@@ -138,12 +139,12 @@ The October numbers for the north territory are well under plan. We should talk 
         { name: "Glenn Ross", email: "glenn.ross@acme.com" },
         { name: "Tom Li", email: "tom.li@acme.com" },
       ],
-      request: "30 min with Glenn and Chris on Tuesday at 3, not Tom",
-      expect: (p: Awaited<ReturnType<typeof planMeeting>>) => {
+      request: "30 min with Glenn and Carl on Tuesday at 3, not Tom",
+      expect: (p: Plan) => {
         const emails = p.attendees.map((a) => a.person?.email);
         check(p.start === "2026-11-24T15:00", "Tuesday at 3 = 24 Nov 15:00", p.start);
         check(p.durationMinutes === 30, "30 min", String(p.durationMinutes));
-        check(emails.includes("chale@acme.com"), "Chris resolved to Christopher Hale", JSON.stringify(emails));
+        check(emails.includes("chale@acme.com"), "Carl resolved to Carltopher Hale", JSON.stringify(emails));
         check(!emails.includes("tom.li@acme.com"), "Tom left off as asked");
       },
     },
@@ -156,7 +157,7 @@ Subject: Speaker training
 We should get together at some point to go through the new speaker training deck before it goes to compliance.`,
       people: [{ name: "Priya Nair", email: "priya.nair@acme.com" }],
       request: "",
-      expect: (p: Awaited<ReturnType<typeof planMeeting>>) => {
+      expect: (p: Plan) => {
         check(p.start === "", "no invented time", p.start);
         check(p.attendees.length === 1 && p.attendees[0].person?.email === "priya.nair@acme.com", "Priya only");
       },
@@ -165,7 +166,7 @@ We should get together at some point to go through the new speaker training deck
 
   for (const c of cases) {
     console.log(`\n--- ${c.what}`);
-    const plan = await planMeeting({
+    const plan = (await planMeetings({
       thread: c.thread,
       subject: "",
       request: c.request,
@@ -173,10 +174,45 @@ We should get together at some point to go through the new speaker training deck
       me: meMail,
       onThread: c.people.filter((p) => p.email !== meMail.email),
       directory,
-    });
+    })).meetings[0];
     console.log(JSON.stringify({ ...plan, attendees: plan.attendees.map((a) => `${a.status} ${a.asked} -> ${a.person?.email || a.options.map((o) => o.email).join("|")}${a.optional ? " (optional)" : ""}`) }, null, 2));
     c.expect(plan);
   }
+
+  // A schedule: five sessions, bolded presenters, "plus Carl", holds.
+  console.log("\n--- a schedule of five sessions from bolded picks");
+  const msl = readFileSync(new URL("./fixtures/team-workshops.txt", import.meta.url), "utf8");
+  const team = [
+    ...["Sara Lind", "Emma Cole", "Adam Dale", "Tara Gill", "Anna Neal", "Lena Cruz", "Dan Kerr", "Rita Hale", "Carl Ames", "Sam Patel", "Rob Vance", "Lola Ade"].map((n) => ({ name: n, email: n.toLowerCase().replace(" ", ".") + "@acme.com" })),
+    { name: "Kate Kerr", email: "kerr.k@acme.com" },
+  ];
+  const sched = await planMeetings({
+    thread: msl,
+    subject: "RE: December Team Workshops",
+    request: "Kate is ok with all my bolded choices for each session that i need you to make a invite for. Also include Carl. These are simply calendar holds as Carl will send the updated calendar event later.",
+    now,
+    me: meMail,
+    onThread: [{ name: "Kate Kerr", email: "kerr.k@acme.com" }, { name: "Seth Bell", email: "bell.s@acme.com" }],
+    directory: team,
+  });
+  const ms = sched.meetings;
+  for (const m of ms) console.log(m.start, m.durationMinutes, m.subject, "|", m.attendees.map((a) => a.person?.name || "?" + a.asked).join(", "));
+  check(ms.length === 5, "five invites", String(ms.length));
+  const want = [
+    ["2026-12-17T13:00", 120, ["Sara Lind", "Emma Cole"]],
+    ["2026-12-18T14:00", 60, ["Adam Dale", "Tara Gill"]],
+    ["2026-12-21T13:00", 90, ["Anna Neal", "Lena Cruz"]],
+    ["2026-12-23T14:00", 60, ["Dan Kerr"]],
+    ["2026-12-23T15:00", 90, ["Rita Hale"]],
+  ] as const;
+  want.forEach(([start, mins, names], i) => {
+    const m = ms[i];
+    const got = (m?.attendees || []).map((a) => a.person?.name).sort();
+    const exp = [...names, "Carl Ames"].sort();
+    check(m?.start === start && m?.durationMinutes === mins, `session ${i + 1}: ${start}, ${mins} min`, `${m?.start} ${m?.durationMinutes}`);
+    check(JSON.stringify(got) === JSON.stringify(exp), `session ${i + 1}: bolded people + Carl only`, got.join(", "));
+    check(/^hold:/i.test(m?.subject || "") && !/^re:/i.test(m?.subject || ""), `session ${i + 1}: a hold, no "RE:"`, m?.subject);
+  });
 
   console.log(failed ? `\n${failed} FAILED` : "\nall passed");
   process.exit(failed ? 1 : 0);
