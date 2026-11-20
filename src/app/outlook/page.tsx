@@ -49,6 +49,13 @@ import {
   useWriterStyles,
 } from "@/lib/writer/hooks";
 import { useOutlookSignIn } from "@/lib/outlook-remember";
+import { MeetingCard } from "@/components/outlook/MeetingCard";
+import {
+  cleanEmail,
+  displayName,
+  peopleInText,
+  type DirectoryPerson,
+} from "@/lib/directory";
 import {
   AUDIENCE_CHIPS,
   FIDELITY_OPTIONS,
@@ -113,6 +120,9 @@ declare global {
           // of these messages did I write?" answerable, which is what turns a
           // thread into writing samples without anybody pasting anything.
           userProfile?: { displayName?: string; emailAddress?: string };
+          // Opens Outlook's own new-meeting window, filled in. Mailbox 1.1,
+          // so every Outlook has it; see components/outlook/MeetingCard.tsx.
+          displayNewAppointmentForm?: (form: object) => void;
         };
       };
       CoercionType: { Text: string; Html: string };
@@ -140,6 +150,12 @@ interface ReadEmail {
    * decide which controls exist.
    */
   composing: boolean;
+  /**
+   * Everyone on the message with their address: the headers Office gives us,
+   * plus any "Name <address>" in the quoted thread. What "Set up a meeting"
+   * invites, and what quietly fills the directory.
+   */
+  people: DirectoryPerson[];
 }
 
 /** How much of a thread goes to the model. */
@@ -160,7 +176,20 @@ const sameEmail = (a: ReadEmail, b: ReadEmail) =>
   a.to === b.to &&
   a.cc === b.cc &&
   a.body === b.body &&
-  a.composing === b.composing;
+  a.composing === b.composing &&
+  a.people.map((p) => p.email).join() === b.people.map((p) => p.email).join();
+
+/** Office's address list as directory rows, one per address. */
+function peopleFrom(lists: OfficeAddress[][], body: string): DirectoryPerson[] {
+  const seen = new Map<string, DirectoryPerson>();
+  for (const a of lists.flat()) {
+    const email = cleanEmail(a?.emailAddress || "");
+    if (email && !seen.has(email))
+      seen.set(email, { name: displayName(a?.displayName || ""), email });
+  }
+  for (const p of peopleInText(body)) if (!seen.has(p.email)) seen.set(p.email, p);
+  return [...seen.values()].slice(0, 60);
+}
 
 /**
  * The body, taken apart: what you typed, and then the thread underneath as the
@@ -460,11 +489,21 @@ export default function OutlookPage() {
           item.sender?.emailAddress ||
           "";
 
+        // Every address read on the way, for the meeting invite.
+        const addresses: OfficeAddress[][] = [[item.from || {}, item.sender || {}]];
         const finish = (subject: string, to: string, cc: string) =>
           item.body.getAsync(Office.CoercionType.Text, (result) => {
             const body =
               result.status === Office.AsyncResultStatus.Succeeded ? result.value || "" : "";
-            const next = { subject, from: who, to, cc, body: body.slice(0, 40000), composing };
+            const next = {
+              subject,
+              from: who,
+              to,
+              cc,
+              body: body.slice(0, 40000),
+              composing,
+              people: peopleFrom(addresses, body.slice(0, 40000)),
+            };
             // Same message as last time → same object, so a re-read on focus
             // does not re-render the whole panel for nothing.
             setEmail((prev) => (prev && sameEmail(prev, next) ? prev : next));
@@ -475,10 +514,15 @@ export default function OutlookPage() {
         // you ask; one you are reading has them sitting there as an array.
         const readList = (field: OfficeRecipients | undefined, then: (names: string) => void) => {
           if (!field) return then("");
-          if (Array.isArray(field)) return then(addressNames(field));
-          field.getAsync((r) =>
-            then(r.status === Office.AsyncResultStatus.Succeeded ? addressNames(r.value) : ""),
-          );
+          if (Array.isArray(field)) {
+            addresses.push(field);
+            return then(addressNames(field));
+          }
+          field.getAsync((r) => {
+            const ok = r.status === Office.AsyncResultStatus.Succeeded;
+            if (ok) addresses.push(r.value || []);
+            then(ok ? addressNames(r.value) : "");
+          });
         };
 
         const withRecipients = (subject: string) =>
@@ -2192,6 +2236,16 @@ export default function OutlookPage() {
                   </>
                 )}
               </div>
+            )}
+
+            {!resultDoc && (
+              <MeetingCard
+                userId={userId}
+                subject={email.subject}
+                thread={wholeThread}
+                people={email.people}
+                me={me}
+              />
             )}
 
             {/* The other half of the loop, always in reach. Inserting only
