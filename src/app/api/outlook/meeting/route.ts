@@ -36,13 +36,16 @@ export async function POST(req: Request) {
 
   const { data: rows } = await supabase
     .from("directory_people")
-    .select("name, email, title, department, source")
+    .select("name, email, title, department, source, sent_count, last_sent, relation, company, is_me")
     .eq("user_id", user.id)
     .limit(20000);
   // What the user imported is the better record of a person than what a mail
   // header happened to call them, so it is searched first.
-  const directory: DirectoryPerson[] = ((rows || []) as DirectoryPerson[])
-    .filter((p) => p.email !== me.email)
+  const all = (rows || []) as DirectoryPerson[];
+  // Your own row, for "same department" and "same company".
+  const meRow = all.find((p) => p.is_me) || all.find((p) => p.email === me.email) || null;
+  const directory: DirectoryPerson[] = all
+    .filter((p) => p !== meRow && p.email !== me.email)
     .sort((a, b) => (a.source === b.source ? 0 : a.source === "import" ? -1 : 1));
 
   try {
@@ -55,6 +58,7 @@ export async function POST(req: Request) {
         me,
         onThread,
         directory,
+        meRow,
       }),
     );
   } catch {

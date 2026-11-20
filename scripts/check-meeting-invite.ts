@@ -69,10 +69,33 @@ async function main() {
   check(resolvePerson("Chris", "", [], directory).person?.email === "chale@acme.com", "Chris finds Christopher");
   check(resolvePerson("Nobody Here", "", [], directory).status === "unknown", "unknown stays unknown");
 
+  // --- Which Rachel ---------------------------------------------------------
+  const me = { name: "Zak B", email: "zak@acme.com", department: "Medical Affairs", company: "Acme US" };
+  const rachels = [
+    { name: "Rachel Italy", email: "r.italy@acme.it", company: "Acme SpA", department: "Sales" },
+    { name: "Rachel Dept", email: "r.dept@acme.com", company: "Acme US", department: "Medical Affairs" },
+    { name: "Rachel Report", email: "r.report@acme.com", company: "Acme US", department: "Field", relation: "report" },
+    { name: "Rachel Us", email: "r.us@acme.com", company: "Acme US", department: "Finance" },
+  ];
+  const r1 = resolvePerson("Rachel", "", [], rachels, me);
+  check(r1.person?.email === "r.report@acme.com" && r1.options.length === 3, "no history: your report wins, others kept", `${r1.person?.email} / ${r1.why}`);
+  const r2 = resolvePerson("Rachel", "", [], rachels.map((p) => (p.email === "r.italy@acme.it" ? { ...p, sent_count: 25 } : { ...p, sent_count: 1 })), me);
+  check(r2.person?.email === "r.italy@acme.it", "the one you email most beats the org chart", r2.why);
+  const r3 = resolvePerson("Rachel", "", [], rachels.filter((p) => !p.relation), me);
+  check(r3.person?.email === "r.dept@acme.com", "then your department", r3.why);
+  const r4 = resolvePerson("Rachel", "", [], rachels.filter((p) => !p.relation && p.department !== "Medical Affairs"), me);
+  check(r4.person?.email === "r.us@acme.com", "then your company", r4.why);
+  const r5 = resolvePerson("Rachel", "", [], [rachels[0], { ...rachels[0], name: "Rachel Other", email: "r.o@acme.it" }], me);
+  check(r5.status === "choose", "still level: asks");
+  const r6 = resolvePerson("Rachel", "", [], rachels.map((p, i) => ({ ...p, sent_count: i === 0 ? 4 : i === 1 ? 3 : 0 })), me);
+  check(r6.person?.email === "r.report@acme.com", "two written to about as often: org chart decides", r6.why);
+  const csvRanked = parseDirectory('"Name","Email","Job Title","Department","Company","Relation","Emailed","Last Emailed"\n"Rachel High","r.high@acme.com","MSL","Field","Acme US","report","12","2026-11-02"');
+  check(csvRanked[0].sent_count === 12 && csvRanked[0].relation === "report" && csvRanked[0].last_sent === "2026-11-02" && csvRanked[0].email === "r.high@acme.com", "export columns read, Emailed not taken for the address");
+
   // --- The model ------------------------------------------------------------
   // Friday 20 November 2026.
   const now = "Friday 20 November 2026, 09:15 (Europe/London) [2026-11-20]";
-  const me = { name: "Zak Balmuth", email: "zak@acme.com" };
+  const meMail = { name: "Zak Balmuth", email: "zak@acme.com" };
 
   const cases = [
     {
@@ -147,8 +170,8 @@ We should get together at some point to go through the new speaker training deck
       subject: "",
       request: c.request,
       now,
-      me,
-      onThread: c.people.filter((p) => p.email !== me.email),
+      me: meMail,
+      onThread: c.people.filter((p) => p.email !== meMail.email),
       directory,
     });
     console.log(JSON.stringify({ ...plan, attendees: plan.attendees.map((a) => `${a.status} ${a.asked} -> ${a.person?.email || a.options.map((o) => o.email).join("|")}${a.optional ? " (optional)" : ""}`) }, null, 2));

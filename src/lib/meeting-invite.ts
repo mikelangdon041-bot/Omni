@@ -51,6 +51,8 @@ export interface MeetingInput {
   onThread: DirectoryPerson[];
   /** Their directory, imported rows first. */
   directory: DirectoryPerson[];
+  /** Their own directory row, if imported: department and company. */
+  meRow?: DirectoryPerson | null;
 }
 
 export interface MeetingPlan {
@@ -73,6 +75,7 @@ export async function planMeeting({
   me,
   onThread,
   directory,
+  meRow = null,
 }: MeetingInput): Promise<MeetingPlan> {
   const res = await anthropic().messages.create({
     model: CHECK_MODEL,
@@ -124,7 +127,7 @@ Return only the JSON.`,
   const seen = new Set<string>();
   const attendees = asked
     .map((a) => ({
-      ...resolvePerson(String(a.name || ""), String(a.email || ""), onThread, directory),
+      ...resolvePerson(String(a.name || ""), String(a.email || ""), onThread, directory, meRow),
       optional: !!a.optional,
     }))
     // The same person named twice ("Shane" and "Shane O'Brien") is one invite.

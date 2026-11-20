@@ -10,6 +10,13 @@ export interface DirectoryPerson {
   title?: string;
   department?: string;
   source?: "import" | "outlook";
+  /** Mail you sent them in the last year, from Sent Items. */
+  sent_count?: number;
+  last_sent?: string | null;
+  /** report | team | manager | peer | "" — see scripts/export-outlook-directory.ps1. */
+  relation?: string;
+  company?: string;
+  is_me?: boolean;
 }
 
 /** Addresses that are machines, not people, and never belong on an invite. */
@@ -112,7 +119,7 @@ export function parseDirectory(text: string): DirectoryPerson[] {
       : ",";
   const rows = parseCsv(src, delimiter);
   const headers = (rows[0] || []).map((h) => h.trim().toLowerCase());
-  const emailCol = column(headers, /e-?mail|smtp/, /display|type|2|3/);
+  const emailCol = column(headers, /e-?mail|smtp/, /display|type|2|3|emailed/);
 
   const people: DirectoryPerson[] = [];
   if (emailCol >= 0 && rows.length > 1 && !cleanEmail(headers[emailCol])) {
@@ -123,7 +130,11 @@ export function parseDirectory(text: string): DirectoryPerson[] {
       column(headers, /job ?title|position|role|designation/) >= 0
         ? column(headers, /job ?title|position|role|designation/)
         : column(headers, /^title$/);
-    const deptCol = column(headers, /department|dept|division|team/);
+    const deptCol = column(headers, /department|dept|division/);
+    const companyCol = column(headers, /^company( ?name)?$/);
+    const relationCol = column(headers, /^relation$/);
+    const sentCol = column(headers, /^emailed$|^sent ?count$/);
+    const lastCol2 = column(headers, /^last emailed$|^last ?sent$/);
     for (const r of rows.slice(1)) {
       const email = cleanEmail(r[emailCol] || "");
       if (!email) continue;
@@ -140,6 +151,13 @@ export function parseDirectory(text: string): DirectoryPerson[] {
         // "Mr." is a salutation, not a job.
         title: /^(mr|mrs|ms|miss|dr|prof)\.?$/i.test(title) ? "" : title,
         department: deptCol >= 0 ? (r[deptCol] || "").trim() : "",
+        company: companyCol >= 0 ? (r[companyCol] || "").trim() : "",
+        relation: relationCol >= 0 ? (r[relationCol] || "").trim().toLowerCase() : "",
+        sent_count: sentCol >= 0 ? Math.max(0, parseInt(r[sentCol] || "0", 10) || 0) : 0,
+        last_sent:
+          lastCol2 >= 0 && /^\d{4}-\d{2}-\d{2}$/.test((r[lastCol2] || "").trim())
+            ? (r[lastCol2] || "").trim()
+            : null,
       });
     }
   } else {
@@ -209,7 +227,69 @@ export interface Resolved {
   asked: string;
   status: "found" | "choose" | "unknown";
   person?: DirectoryPerson;
+  /**
+   * The other people the name could mean. Kept when one was picked for you,
+   * so "not them?" can offer the rest; the picked one is never among them.
+   */
   options: DirectoryPerson[];
+  /** Why this one, when there was more than one: "you've emailed her 14 times this year". */
+  why?: string;
+}
+
+/** Where someone sits relative to you, as a number to compare and words to show. */
+function closeness(p: DirectoryPerson, me: DirectoryPerson | null): { score: number; why: string } {
+  const rel = (p.relation || "").toLowerCase();
+  if (rel === "report") return { score: 40, why: "reports to you" };
+  if (rel === "team") return { score: 30, why: "on your team" };
+  if (rel === "manager") return { score: 25, why: "your manager" };
+  if (rel === "peer") return { score: 20, why: "on your manager's team" };
+  const same = (a?: string, b?: string) => !!a && !!b && a.trim().toLowerCase() === b.trim().toLowerCase();
+  let score = 0;
+  let why = "";
+  if (same(p.department, me?.department)) {
+    score += 10;
+    why = "in your department";
+  }
+  if (same(p.company, me?.company)) {
+    score += 5;
+    why = why || `at ${p.company}`;
+  }
+  return { score, why };
+}
+
+const sent = (p: DirectoryPerson) => p.sent_count || 0;
+
+/**
+ * Of several people a name fits equally well, the one meant — or null to ask.
+ *
+ * Who you actually write to comes first: the Rachel you emailed thirty times
+ * this year is the Rachel, wherever she sits. Only when that does not settle
+ * it (nobody written to, or two people written to about as often) does the
+ * org chart decide: your reports, the rest of your line, your manager and
+ * their team, your department, then your company. Anything still level is a
+ * question, never a coin toss.
+ */
+export function pickAmong(
+  candidates: DirectoryPerson[],
+  me: DirectoryPerson | null,
+): { person: DirectoryPerson; why: string } | null {
+  const bySent = [...candidates].sort((a, b) => sent(b) - sent(a));
+  const [a, b] = bySent;
+  if (a && sent(a) >= 2 && sent(a) >= 3 * (b ? sent(b) : 0))
+    return { person: a, why: `you've emailed them ${sent(a)} time${sent(a) === 1 ? "" : "s"} this year` };
+  const ranked = candidates
+    .map((p) => ({ p, ...closeness(p, me) }))
+    .sort((x, y) => y.score - x.score || sent(y.p) - sent(x.p));
+  if (ranked[0]?.score > 0 && (ranked.length < 2 || ranked[0].score > ranked[1].score))
+    return { person: ranked[0].p, why: ranked[0].why };
+  return null;
+}
+
+/** Most likely first: written to most, then nearest in the org. */
+export function rankOptions(list: DirectoryPerson[], me: DirectoryPerson | null): DirectoryPerson[] {
+  return [...list].sort(
+    (x, y) => sent(y) - sent(x) || closeness(y, me).score - closeness(x, me).score,
+  );
 }
 
 /**
@@ -223,6 +303,7 @@ export function resolvePerson(
   email: string,
   onThread: DirectoryPerson[],
   directory: DirectoryPerson[],
+  me: DirectoryPerson | null = null,
 ): Resolved {
   const given = cleanEmail(email) || cleanEmail(asked);
   if (given) {
@@ -241,9 +322,19 @@ export function resolvePerson(
       .sort((a, b) => b.s - a.s);
     if (!scored.length) continue;
     const best = scored[0].s;
-    const top = scored.filter((x) => x.s === best);
-    if (top.length === 1) return { asked, status: "found", person: top[0].p, options: [] };
-    return { asked, status: "choose", options: top.slice(0, 6).map((x) => x.p) };
+    const top = scored.filter((x) => x.s === best).map((x) => x.p);
+    if (top.length === 1) return { asked, status: "found", person: top[0], options: [] };
+    const options = rankOptions(top, me);
+    const picked = pickAmong(top, me);
+    if (picked)
+      return {
+        asked,
+        status: "found",
+        person: picked.person,
+        why: picked.why,
+        options: options.filter((p) => p.email !== picked.person.email).slice(0, 6),
+      };
+    return { asked, status: "choose", options: options.slice(0, 6) };
   }
   return { asked, status: "unknown", options: [] };
 }

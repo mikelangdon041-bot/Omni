@@ -37,8 +37,12 @@ interface Draft {
 }
 
 type AppointmentForm = {
-  requiredAttendees?: (string | { emailAddress: string; displayName?: string })[];
-  optionalAttendees?: (string | { emailAddress: string; displayName?: string })[];
+  requiredAttendees?: (
+    string | { emailAddress: string; displayName?: string }
+  )[];
+  optionalAttendees?: (
+    string | { emailAddress: string; displayName?: string }
+  )[];
   start?: Date;
   end?: Date;
   subject?: string;
@@ -47,7 +51,8 @@ type AppointmentForm = {
 };
 
 const pad = (n: number) => String(n).padStart(2, "0");
-const localDate = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const localDate = (d: Date) =>
+  `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
 /** The next working day at 10:00, for a thread that never said when. */
 function nextWorkingMorning(): { date: string; time: string } {
@@ -99,9 +104,19 @@ export function MeetingCard({
   const learnedKey = useRef("");
   useEffect(() => {
     const rows = people
-      .filter((p) => isPersonAddress(p.email) && p.email !== me.email.toLowerCase())
-      .map((p) => ({ user_id: userId, name: p.name, email: p.email, source: "outlook" }));
-    const key = rows.map((r) => r.email).sort().join(",");
+      .filter(
+        (p) => isPersonAddress(p.email) && p.email !== me.email.toLowerCase(),
+      )
+      .map((p) => ({
+        user_id: userId,
+        name: p.name,
+        email: p.email,
+        source: "outlook",
+      }));
+    const key = rows
+      .map((r) => r.email)
+      .sort()
+      .join(",");
     if (!rows.length || key === learnedKey.current) return;
     learnedKey.current = key;
     void supabase
@@ -130,12 +145,22 @@ export function MeetingCard({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
-        body: JSON.stringify({ thread, subject, request, people, me, now: nowForModel() }),
+        body: JSON.stringify({
+          thread,
+          subject,
+          request,
+          people,
+          me,
+          now: nowForModel(),
+        }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "That didn't go through. Try again.");
+      if (!res.ok)
+        throw new Error(data.error || "That didn't go through. Try again.");
       const fallback = nextWorkingMorning();
-      const [date, time] = data.start ? data.start.split("T") : [fallback.date, fallback.time];
+      const [date, time] = data.start
+        ? data.start.split("T")
+        : [fallback.date, fallback.time];
       setDraft({
         subject: data.subject || subject,
         date,
@@ -144,7 +169,12 @@ export function MeetingCard({
         location: data.location || "",
         agenda: data.agenda || "",
         attendees: data.attendees || [],
-        note: [data.start ? "" : "Nothing in the email says when, so this is a placeholder time.", data.note]
+        note: [
+          data.start
+            ? ""
+            : "Nothing in the email says when, so this is a placeholder time.",
+          data.note,
+        ]
           .filter(Boolean)
           .join(" "),
       });
@@ -161,7 +191,9 @@ export function MeetingCard({
 
   function choose(i: number, person: DirectoryPerson) {
     setAttendees((list) =>
-      list.map((a, j) => (j === i ? { ...a, status: "found", person, options: [] } : a)),
+      list.map((a, j) =>
+        j === i ? { ...a, status: "found", person, options: [] } : a,
+      ),
     );
   }
 
@@ -169,11 +201,21 @@ export function MeetingCard({
     setAttendees((list) =>
       list.some((a) => a.person?.email === person.email)
         ? list
-        : [...list, { asked: person.name, status: "found", person, options: [], optional: false }],
+        : [
+            ...list,
+            {
+              asked: person.name,
+              status: "found",
+              person,
+              options: [],
+              optional: false,
+            },
+          ],
     );
   }
 
-  const ready = draft?.attendees.filter((a) => a.status === "found" && a.person) || [];
+  const ready =
+    draft?.attendees.filter((a) => a.status === "found" && a.person) || [];
   const unsettled = draft?.attendees.filter((a) => a.status !== "found") || [];
 
   function openInOutlook() {
@@ -209,6 +251,11 @@ export function MeetingCard({
       show.call(mailbox, form);
       setOpened(true);
       setError("");
+      // Inviting someone is writing to them: next time "Rachel" means this
+      // Rachel a little more surely. Awaited via then(), or it never runs.
+      void supabase
+        .rpc("directory_bump", { emails: ready.map((a) => a.person!.email) })
+        .then(() => undefined);
     } catch (e) {
       setError((e as Error).message || "Outlook wouldn't open the meeting.");
     }
@@ -216,7 +263,8 @@ export function MeetingCard({
 
   const field =
     "w-full rounded-md border border-border bg-canvas px-2 py-1 text-[11px] outline-none focus:border-[var(--accent)]";
-  const label = "mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-muted";
+  const label =
+    "mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-muted";
 
   return (
     <details
@@ -234,7 +282,8 @@ export function MeetingCard({
           <>
             <p className="text-[11px] leading-relaxed text-muted">
               Reads this email and fills in a meeting invite: who, when, how
-              long, and an agenda. It opens in Outlook for you to check and send.
+              long, and an agenda. It opens in Outlook for you to check and
+              send.
             </p>
             <textarea
               value={request}
@@ -270,7 +319,9 @@ export function MeetingCard({
               <label className={label}>Subject</label>
               <input
                 value={draft.subject}
-                onChange={(e) => setDraft({ ...draft, subject: e.target.value })}
+                onChange={(e) =>
+                  setDraft({ ...draft, subject: e.target.value })
+                }
                 className={field}
               />
             </div>
@@ -297,7 +348,9 @@ export function MeetingCard({
                 <label className={label}>Length</label>
                 <select
                   value={draft.duration}
-                  onChange={(e) => setDraft({ ...draft, duration: Number(e.target.value) })}
+                  onChange={(e) =>
+                    setDraft({ ...draft, duration: Number(e.target.value) })
+                  }
                   className={field}
                 >
                   {[...new Set([...DURATIONS, draft.duration])]
@@ -320,33 +373,74 @@ export function MeetingCard({
                     className="rounded-lg border border-border bg-canvas px-2 py-1 text-[11px]"
                   >
                     {a.status === "found" && a.person ? (
-                      <div className="flex items-center gap-1.5">
-                        <span className="min-w-0 flex-1 truncate">
-                          <span className="font-medium">{a.person.name || a.person.email}</span>{" "}
-                          <span className="text-muted">{a.person.email}</span>
-                          {a.person.title && (
-                            <span className="text-muted"> · {a.person.title}</span>
-                          )}
-                        </span>
-                        <button
-                          onClick={() =>
-                            setAttendees((l) =>
-                              l.map((x, j) => (j === i ? { ...x, optional: !x.optional } : x)),
-                            )
-                          }
-                          className="shrink-0 text-[10px] text-muted hover:text-ink"
-                          title="Required or optional"
-                        >
-                          {a.optional ? "optional" : "required"}
-                        </button>
-                        <button
-                          onClick={() => setAttendees((l) => l.filter((_, j) => j !== i))}
-                          className="shrink-0 text-muted hover:text-ink"
-                          aria-label={`Remove ${a.person.name}`}
-                        >
-                          ✕
-                        </button>
-                      </div>
+                      <>
+                        <div className="flex items-center gap-1.5">
+                          <span className="min-w-0 flex-1 truncate">
+                            <span className="font-medium">
+                              {a.person.name || a.person.email}
+                            </span>{" "}
+                            <span className="text-muted">{a.person.email}</span>
+                            {a.person.title && (
+                              <span className="text-muted">
+                                {" "}
+                                · {a.person.title}
+                              </span>
+                            )}
+                          </span>
+                          <button
+                            onClick={() =>
+                              setAttendees((l) =>
+                                l.map((x, j) =>
+                                  j === i ? { ...x, optional: !x.optional } : x,
+                                ),
+                              )
+                            }
+                            className="shrink-0 text-[10px] text-muted hover:text-ink"
+                            title="Required or optional"
+                          >
+                            {a.optional ? "optional" : "required"}
+                          </button>
+                          <button
+                            onClick={() =>
+                              setAttendees((l) => l.filter((_, j) => j !== i))
+                            }
+                            className="shrink-0 text-muted hover:text-ink"
+                            aria-label={`Remove ${a.person.name}`}
+                          >
+                            ✕
+                          </button>
+                        </div>
+                        {a.why && (
+                          <p className="mt-0.5 text-[10px] leading-snug text-muted">
+                            The {a.asked} who{" "}
+                            {a.why
+                              .replace(/^you've emailed them/, "you've emailed")
+                              .replace(/^(in|on|at) /, "is $1 ")
+                              .replace(/^your manager$/, "is your manager")}
+                            .{" "}
+                            <button
+                              onClick={() =>
+                                setAttendees((l) =>
+                                  l.map((x, j) =>
+                                    j === i
+                                      ? {
+                                          ...x,
+                                          status: "choose",
+                                          options: [x.person!, ...x.options],
+                                          person: undefined,
+                                          why: undefined,
+                                        }
+                                      : x,
+                                  ),
+                                )
+                              }
+                              className="font-medium text-[var(--accent)]"
+                            >
+                              Not them?
+                            </button>
+                          </p>
+                        )}
+                      </>
                     ) : (
                       <div>
                         <div className="flex items-center gap-1.5">
@@ -356,7 +450,9 @@ export function MeetingCard({
                               : `No address for ${a.asked}. Find them below, or leave them off.`}
                           </span>
                           <button
-                            onClick={() => setAttendees((l) => l.filter((_, j) => j !== i))}
+                            onClick={() =>
+                              setAttendees((l) => l.filter((_, j) => j !== i))
+                            }
                             className="shrink-0 text-muted hover:text-ink"
                             aria-label={`Remove ${a.asked}`}
                           >
@@ -391,7 +487,9 @@ export function MeetingCard({
               <label className={label}>Where (optional)</label>
               <input
                 value={draft.location}
-                onChange={(e) => setDraft({ ...draft, location: e.target.value })}
+                onChange={(e) =>
+                  setDraft({ ...draft, location: e.target.value })
+                }
                 placeholder="A room or address. Turn on Teams in Outlook."
                 className={field}
               />
@@ -428,14 +526,18 @@ export function MeetingCard({
               {unsettled.length
                 ? `${unsettled.length} ${unsettled.length === 1 ? "person has" : "people have"} no address yet and won't be invited. `
                 : ""}
-              Outlook opens its own meeting window with this filled in. Switch on
-              Teams there if you want a call link. Nothing is sent until you
+              Outlook opens its own meeting window with this filled in. Switch
+              on Teams there if you want a call link. Nothing is sent until you
               press Send.
             </p>
           </>
         )}
 
-        <DirectoryImport userId={userId} count={dirCount} onChanged={() => void countDirectory()} />
+        <DirectoryImport
+          userId={userId}
+          count={dirCount}
+          onChanged={() => void countDirectory()}
+        />
       </div>
     </details>
   );
@@ -452,7 +554,10 @@ function PersonSearch({
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<DirectoryPerson[]>([]);
   const typedEmail = useMemo(() => {
-    const m = q.trim().toLowerCase().match(/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/);
+    const m = q
+      .trim()
+      .toLowerCase()
+      .match(/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/);
     return m ? m[0] : "";
   }, [q]);
 
@@ -466,9 +571,13 @@ function PersonSearch({
       let query = supabase
         .from("directory_people")
         .select("name, email, title, department")
-        .eq("user_id", userId);
+        .eq("user_id", userId)
+        .eq("is_me", false)
+        // The people you write to first.
+        .order("sent_count", { ascending: false });
       // Every word has to appear somewhere, so "shane ob" finds Shane O'Brien.
-      for (const w of words) query = query.or(`name.ilike.%${w}%,email.ilike.%${w}%`);
+      for (const w of words)
+        query = query.or(`name.ilike.%${w}%,email.ilike.%${w}%`);
       const { data } = await query.limit(6);
       setHits((data as DirectoryPerson[]) || []);
     }, 200);
@@ -490,7 +599,8 @@ function PersonSearch({
         value={q}
         onChange={(e) => setQ(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && typedEmail) pick({ name: "", email: typedEmail });
+          if (e.key === "Enter" && typedEmail)
+            pick({ name: "", email: typedEmail });
         }}
         placeholder="Add someone: a name or an address"
         className="w-full rounded-md border border-dashed border-border bg-canvas px-2 py-1 text-[11px] outline-none focus:border-[var(--accent)]"
@@ -557,6 +667,11 @@ function DirectoryImport({
         email: p.email,
         title: p.title || "",
         department: p.department || "",
+        company: p.company || "",
+        relation: p.relation === "me" ? "" : p.relation || "",
+        is_me: p.relation === "me",
+        sent_count: p.sent_count || 0,
+        last_sent: p.last_sent || null,
         source: "import",
       }));
       for (let i = 0; i < rows.length; i += 500) {
@@ -565,7 +680,9 @@ function DirectoryImport({
           .upsert(rows.slice(i, i + 500), { onConflict: "user_id,email" });
         if (error) throw new Error(error.message);
       }
-      setMessage(`Imported ${people.length} ${people.length === 1 ? "person" : "people"}.`);
+      setMessage(
+        `Imported ${people.length} ${people.length === 1 ? "person" : "people"}.`,
+      );
       setPasted("");
       onChanged();
     } catch (e) {
@@ -600,18 +717,18 @@ function DirectoryImport({
         </p>
         <p>
           <span className="font-medium text-ink">A spreadsheet:</span> save it
-          as CSV with a name and an email column (title and department are
-          used if present).
+          as CSV with a name and an email column (title and department are used
+          if present).
         </p>
         <p>
           <span className="font-medium text-ink">Your team:</span> put a
-          distribution list in a new email&apos;s To line, click the + to
-          expand it, copy the whole line and paste it below.
+          distribution list in a new email&apos;s To line, click the + to expand
+          it, copy the whole line and paste it below.
         </p>
         <p>
-          <span className="font-medium text-ink">Classic Outlook:</span>{" "}
-          Address Book, select everyone, Add to Contacts; then File, Open &amp;
-          Export, Import/Export, Export to a file, CSV.
+          <span className="font-medium text-ink">Classic Outlook:</span> Address
+          Book, select everyone, Add to Contacts; then File, Open &amp; Export,
+          Import/Export, Export to a file, CSV.
         </p>
         <input
           type="file"
