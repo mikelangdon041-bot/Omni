@@ -38,10 +38,23 @@ export async function POST(req: Request) {
     .from("directory_people")
     .select("name, email, title, department, source, sent_count, last_sent, relation, company, is_me")
     .eq("user_id", user.id)
-    .limit(20000);
+    .order("email")
+    .range(0, 999);
+  // In pages: the API hands back at most 1000 rows per request whatever
+  // .limit() says, and a company directory is several thousand. Reading one
+  // page cut Shelbi and Erin out of an 8,533-person directory.
+  const all = (rows || []) as DirectoryPerson[];
+  for (let from = 1000; rows && all.length === from && from < 50000; from += 1000) {
+    const { data } = await supabase
+      .from("directory_people")
+      .select("name, email, title, department, source, sent_count, last_sent, relation, company, is_me")
+      .eq("user_id", user.id)
+      .order("email")
+      .range(from, from + 999);
+    all.push(...((data || []) as DirectoryPerson[]));
+  }
   // What the user imported is the better record of a person than what a mail
   // header happened to call them, so it is searched first.
-  const all = (rows || []) as DirectoryPerson[];
   // Your own row, for "same department" and "same company".
   const meRow = all.find((p) => p.is_me) || all.find((p) => p.email === me.email) || null;
   const directory: DirectoryPerson[] = all

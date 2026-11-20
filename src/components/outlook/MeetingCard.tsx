@@ -142,6 +142,35 @@ export function htmlToMarkedText(html: string): string {
 
 const DURATIONS = [15, 30, 45, 60, 90, 120];
 
+/**
+ * Drafts survive the pane closing. Opening a meeting window in Outlook closes
+ * or reloads this pane, so five invites kept only in memory became one: the
+ * first opened, the other four were gone. Kept per email for a day, in this
+ * browser only; the pane works without it.
+ */
+const SAVED_FOR_MS = 24 * 3600 * 1000;
+const savedKey = (subject: string, from: string) =>
+  `omni.meetingDrafts:${from.toLowerCase()}|${subject.toLowerCase()}`;
+function loadDrafts(key: string): Draft[] | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const saved = JSON.parse(raw) as { at: number; drafts: Draft[] };
+    if (Date.now() - saved.at > SAVED_FOR_MS || !saved.drafts?.length) return null;
+    return saved.drafts;
+  } catch {
+    return null;
+  }
+}
+function saveDrafts(key: string, drafts: Draft[] | null) {
+  try {
+    if (drafts?.length) localStorage.setItem(key, JSON.stringify({ at: Date.now(), drafts }));
+    else localStorage.removeItem(key);
+  } catch {
+    // Nothing to do: the drafts still work, they just won't outlive the pane.
+  }
+}
+
 export function MeetingCard({
   userId,
   subject,
@@ -161,7 +190,17 @@ export function MeetingCard({
   const [request, setRequest] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [drafts, setDrafts] = useState<Draft[] | null>(null);
+  const key = savedKey(subject, from);
+  // This only mounts once the email has been read, in the browser, so reading
+  // storage here cannot disagree with a server render.
+  const [drafts, setDraftsState] = useState<Draft[] | null>(() => loadDrafts(key));
+  const [expanded, setExpanded] = useState(() => !!loadDrafts(key));
+  const setDrafts = (next: Draft[] | null | ((d: Draft[] | null) => Draft[] | null)) =>
+    setDraftsState((prev) => {
+      const value = typeof next === "function" ? next(prev) : next;
+      saveDrafts(key, value);
+      return value;
+    });
   const [dirCount, setDirCount] = useState<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -351,8 +390,10 @@ export function MeetingCard({
   return (
     <details
       className="rounded-xl border border-border bg-surface"
+      open={expanded}
       onToggle={(e) => {
         const isOpen = (e.target as HTMLDetailsElement).open;
+        setExpanded(isOpen);
         if (isOpen && dirCount === null) void countDirectory();
       }}
     >
@@ -407,7 +448,7 @@ export function MeetingCard({
           <>
             {drafts.length > 1 && (
               <p className="text-[11px] leading-snug text-muted">
-                {`${drafts.length} invites. Open each one in Outlook and send it; they're ticked off here as you go.`}
+                {`${drafts.length} invites, ${drafts.filter((d) => d.opened).length} opened so far. Open each one in Outlook and send it. If the pane closes when Outlook opens one, open it again: the rest are kept here.`}
               </p>
             )}
             {drafts.map((draft, i) => (
