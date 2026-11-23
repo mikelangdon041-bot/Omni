@@ -24,6 +24,19 @@ const PDF_ROUTES = [
 ];
 
 const nextConfig: NextConfig = {
+  // OAuth discovery for the Outlook MCP connector (src/app/api/mcp). Clients
+  // look these up at fixed /.well-known paths, with or without the resource
+  // path appended, so both shapes land on the one route.
+  async rewrites() {
+    return [
+      { source: "/.well-known/oauth-protected-resource", destination: "/api/mcp/meta/resource" },
+      { source: "/.well-known/oauth-protected-resource/:path*", destination: "/api/mcp/meta/resource" },
+      { source: "/.well-known/oauth-authorization-server", destination: "/api/mcp/meta/server" },
+      { source: "/.well-known/oauth-authorization-server/:path*", destination: "/api/mcp/meta/server" },
+      { source: "/.well-known/openid-configuration", destination: "/api/mcp/meta/server" },
+      { source: "/.well-known/openid-configuration/:path*", destination: "/api/mcp/meta/server" },
+    ];
+  },
   transpilePackages: ["leaflet", "react-leaflet", "@react-leaflet/core"],
   // ffmpeg-static resolves its binary path from its own __dirname. If Next
   // bundles it, that path breaks at runtime (spawn ENOENT on Vercel). Keep it
