@@ -64,8 +64,14 @@ export async function POST(req: Request) {
     if (!pkceOk(verifier, row.code_challenge)) return fail("invalid_grant", "PKCE verification failed");
     const resource = form.get("resource") || row.resource;
     if (!resourceOk(resource, base)) return fail("invalid_target", "Unknown resource");
-    if (!(await getAccount(row.account_id))) return fail("invalid_grant", "Account is no longer connected");
-    const tokens = await issueTokens({ client_id: client.client_id, account_id: row.account_id, resource });
+    if (row.account_id && !(await getAccount(row.account_id)))
+      return fail("invalid_grant", "Account is no longer connected");
+    const tokens = await issueTokens({
+      client_id: client.client_id,
+      account_id: row.account_id,
+      user_id: row.user_id,
+      resource,
+    });
     return NextResponse.json(tokens, { headers: HEADERS });
   }
 

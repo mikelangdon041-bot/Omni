@@ -5,8 +5,9 @@ import {
   baseUrl,
   resourceMetadataUrl,
   verifyAccessToken,
-  type MsAccount,
+  type Principal,
 } from "@/lib/mcp/oauth";
+import { callPcTool } from "@/lib/mcp/pc";
 import { TOOLS, callTool } from "@/lib/mcp/tools";
 
 export const runtime = "nodejs";
@@ -27,7 +28,7 @@ export const maxDuration = 60;
 const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
 const INSTRUCTIONS = `Outlook mail and calendar for the signed-in user.
-- Read tools (list_events, search_mail, get_thread) return plain text with an Outlook web link for every item; include the links when you report items.
+- Read tools (list_events, search_mail, get_thread) return plain text with an id for every item (and an Outlook web link when one is available; include links when you report items).
 - Sending is two steps: create_draft saves a draft and returns draft_id; send_mail sends only that draft. Never call send_mail unless the user asked for the email to be sent (or the task you were given explicitly says to send).
 - create_event sends invitations to attendees as soon as it runs.`;
 
@@ -58,7 +59,7 @@ const rpcError = (id: RpcMessage["id"], code: number, message: string) => ({
   error: { code, message },
 });
 
-async function handle(msg: RpcMessage, account: MsAccount): Promise<object | null> {
+async function handle(msg: RpcMessage, who: Principal): Promise<object | null> {
   if (!msg || msg.jsonrpc !== "2.0" || typeof msg.method !== "string") {
     return rpcError(msg?.id, -32600, "Invalid request");
   }
@@ -87,7 +88,7 @@ async function handle(msg: RpcMessage, account: MsAccount): Promise<object | nul
     case "tools/call": {
       const name = String(params.name || "");
       const args = (params.arguments as Record<string, unknown>) || {};
-      const result = await callTool(account, name, args);
+      const result = who.kind === "pc" ? await callPcTool(who.userId, name, args) : await callTool(who.account, name, args);
       return { jsonrpc: "2.0", id, result };
     }
     case "resources/list":
@@ -102,8 +103,8 @@ async function handle(msg: RpcMessage, account: MsAccount): Promise<object | nul
 export async function POST(req: Request) {
   const token = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "").trim();
   if (!token) return unauthorized(req, false);
-  const account = await verifyAccessToken(token);
-  if (!account) return unauthorized(req, true);
+  const who = await verifyAccessToken(token);
+  if (!who) return unauthorized(req, true);
 
   let body: unknown;
   try {
@@ -115,7 +116,7 @@ export async function POST(req: Request) {
   try {
     const batch = Array.isArray(body);
     const messages = (batch ? body : [body]) as RpcMessage[];
-    const answers = (await Promise.all(messages.map((m) => handle(m, account)))).filter(Boolean);
+    const answers = (await Promise.all(messages.map((m) => handle(m, who)))).filter(Boolean);
     if (!answers.length) return new NextResponse(null, { status: 202, headers: CORS_HEADERS });
     return NextResponse.json(batch ? answers : answers[0], { headers: CORS_HEADERS });
   } catch (e) {

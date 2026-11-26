@@ -46,6 +46,18 @@ function msAuthority(): string {
   return `https://login.microsoftonline.com/${msTenant()}/oauth2/v2.0`;
 }
 
+/**
+ * Where tool calls go. "pc": a helper on the user's PC drives classic Outlook,
+ * which is already signed in, so no Entra app or tenant consent is needed
+ * (src/lib/mcp/pc.ts). "graph": Microsoft Graph through an Entra app. Default
+ * is graph only once an Entra app is configured.
+ */
+export function backend(): "pc" | "graph" {
+  const set = process.env.MCP_BACKEND;
+  if (set === "pc" || set === "graph") return set;
+  return process.env.MICROSOFT_CLIENT_ID ? "graph" : "pc";
+}
+
 export function msConfigured(): string | null {
   if (!process.env.MICROSOFT_CLIENT_ID || !process.env.MICROSOFT_CLIENT_SECRET)
     return "MICROSOFT_CLIENT_ID / MICROSOFT_CLIENT_SECRET are not set on this deployment.";
@@ -393,7 +405,8 @@ export async function issueCode(input: {
   client_id: string;
   redirect_uri: string;
   code_challenge: string;
-  account_id: string;
+  account_id?: string | null;
+  user_id?: string | null;
   scope: string | null;
   resource: string | null;
 }): Promise<string> {
@@ -413,7 +426,8 @@ interface CodeRow {
   client_id: string;
   redirect_uri: string;
   code_challenge: string;
-  account_id: string;
+  account_id: string | null;
+  user_id: string | null;
   scope: string | null;
   resource: string | null;
   expires_at: string;
@@ -426,7 +440,7 @@ export async function redeemCode(code: string): Promise<CodeRow | null> {
     .update({ used_at: new Date().toISOString() })
     .eq("code_hash", sha256(code))
     .is("used_at", null)
-    .select("client_id,redirect_uri,code_challenge,account_id,scope,resource,expires_at")
+    .select("client_id,redirect_uri,code_challenge,account_id,user_id,scope,resource,expires_at")
     .maybeSingle();
   const row = data as CodeRow | null;
   if (!row || new Date(row.expires_at).getTime() < Date.now()) return null;
@@ -443,7 +457,8 @@ export interface TokenPair {
 
 export async function issueTokens(input: {
   client_id: string;
-  account_id: string;
+  account_id?: string | null;
+  user_id?: string | null;
   family_id?: string;
   resource: string | null;
 }): Promise<TokenPair> {
@@ -454,7 +469,8 @@ export async function issueTokens(input: {
   const now = Date.now();
   const common = {
     client_id: input.client_id,
-    account_id: input.account_id,
+    account_id: input.account_id || null,
+    user_id: input.user_id || null,
     family_id: family,
     scope: MCP_SCOPE,
     resource: input.resource,
@@ -475,7 +491,8 @@ export async function issueTokens(input: {
 interface TokenRow {
   token_hash: string;
   client_id: string;
-  account_id: string;
+  account_id: string | null;
+  user_id: string | null;
   family_id: string;
   resource: string | null;
   expires_at: string;
@@ -491,7 +508,7 @@ export async function rotateRefresh(
   const hash = sha256(refresh);
   const { data } = await admin
     .from("mcp_tokens")
-    .select("token_hash,client_id,account_id,family_id,resource,expires_at,rotated_at,revoked_at")
+    .select("token_hash,client_id,account_id,user_id,family_id,resource,expires_at,rotated_at,revoked_at")
     .eq("token_hash", hash)
     .eq("kind", "refresh")
     .maybeSingle();
@@ -503,7 +520,7 @@ export async function rotateRefresh(
   if (row.rotated_at) {
     if (Date.now() - new Date(row.rotated_at).getTime() < ROTATION_GRACE_MS) {
       // A retry of a refresh whose answer was lost in transit.
-      return issueTokens({ client_id: row.client_id, account_id: row.account_id, family_id: row.family_id, resource: row.resource });
+      return issueTokens({ client_id: row.client_id, account_id: row.account_id, user_id: row.user_id, family_id: row.family_id, resource: row.resource });
     }
     // An old refresh token came back: someone kept a copy. Kill the chain.
     await admin.from("mcp_tokens").update({ revoked_at: new Date().toISOString() }).eq("family_id", row.family_id);
@@ -519,26 +536,31 @@ export async function rotateRefresh(
     .maybeSingle();
   if (!claimed) {
     // Lost a race with a concurrent refresh of the same token: same as a retry.
-    return issueTokens({ client_id: row.client_id, account_id: row.account_id, family_id: row.family_id, resource: row.resource });
+    return issueTokens({ client_id: row.client_id, account_id: row.account_id, user_id: row.user_id, family_id: row.family_id, resource: row.resource });
   }
-  const account = await getAccount(row.account_id);
-  if (!account) return { error: "The Microsoft account is no longer connected" };
-  return issueTokens({ client_id: row.client_id, account_id: row.account_id, family_id: row.family_id, resource: row.resource });
+  if (row.account_id && !(await getAccount(row.account_id)))
+    return { error: "The Microsoft account is no longer connected" };
+  return issueTokens({ client_id: row.client_id, account_id: row.account_id, user_id: row.user_id, family_id: row.family_id, resource: row.resource });
 }
 
-/** The account behind a bearer token, or null if the token is not live. */
-export async function verifyAccessToken(token: string): Promise<MsAccount | null> {
+/** Who a bearer token speaks for: a Microsoft account (Graph) or an Omni user (PC). */
+export type Principal = { kind: "graph"; account: MsAccount } | { kind: "pc"; userId: string };
+
+/** The principal behind a bearer token, or null if the token is not live. */
+export async function verifyAccessToken(token: string): Promise<Principal | null> {
   if (!token.startsWith("omni_at_")) return null;
   const admin = createAdminClient();
   const { data } = await admin
     .from("mcp_tokens")
-    .select("token_hash,account_id,expires_at,revoked_at")
+    .select("token_hash,account_id,user_id,expires_at,revoked_at")
     .eq("token_hash", sha256(token))
     .eq("kind", "access")
     .maybeSingle();
-  const row = data as Pick<TokenRow, "token_hash" | "account_id" | "expires_at" | "revoked_at"> | null;
+  const row = data as Pick<TokenRow, "token_hash" | "account_id" | "user_id" | "expires_at" | "revoked_at"> | null;
   if (!row || row.revoked_at || new Date(row.expires_at).getTime() < Date.now()) return null;
-  return getAccount(row.account_id);
+  if (row.user_id) return { kind: "pc", userId: row.user_id };
+  const account = row.account_id ? await getAccount(row.account_id) : null;
+  return account ? { kind: "graph", account } : null;
 }
 
 export async function revokeAccountTokens(accountId: string) {

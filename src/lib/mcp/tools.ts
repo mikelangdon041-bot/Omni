@@ -80,18 +80,18 @@ const odataString = (s: string) => `'${s.replace(/'/g, "''")}'`;
 
 // ---------------------------------------------------------------- helpers
 
-interface Recipient {
+export interface Recipient {
   emailAddress: { name?: string; address: string };
 }
 
-function str(args: Args, key: string): string | undefined {
+export function str(args: Args, key: string): string | undefined {
   const v = args[key];
   if (v === undefined || v === null) return undefined;
   if (typeof v !== "string") throw new ToolError(`${key} must be a string`);
   return v.trim() || undefined;
 }
 
-function bool(args: Args, key: string): boolean | undefined {
+export function bool(args: Args, key: string): boolean | undefined {
   const v = args[key];
   if (v === undefined || v === null) return undefined;
   if (typeof v === "boolean") return v;
@@ -103,7 +103,7 @@ function bool(args: Args, key: string): boolean | undefined {
 const EMAIL = /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/;
 
 /** "a@x.com", "Ann Lee <a@x.com>", or a list of those (array or comma/semicolon separated). */
-function recipients(args: Args, key: string): Recipient[] | undefined {
+export function recipients(args: Args, key: string): Recipient[] | undefined {
   const v = args[key];
   if (v === undefined || v === null || v === "") return undefined;
   const items = Array.isArray(v) ? v : String(v).split(/[;,](?=(?:[^"]*"[^"]*")*[^"]*$)/);
@@ -143,7 +143,7 @@ function textToHtml(text: string): string {
   return `<div style="font-family:Aptos,Calibri,Arial,sans-serif;font-size:11pt">${paras}</div>`;
 }
 
-function bodyHtml(args: Args): string | undefined {
+export function bodyHtml(args: Args): string | undefined {
   const body = typeof args.body === "string" ? args.body : undefined;
   if (body === undefined) return undefined;
   const type = str(args, "body_type") || "text";
@@ -151,7 +151,7 @@ function bodyHtml(args: Args): string | undefined {
   return type === "html" ? body : textToHtml(body);
 }
 
-function tidyText(s: string, max: number): string {
+export function tidyText(s: string, max: number): string {
   const t = s.replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
   return t.length > max ? `${t.slice(0, max)}\n[…truncated, ${t.length - max} more characters — open the link for the rest]` : t;
 }
