@@ -28,7 +28,7 @@ work in classic Outlook, which is already signed in to the work mailbox.
 - Pair a PC: put sha256(token) in `outlook_bridges` for the user, then
   `powershell -ExecutionPolicy Bypass -File omni-bridge.ps1 -Install -Token <token>`.
   Self-test one tool locally: `omni-bridge.ps1 -Test list_events -TestArgs @args.json`.
-  Log: `%LOCALAPPDATA%\Omnibridge.log` (tool names and timings only).
+  Log: `%LOCALAPPDATA%\Omni\bridge.log` (tool names and timings only).
 
 **Graph route (below).** Needs an Entra app and, at Recordati, admin consent.
 Switch with `MCP_BACKEND=graph` once `MICROSOFT_*` is set.
