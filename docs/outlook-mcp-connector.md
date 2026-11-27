@@ -7,7 +7,33 @@ draft and send email, and create events, including in unattended scheduled runs.
 - Code: `src/app/api/mcp/` (MCP endpoint, OAuth endpoints, discovery metadata),
   `src/lib/mcp/` (OAuth, sealing, Graph tools). Tables: migration `0041_mcp_connector.sql`.
 
-## How it works
+## Two routes
+
+**PC route (live, the default while no Entra app is configured).** No Microsoft
+approval needed. claude.ai signs in with the Omni account (one Allow page). Each
+tool call is queued in `mcp_pc_jobs`; the Omni bridge on the PC
+(`public/outlook/omni-bridge.ps1`, scheduled task "Omni Outlook bridge") polls
+through `mcp_bridge_poll` / `mcp_bridge_finish` with its own token and does the
+work in classic Outlook, which is already signed in to the work mailbox.
+
+- The PC must be on and signed in to Windows (locked is fine). The task starts
+  at sign-in, restarts every 5 minutes if it stopped, and wakes the PC at 7:40.
+  If it starts Outlook itself, it does so in the background.
+- Queued jobs expire at 40 s, so a send can never run after Claude was told it
+  failed. Job rows are deleted as soon as the answer is read.
+- It uses the first Exchange account (override with `-Mailbox`) and sets it as
+  the sending account before every send, so nothing goes from a personal account.
+- Classic Outlook has no per-item web links: items carry their Outlook id.
+  Teams links cannot be added to new events from a script.
+- Pair a PC: put sha256(token) in `outlook_bridges` for the user, then
+  `powershell -ExecutionPolicy Bypass -File omni-bridge.ps1 -Install -Token <token>`.
+  Self-test one tool locally: `omni-bridge.ps1 -Test list_events -TestArgs @args.json`.
+  Log: `%LOCALAPPDATA%\Omniridge.log` (tool names and timings only).
+
+**Graph route (below).** Needs an Entra app and, at Recordati, admin consent.
+Switch with `MCP_BACKEND=graph` once `MICROSOFT_*` is set.
+
+## How it works (Graph route)
 
 ```
 claude.ai ──OAuth 2.1 + PKCE + dynamic registration──▶ Omni (/api/mcp/oauth/*)
@@ -36,7 +62,8 @@ subject is ever logged.
 | `MICROSOFT_CLIENT_SECRET` | Entra app client secret **value** |
 | `MICROSOFT_TENANT` | Recordati's Directory (tenant) ID (GUID). Restricts sign-in to that tenant. |
 | `MCP_ALLOWED_ACCOUNTS` | Optional. Comma list of addresses or `@domain`s allowed to connect. Required if the tenant is not a GUID. |
-| `MCP_DEFAULT_TIMEZONE` | Optional. IANA zone, default `America/New_York`. |
+| `MCP_DEFAULT_TIMEZONE` | `America/Los_Angeles`. **Set.** |
+| `MCP_BACKEND` | Optional. `pc` or `graph`; default is `graph` only when `MICROSOFT_CLIENT_ID` is set. |
 
 The same `MICROSOFT_*` variables are what the OneNote hand-off uses, so one
 Entra app serves both.
