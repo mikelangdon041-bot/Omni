@@ -430,8 +430,14 @@ function Tool-CreateDraft($a) {
   return $out
 }
 
+# Drafts this bridge has already sent. Outlook keeps a just-sent message in
+# Drafts, unsent, for a few seconds; without this a repeat sent a second copy.
+$script:sentIds = @{}
+
 function Tool-SendMail($a) {
+  if ($script:sentIds.ContainsKey($a.draft_id)) { throw 'That draft has already been sent.' }
   $d = Get-ItemById $a.draft_id
+  if ($d.Submitted) { throw 'That draft has already been sent.' }
   if ($d.Class -ne 43 -or $d.Sent) { throw 'That item is not an unsent draft. send_mail only sends drafts made with create_draft.' }
   $draftsId = (Get-Folder 16).EntryID
   if ($d.Parent.EntryID -ne $draftsId) { throw 'That message is not in Drafts. send_mail only sends drafts made with create_draft.' }
@@ -442,6 +448,7 @@ function Tool-SendMail($a) {
   if ((Get-SendAccount $d) -ne $script:acct.SmtpAddress) { throw "Couldn't set the draft to send from $($script:acct.SmtpAddress). Not sent." }
   if (-not $d.Recipients.ResolveAll()) { throw 'Outlook could not resolve every recipient on the draft.' }
   $out = @{ to = (Recipient-Text $d 1); cc = (Recipient-Text $d 2); subject = $d.Subject }
+  $script:sentIds[$a.draft_id] = $true
   $d.Send()
   return $out
 }

@@ -15,6 +15,7 @@
 // Outlook id instead.
 
 import { createAdminClient } from "@/lib/supabase/admin";
+import { sha256 } from "./crypto";
 import { ToolError } from "./errors";
 import { checkTimeZone, fmtDateTime, fmtDay, fmtTime, parseWhen } from "./time";
 import { bodyHtml, bool, recipients, str, tidyText, type Recipient } from "./tools";
@@ -375,11 +376,36 @@ function format(tool: string, data: Record<string, unknown>, args: Args, tz: str
   }
 }
 
+/**
+ * send_mail, at most once per draft. Right after Send(), Outlook keeps listing
+ * the message in Drafts as unsent for a few seconds, and a repeated call sent
+ * a second copy (2026-11-27). The draft is claimed in mcp_sent_drafts first;
+ * the claim is released only when the PC definitely did not send.
+ */
+async function sendOnce(userId: string, shaped: Args): Promise<Record<string, unknown>> {
+  const admin = createAdminClient();
+  const draftHash = sha256(String(shaped.draft_id));
+  const { error } = await admin.from("mcp_sent_drafts").insert({ user_id: userId, draft_hash: draftHash });
+  if (error) {
+    if (error.code === "23505") throw new ToolError("That draft has already been sent. Check Sent Items; nothing was sent again.");
+    throw new Error(`sent-draft claim failed: ${error.code}`);
+  }
+  try {
+    return await relay(userId, "send_mail", shaped);
+  } catch (e) {
+    // "may still send" is the one outcome where it might have gone out: keep the claim.
+    if (!(e instanceof ToolError && /may still send/.test(e.message))) {
+      await admin.from("mcp_sent_drafts").delete().eq("user_id", userId).eq("draft_hash", draftHash);
+    }
+    throw e;
+  }
+}
+
 export async function callPcTool(userId: string, name: string, args: Args): Promise<Result> {
   try {
     const tz = checkTimeZone(typeof args?.timezone === "string" ? args.timezone : undefined);
     const shaped = shape(name, args || {});
-    const data = await relay(userId, name, shaped);
+    const data = name === "send_mail" ? await sendOnce(userId, shaped) : await relay(userId, name, shaped);
     return { content: [{ type: "text", text: format(name, data, shaped, tz) }] };
   } catch (e) {
     if (e instanceof ToolError) return { content: [{ type: "text", text: e.message }], isError: true };
