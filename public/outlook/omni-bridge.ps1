@@ -509,10 +509,23 @@ function Invoke-Rpc([string]$Fn, $Body) {
   return Invoke-RestMethod -Method Post -Uri ($rpc + $Fn) -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $bytes -TimeoutSec 30 -UseBasicParsing
 }
 
+# A PC woken by the 7:40 timer goes back to sleep after ~2 unattended minutes,
+# before the 7:47 weekday run. Telling Windows the system is in use, only in
+# that window, keeps it up; outside it the PC sleeps as normal.
+Add-Type -Namespace OmniBridge -Name Power -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint esFlags);'
+function Stay-AwakeInMorning {
+  $now = Get-Date
+  $weekday = $now.DayOfWeek -ne 'Saturday' -and $now.DayOfWeek -ne 'Sunday'
+  $mins = $now.Hour * 60 + $now.Minute
+  # 7:35-8:30. ES_SYSTEM_REQUIRED resets the idle-sleep timer each poll.
+  if ($weekday -and $mins -ge 455 -and $mins -le 510) { [void][OmniBridge.Power]::SetThreadExecutionState(0x00000001) }
+}
+
 Write-Log 'started'
 $note = 'ok'
 $failures = 0
 while ($true) {
+  Stay-AwakeInMorning
   try {
     $job = Invoke-Rpc 'mcp_bridge_poll' @{ p_token = $script:cfg.token; p_note = $note }
     $failures = 0
